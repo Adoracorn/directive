@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `directive init` and `directive update` now refuse pre-existing `.deft/core` descendant symlinks before copying framework content, closing a repository-controlled overwrite path that could cross the project boundary during deposit refresh. The copy primitive still preserves modes and skips source symlinks, but destination writes now fail closed with no-follow file opens and handle-based chmod. Refs scheduled app-sec review 2026-07-08.
+
 ### Removed
 
 ## [0.73.0] - 2026-07-07
