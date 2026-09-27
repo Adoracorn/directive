@@ -1,11 +1,21 @@
 /**
- * verify:scope-provenance evaluation (#3145 / #4956).
+ * verify:scope-provenance evaluation (#3145 / #4956 / #4774).
  *
  * Path fence (#4956): the active brief's `file_scope` on the merge base is the
  * precommitment. Changed production files are checked against that base list
  * plus a concrete-file allowance (floor 2, cap 5). Test-root paths spend
  * nothing. Head brief edits do not widen the fence. Proceed writes no
- * `.deft/approved-scope` digest and must not demand `scope:record-approved-scope`.
+ * `.deft/approved-scope` digest for that fence and must not demand
+ * `scope:record-approved-scope` as remint remediation.
+ *
+ * Membership (#4774): when an active xBRIEF is in the change set, the allowlist
+ * is the merge-base approved-scope record only (including an authoritative empty
+ * fileScope). Missing mint fails closed — PR-authored or merge-base brief
+ * file_scope must not self-authorize. Peer path exemptions and allowlist unions
+ * apply only to peers still present in active/ and successfully parsed, with a
+ * non-empty mint for scope union; deleted or malformed peers are not exempt.
+ * Peer coverage never clears a missing own allowlist. Same-PR approval rewrite
+ * stays fail-closed.
  *
  * Intent-pin checks (#3385) remain for existing base-committed records.
  *
@@ -17,7 +27,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { GitCommandError, GitNotFoundError } from "../encoding/git.js";
 import { loadTestBoundaryPolicy } from "../test-boundary/policy.js";
-import { evaluateProductionScopeFence, pathMatchesFileScope } from "./base-fence.js";
+import {
+  evaluateApprovedScopeMembership,
+  evaluateProductionScopeFence,
+  pathMatchesFileScope,
+} from "./base-fence.js";
 import {
   type ApprovedScopeRecord,
   approvedScopeIntentRel,
@@ -36,6 +50,7 @@ export type ScopeProvenanceViolationKind =
   | "self-authorizing-scope-expansion"
   | "production-scope-over-budget"
   | "active-xbrief-modified-without-digest"
+  | "change-set-outside-approved-scope"
   | "digest-mismatch-without-renewal"
   | "intent-drift"
   | "unclassified-key"
@@ -76,6 +91,12 @@ export interface ScopeProvenanceOptions {
   readonly activeXbriefs?: ReadonlyMap<string, string>;
   /** Inject approved records (skips disk). */
   readonly approvedRecords?: readonly ApprovedScopeRecord[];
+  /**
+   * Inject merge-base approved-scope records keyed by planId (#4774 membership).
+   * When set, membership reads these instead of `git show` / readAtBase for the
+   * approval path. Absent key means missing on the merge base.
+   */
+  readonly baseApprovedRecords?: ReadonlyMap<string, ApprovedScopeRecord>;
   /** Inject renewed-approval stamps keyed by planId (test seam). */
   readonly renewedApprovals?: ReadonlyMap<string, ApprovedScopeRecord["humanApproval"]>;
   /** Inject `git show <base>:<rel>` (test seam; never working-tree). */
@@ -554,10 +575,21 @@ export function evaluateScopeProvenance(
 
   let reportedPeerFailure = false;
   for (const { rel, raw } of activeEntries) {
+    const modifiedEarly = changedSetHasPath(changedSet, rel);
     let payload: unknown;
     try {
       payload = JSON.parse(raw) as unknown;
     } catch {
+      if (modifiedEarly) {
+        findings.push({
+          xbriefRelPath: rel,
+          planId: rel,
+          kind: "active-xbrief-modified-without-digest",
+          expandedPaths: [],
+          detail: "active xBRIEF in change set is unreadable JSON; fail closed (#4774)",
+          remediation: "Fix the active xBRIEF JSON before landing product paths with it (#4774).",
+        });
+      }
       continue;
     }
     const planId = extractPlanId(payload);
@@ -690,6 +722,132 @@ export function evaluateScopeProvenance(
           "active xBRIEF (#3145 / #3205). Proceed writes no approved-scope digest for scope (#4956).",
       });
       continue;
+    }
+
+    // Membership (#4774): allowlist is merge-base approved-scope only.
+    // Present mint (including empty fileScope) is authoritative — no brief fallback.
+    let mintFileScope: readonly string[] | null = null;
+    let baseApprovedReadError: string | null = null;
+    if (planId !== null && approvalRecordRel !== null) {
+      if (options.baseApprovedRecords !== undefined) {
+        const injected = options.baseApprovedRecords.get(planId);
+        mintFileScope = injected !== undefined ? normalizeFileScope(injected.fileScope) : null;
+      } else {
+        const approvalBaseRead = readAtBase(approvalRecordRel);
+        if (approvalBaseRead.kind === "error") {
+          baseApprovedReadError = approvalBaseRead.message;
+        } else if (approvalBaseRead.kind === "text") {
+          const parsed = parseApprovedScopeRecordRaw(approvalBaseRead.text);
+          if (
+            parsed !== null &&
+            isHumanApprovalStamp(parsed.humanApproval) &&
+            parsed.planId === planId &&
+            normalizeRepoRelPath(parsed.xbriefRelPath) === normalizeRepoRelPath(rel)
+          ) {
+            mintFileScope = normalizeFileScope(parsed.fileScope);
+          } else {
+            mintFileScope = null;
+          }
+        } else {
+          mintFileScope = null;
+        }
+      }
+    } else if (modified) {
+      // Modified active xBRIEF without resolvable planId / approval path → no mint.
+      mintFileScope = null;
+    }
+
+    if (baseApprovedReadError !== null && modified) {
+      findings.push({
+        xbriefRelPath: rel,
+        planId: planId ?? rel,
+        kind: "active-xbrief-modified-without-digest",
+        expandedPaths: [],
+        detail:
+          `merge-base approved-scope read failed for ${approvalRecordRel ?? "(unknown)"}: ` +
+          `${baseApprovedReadError}; fail closed (#4774)`,
+        remediation:
+          "Fix the merge-base git read for `.deft/approved-scope/<plan-id>.json` before landing " +
+          "a PR that carries the active xBRIEF (#4774).",
+      });
+      continue;
+    }
+
+    // Mint present (incl. empty) wins; missing mint → null (Bound fail-closed).
+    const membershipAllowlist = modified ? mintFileScope : null;
+
+    const peerXbriefRelPaths: string[] = [];
+    const peerApprovedFileScopes: string[][] = [];
+    // Exempt only peers still present and parseable. Deleted peer paths stay in
+    // this story's membership extras (fail closed); malformed peers are not
+    // exempt — their own loop fails closed on unreadable JSON.
+    if (activeEntries.length > 1) {
+      for (const other of activeEntries) {
+        if (other.rel === rel) continue;
+        // Unchanged peers must not authorize this story's change set.
+        if (!changedSetHasPath(changedSet, other.rel)) continue;
+        let otherPayload: unknown;
+        try {
+          otherPayload = JSON.parse(other.raw) as unknown;
+        } catch {
+          // Malformed peer: do not exempt; own loop fails closed.
+          continue;
+        }
+        if (!peerXbriefRelPaths.includes(other.rel)) peerXbriefRelPaths.push(other.rel);
+        const otherPlanId = extractPlanId(otherPayload);
+        let otherMint: readonly string[] | null = null;
+        if (otherPlanId !== null) {
+          const otherApprovalRel = `.deft/approved-scope/${otherPlanId.replace(/[^a-zA-Z0-9._-]/g, "_")}.json`;
+          if (options.baseApprovedRecords !== undefined) {
+            const injected = options.baseApprovedRecords.get(otherPlanId);
+            if (injected !== undefined) {
+              otherMint = normalizeFileScope(injected.fileScope);
+            }
+          } else {
+            const otherBaseRead = readAtBase(otherApprovalRel);
+            if (otherBaseRead.kind === "text") {
+              const parsed = parseApprovedScopeRecordRaw(otherBaseRead.text);
+              if (
+                parsed !== null &&
+                isHumanApprovalStamp(parsed.humanApproval) &&
+                parsed.planId === otherPlanId &&
+                normalizeRepoRelPath(parsed.xbriefRelPath) === normalizeRepoRelPath(other.rel)
+              ) {
+                otherMint = normalizeFileScope(parsed.fileScope);
+              }
+            }
+          }
+        }
+        // Peer PR-authored / brief file_scope must not expand this allowlist.
+        if (otherMint !== null && otherMint.length > 0) {
+          peerApprovedFileScopes.push([...otherMint]);
+        }
+      }
+    }
+
+    const membershipHit = evaluateApprovedScopeMembership({
+      xbriefRelPath: rel,
+      planId: planId ?? rel,
+      xbriefModifiedInChangeSet: modified,
+      baseApprovedFileScope: membershipAllowlist,
+      changedFiles: changed,
+      peerXbriefRelPaths,
+      peerApprovedFileScopes,
+    });
+    // Only emit membership when the xBRIEF is in the change set (helper no-ops otherwise).
+    if (membershipHit !== null) {
+      findings.push({
+        xbriefRelPath: membershipHit.xbriefRelPath,
+        planId: membershipHit.planId,
+        kind: membershipHit.kind,
+        expandedPaths: membershipHit.expandedPaths,
+        detail: membershipHit.detail,
+        remediation: membershipHit.remediation,
+      });
+      // Missing allowlist is decisive for C24; skip further fences for this brief.
+      if (membershipHit.kind === "active-xbrief-modified-without-digest") {
+        continue;
+      }
     }
 
     // Path fence (#4956): compare changed production files to the merge-base
