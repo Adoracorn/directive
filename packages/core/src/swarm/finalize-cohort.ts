@@ -11,6 +11,7 @@ import {
   stampProductPullRequestOntoPlan,
 } from "../orphan-active/running-briefs.js";
 import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
+import { evaluateAgentMerge } from "../policy/require-human-merge.js";
 import { parseAllDeftStoryMarks } from "../pr-closing-keywords/main.js";
 import { defaultRunGh, fetchClosingIssuesReferences } from "../pr-protected-issues/gh.js";
 import type { RunGhFn } from "../pr-protected-issues/types.js";
@@ -22,9 +23,16 @@ import {
 } from "../scope/delivery-evidence.js";
 import type { GitRunner } from "../session/git.js";
 import { completeCohort, type SweepResult } from "./complete-cohort.js";
-import { EXIT_CONFIG_ERROR, EXIT_GATE_FAILED, EXIT_OK } from "./constants.js";
+import { EXIT_CONFIG_ERROR, EXIT_GATE_FAILED, EXIT_INCOMPLETE, EXIT_OK } from "./constants.js";
 import { completedBriefReferencesIssue, resolveStories } from "./launch.js";
 import { runText } from "./subprocess.js";
+
+/** Structured awaiting-land state (#4919). Distinct from validation/REST failures. */
+export interface FinalizeOriginClosePending {
+  readonly kind: "origin-close";
+  readonly issues: readonly number[];
+  readonly detail: string;
+}
 
 export interface FinalizeCohortResult {
   readonly project_root: string;
@@ -43,6 +51,8 @@ export interface FinalizeCohortResult {
   readonly errors: readonly string[];
   readonly warnings: readonly string[];
   readonly ok: boolean;
+  /** Present when origin-close awaits delivery-branch land (#4919). */
+  readonly pending: FinalizeOriginClosePending | null;
 }
 
 export interface FinalizeCohortArgs {
@@ -68,6 +78,11 @@ export interface FinalizeCohortArgs {
   readonly landProbeLimit?: number;
   /** Test seam. Omitted pauses use the production wait. */
   readonly sleep?: (ms: number) => void;
+  /**
+   * #4919 owed hand-off: after opening the leftover PR, enable auto-merge and
+   * return origin-close pending without waiting for land.
+   */
+  readonly handOffLeftover?: boolean;
 }
 
 function splitCsv(values: readonly string[]): string[] {
@@ -359,10 +374,32 @@ function collectOriginIssueNumbers(
   return [...issues].sort((a, b) => a - b);
 }
 
+/** Nonterminal + completed mark-reader folders (#4919 / TIP_NONTERMINAL + completed). */
+const MARK_READER_FOLDERS = [
+  "xbrief/proposed",
+  "xbrief/pending",
+  "xbrief/active",
+  "xbrief/completed",
+  "vbrief/proposed",
+  "vbrief/pending",
+  "vbrief/active",
+  "vbrief/completed",
+] as const;
+
+function originClosePendingState(
+  issues: readonly number[],
+  deliveryBranch: string,
+): FinalizeOriginClosePending {
+  return {
+    kind: "origin-close",
+    issues: [...issues],
+    detail: `origin-close pending; completed brief not yet on origin/${deliveryBranch}`,
+  };
+}
+
 /**
- * Briefs (active or completed) whose metadata.productPullRequest matches a
- * product PR (#4864). Equivalent durable mark to PR-body `deft-story: N`.
- * Active is required so `--pr N` can discover intent before leftover-complete.
+ * Briefs (TIP_NONTERMINAL + completed) whose metadata.productPullRequest matches a
+ * product PR (#4864 / #4919). Equivalent durable mark to PR-body `deft-story: N`.
  */
 function collectProductPullRequestOrigins(
   projectRoot: string,
@@ -373,12 +410,7 @@ function collectProductPullRequestOrigins(
   }
   const prSet = new Set(prNumbers);
   const byIssue = new Map<number, number>();
-  for (const folder of [
-    "xbrief/active",
-    "xbrief/completed",
-    "vbrief/active",
-    "vbrief/completed",
-  ] as const) {
+  for (const folder of MARK_READER_FOLDERS) {
     const dir = resolve(projectRoot, folder);
     if (!existsSync(dir)) {
       continue;
@@ -416,17 +448,12 @@ function collectProductPullRequestOrigins(
 }
 
 /**
- * PR-body `deft-story: N` may bind only when this PR is delivery for N (#4864):
- * active or completed brief for N with metadata.productPullRequest === this PR.
+ * PR-body `deft-story: N` may bind only when this PR is delivery for N (#4864 / #4919):
+ * TIP_NONTERMINAL or completed brief for N with metadata.productPullRequest === this PR.
  * Absent stamp never binds (unrelated completed issue must not close).
  */
 function deftStoryMarkBindsDelivery(projectRoot: string, issue: number, prNumber: number): boolean {
-  for (const folder of [
-    "xbrief/active",
-    "vbrief/active",
-    "xbrief/completed",
-    "vbrief/completed",
-  ] as const) {
+  for (const folder of MARK_READER_FOLDERS) {
     const dir = resolve(projectRoot, folder);
     if (!existsSync(dir)) {
       continue;
@@ -622,36 +649,40 @@ function closeOriginsAfterLeftoverComplete(args: {
   readonly dryRun: boolean;
   readonly runGh: RunGhFn;
   readonly runGit: typeof runText;
-  /** After a confirmed land, a missing brief is a refusal, not a success skip. */
-  readonly missingOnBranchIsError?: boolean;
-}): { errors: string[]; warnings: string[] } {
+}): {
+  errors: string[];
+  warnings: string[];
+  /** Issues whose completed brief is not yet on the delivery tip (#4919). */
+  pendingIssues: number[];
+} {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const pendingIssues: number[] = [];
   if (args.dryRun || args.originIssues.length === 0) {
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   if (args.prNumbers.length === 0) {
     warnings.push(
       "origin-close skipped: parked-with-no-merged-PR (pass --pr of the product PR after leftover-complete land).",
     );
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   if (args.repo === null || args.repo.length === 0) {
     errors.push(
       "origin-close refused DONE: leftover-complete land requires --repo OWNER/REPO for REST GET of origin issues (#4824).",
     );
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   const parsed = parseRepo(args.repo);
   if (parsed === null) {
     errors.push(`origin-close refused DONE: invalid --repo value: ${JSON.stringify(args.repo)}`);
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
 
   const landed = listLandedCompletedRelpaths(args.projectRoot, args.deliveryBranch, args.runGit);
   if (landed.error !== null) {
     errors.push(`origin-close refused DONE: ${landed.error}.`);
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   const prLabel = args.prNumbers.map((n) => `#${String(n)}`).join(", ");
   const commentBody = `Completed in ${prLabel}`;
@@ -659,23 +690,8 @@ function closeOriginsAfterLeftoverComplete(args: {
   for (const issue of args.originIssues) {
     const completedRel = completedBriefRelpathForIssue(args.projectRoot, issue);
     if (completedRel === null || !landed.names.has(completedRel)) {
-      const notOnBranch =
-        "#" +
-        String(issue) +
-        ": origin-close skipped; leftover-complete not on origin/" +
-        args.deliveryBranch +
-        " (#4824).";
-      if (args.missingOnBranchIsError === true) {
-        errors.push(
-          "#" +
-            String(issue) +
-            ": origin-close refused DONE: completed brief is not on origin/" +
-            args.deliveryBranch +
-            ". Issue not closed.",
-        );
-      } else {
-        warnings.push(notOnBranch);
-      }
+      // Unified pending signal (#4919): not a soft CLEAN warning and not GATE_FAILED.
+      pendingIssues.push(issue);
       continue;
     }
     const shown = args.runGit(["git", "show", `origin/${args.deliveryBranch}:${completedRel}`], {
@@ -748,10 +764,14 @@ function closeOriginsAfterLeftoverComplete(args: {
       );
     }
   }
-  return { errors, warnings };
+  return { errors, warnings, pendingIssues };
 }
 
-function deriveLabel(
+/**
+ * Shared finalize branch / claim-ref label (#4919).
+ * Same inputs → same `swarm/finalize/<label>` for finalize-cohort and finalize-owed.
+ */
+export function deriveFinalizeBranchLabel(
   label: string | null | undefined,
   prNumbers: readonly number[],
   storyTokens: readonly string[],
@@ -766,6 +786,23 @@ function deriveLabel(
     return safeSegment(storyTokens.slice(0, 3).join("-"));
   }
   return "cohort";
+}
+
+/** @deprecated Prefer deriveFinalizeBranchLabel (#4919). */
+function deriveLabel(
+  label: string | null | undefined,
+  prNumbers: readonly number[],
+  storyTokens: readonly string[],
+): string {
+  return deriveFinalizeBranchLabel(label, prNumbers, storyTokens);
+}
+
+export function finalizeClaimRef(
+  label: string | null | undefined,
+  prNumbers: readonly number[],
+  storyTokens: readonly string[],
+): string {
+  return `swarm/finalize/${deriveFinalizeBranchLabel(label, prNumbers, storyTokens)}`;
 }
 
 function storySlugs(storyPaths: readonly string[]): string {
@@ -946,6 +983,30 @@ function pushAndOpenPr(
     };
   }
   return { ok: true, error: null, prUrl: create.stdout.trim() };
+}
+
+function enableLeftoverAutoMerge(
+  repo: string,
+  prNumber: number,
+  runGh: RunGhFn,
+): { ok: boolean; detail: string } {
+  const result = runGh([
+    "gh",
+    "pr",
+    "merge",
+    String(prNumber),
+    "--repo",
+    repo,
+    "--auto",
+    "--squash",
+  ]);
+  if (result.returncode !== 0) {
+    return {
+      ok: false,
+      detail: result.stderr.trim() || result.stdout.trim() || "auto-merge enable failed",
+    };
+  }
+  return { ok: true, detail: "auto-merge enabled" };
 }
 
 interface LifecycleCheckout {
@@ -1289,6 +1350,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors: [],
       errors: [`project root does not exist: ${projectRoot}`],
       warnings: [],
+      pending: null,
       ok: false,
       emitJson: args.emitJson ?? false,
       exitCode: EXIT_CONFIG_ERROR,
@@ -1312,6 +1374,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors: [],
       errors: [`no xbrief/ directory under project root: ${projectRoot}`],
       warnings: [],
+      pending: null,
       ok: false,
       emitJson: args.emitJson ?? false,
       exitCode: EXIT_CONFIG_ERROR,
@@ -1556,7 +1619,12 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       });
       errors.push(...originClose.errors);
       warnings.push(...originClose.warnings);
-      const originOk = errors.length === 0;
+      const pending =
+        originClose.pendingIssues.length > 0
+          ? originClosePendingState(originClose.pendingIssues, deliveryBranch)
+          : null;
+      const originFailed = errors.length > 0;
+      const originPending = !originFailed && pending !== null;
       return buildResponse({
         projectRoot,
         dryRun,
@@ -1573,9 +1641,10 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
         deliveryErrors,
         errors,
         warnings,
-        ok: originOk,
+        pending,
+        ok: !originFailed && !originPending,
         emitJson: args.emitJson ?? false,
-        exitCode: originOk ? EXIT_OK : EXIT_GATE_FAILED,
+        exitCode: originFailed ? EXIT_GATE_FAILED : originPending ? EXIT_INCOMPLETE : EXIT_OK,
       });
     }
     // When every closing ref was a benign skip and no real stories remain, the
@@ -1597,6 +1666,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors,
       errors,
       warnings,
+      pending: null,
       ok: cleanNoop,
       emitJson: args.emitJson ?? false,
       exitCode: cleanNoop
@@ -1625,6 +1695,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors,
       errors,
       warnings,
+      pending: null,
       ok: false,
       emitJson: args.emitJson ?? false,
       exitCode: EXIT_GATE_FAILED,
@@ -1690,6 +1761,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
   let commitSha: string | null = null;
   let branch: string | null = null;
   let prUrl: string | null = null;
+  let pendingOrigin: FinalizeOriginClosePending | null = null;
   let createdSweepBranch: string | null = null;
   let lifecycle: LifecycleCheckout | null = null;
   // Closure assignment is invisible to finally control flow, so a bare let stays null.
@@ -1709,6 +1781,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     prUrl: string | null;
     ok: boolean;
     exitCode: number;
+    pending?: FinalizeOriginClosePending | null;
   }) => {
     held.outcome = buildResponse({
       projectRoot,
@@ -1722,6 +1795,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors,
       errors,
       warnings,
+      pending: partial.pending ?? null,
       emitJson: args.emitJson ?? false,
       ...partial,
     });
@@ -1888,46 +1962,62 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       }
       const lifecyclePr = prUrl === null ? null : lifecyclePrNumber(prUrl);
       if (errors.length === 0 && repo !== null && lifecyclePr !== null) {
-        // requireHumanMerge is unchanged: wait, never merge the lifecycle pull request.
-        const landed = waitForLifecycleLand({
-          projectRoot,
-          deliveryBranch,
-          alternateBase,
-          repo,
-          prNumber: lifecyclePr,
-          completedRels,
-          runGh,
-          runGit,
-          probeLimit: resolveLandProbeLimit(args.landProbeLimit),
-          sleep: args.sleep,
-        });
-        if (!landed.ok) {
-          errors.push(landed.error);
+        // Arm GitHub auto-merge only when agent merge is allowed (#4919 / #1193).
+        const agentMerge = evaluateAgentMerge(projectRoot);
+        if (agentMerge.allowed) {
+          const autoMerge = enableLeftoverAutoMerge(repo, lifecyclePr, runGh);
+          if (!autoMerge.ok) {
+            warnings.push(
+              `lifecycle PR #${String(lifecyclePr)}: auto-merge not enabled (${autoMerge.detail})`,
+            );
+          }
         } else {
-          const originClose = closeOriginsAfterLeftoverComplete({
-            projectRoot: closeRoot,
-            deliveryBranch: landed.branch,
-            originIssues,
-            prNumbers,
+          warnings.push(
+            `lifecycle PR #${String(lifecyclePr)}: auto-merge skipped (requireHumanMerge; ` +
+              "hand-off without auto-merge)",
+          );
+        }
+        if (args.handOffLeftover === true) {
+          // Owed hand-off: leftover is open (auto-merge armed when policy allows); origin-close pending.
+          pendingOrigin = originClosePendingState(originIssues, deliveryBranch);
+        } else {
+          // Wait for land; never merge the lifecycle pull request from this command.
+          const landed = waitForLifecycleLand({
+            projectRoot,
+            deliveryBranch,
+            alternateBase,
             repo,
-            dryRun,
+            prNumber: lifecyclePr,
+            completedRels,
             runGh,
             runGit,
-            missingOnBranchIsError: true,
+            probeLimit: resolveLandProbeLimit(args.landProbeLimit),
+            sleep: args.sleep,
           });
-          errors.push(...originClose.errors);
-          warnings.push(...originClose.warnings);
+          if (!landed.ok) {
+            errors.push(landed.error);
+          } else {
+            const originClose = closeOriginsAfterLeftoverComplete({
+              projectRoot: closeRoot,
+              deliveryBranch: landed.branch,
+              originIssues,
+              prNumbers,
+              repo,
+              dryRun,
+              runGh,
+              runGit,
+            });
+            errors.push(...originClose.errors);
+            warnings.push(...originClose.warnings);
+            if (originClose.pendingIssues.length > 0) {
+              pendingOrigin = originClosePendingState(originClose.pendingIssues, landed.branch);
+            }
+          }
         }
       } else if (errors.length === 0 && noOpenPr) {
-        warnings.push(
-          "Lifecycle commit succeeded. Issue not closed: no pull request was opened, " +
-            `and the completed brief is not yet on origin/${baseBranch}.`,
-        );
+        pendingOrigin = originClosePendingState(originIssues, baseBranch);
       } else if (errors.length === 0) {
-        errors.push(
-          `lifecycle sweep is not done: the completed brief is not on origin/${deliveryBranch}. ` +
-            "Issue left open.",
-        );
+        pendingOrigin = originClosePendingState(originIssues, deliveryBranch);
       }
     } else if (alreadyLanded || dryRun || noCommit) {
       const originClose = closeOriginsAfterLeftoverComplete({
@@ -1942,21 +2032,23 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       });
       errors.push(...originClose.errors);
       warnings.push(...originClose.warnings);
+      if (originClose.pendingIssues.length > 0) {
+        pendingOrigin = originClosePendingState(originClose.pendingIssues, deliveryBranch);
+      }
     } else if (!dryRun && !noCommit) {
-      errors.push(
-        `lifecycle sweep is not done: the completed brief is not on origin/${deliveryBranch}. ` +
-          "Issue left open.",
-      );
+      pendingOrigin = originClosePendingState(originIssues, deliveryBranch);
     }
 
-    const ok = errors.length === 0;
+    const failed = errors.length > 0;
+    const incomplete = !failed && pendingOrigin !== null;
     return respond({
       sweep,
       commitSha,
       branch,
       prUrl,
-      ok,
-      exitCode: ok ? EXIT_OK : EXIT_GATE_FAILED,
+      pending: pendingOrigin,
+      ok: !failed && !incomplete,
+      exitCode: failed ? EXIT_GATE_FAILED : incomplete ? EXIT_INCOMPLETE : EXIT_OK,
     });
   } finally {
     const dropBranch = commitSha === null && prUrl === null ? createdSweepBranch : null;
@@ -2009,6 +2101,7 @@ function withReportedFailure(
     deliveryErrors: result.delivery_errors,
     errors: [...result.errors, error],
     warnings: [...result.warnings],
+    pending: result.pending,
     ok: false,
     emitJson,
     exitCode: EXIT_GATE_FAILED,
@@ -2031,6 +2124,7 @@ function buildResponse(input: {
   deliveryErrors: readonly string[];
   errors: readonly string[];
   warnings: readonly string[];
+  pending: FinalizeOriginClosePending | null;
   ok: boolean;
   emitJson: boolean;
   exitCode: number;
@@ -2051,6 +2145,7 @@ function buildResponse(input: {
     delivery_errors: input.deliveryErrors,
     errors: input.errors,
     warnings: input.warnings,
+    pending: input.pending,
     ok: input.ok,
   };
 
@@ -2119,6 +2214,14 @@ function buildResponse(input: {
       lines.push(`    - ${oneLine(err)}`);
     }
   }
+  if (input.pending !== null) {
+    lines.push(`  Pending: ${input.pending.kind} (${input.pending.detail})`);
+    if (input.pending.issues.length > 0) {
+      lines.push(
+        `  origin-close pending: ${input.pending.issues.map((n) => `#${String(n)}`).join(", ")}`,
+      );
+    }
+  }
   lines.push("");
   const skipNote =
     input.warnings.length > 0
@@ -2129,7 +2232,9 @@ function buildResponse(input: {
   lines.push(
     input.ok
       ? `Result: FINALIZE CLEAN -- cohort briefs swept to completed/.${skipNote}`
-      : "Result: FINALIZE INCOMPLETE -- see errors above.",
+      : input.pending !== null
+        ? "Result: FINALIZE INCOMPLETE -- origin-close pending."
+        : "Result: FINALIZE INCOMPLETE -- see errors above.",
   );
 
   return {

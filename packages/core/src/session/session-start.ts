@@ -49,6 +49,7 @@ import {
   formatDeftDirectiveDisableMessage,
   isDeftDirectiveDisableActive,
 } from "../policy/deft-directive-disable.js";
+import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
 import { disclosureLine } from "../policy/disclosure.js";
 import {
   detectNoDeftDirective,
@@ -74,6 +75,13 @@ import {
 } from "../scm/readiness.js";
 import { workClaimSessionScanLines } from "../scm/work-claim.js";
 import { maybeRunStalenessTickler } from "../staleness-tickler/run.js";
+import {
+  discoverFinalizeOwed,
+  fetchDeliveryTipPrivate,
+  formatFinalizeOwedInventoryLines,
+  inventoryHasBlockingOwed,
+} from "../swarm/finalize-owed.js";
+import { parseGitHubRemoteRepo } from "../text/redos-safe.js";
 import { runDefaultMode } from "../triage/welcome/default-mode.js";
 import { type ResolveUserMdResult, resolveUserMdPath } from "../user-config/resolve-user-md.js";
 import { emitSessionValueReadback } from "../value/readback.js";
@@ -329,6 +337,20 @@ export interface SessionStartOptions {
    * Ignored on re-arm tier (always skips optional network).
    */
   readonly allowOptionalNetwork?: boolean;
+  /**
+   * #4919: recorded deferral for finalize-owed gate (`--defer-owed <reason>`).
+   * When set, blocking owed/close-owed/stale inventory does not refuse mutation.
+   */
+  readonly deferOwedReason?: string | null;
+  /**
+   * #4919: test/prod seam for owed inventory. Default runs private tip fetch + discover.
+   * Read-only / requirements postures never call this.
+   */
+  readonly probeFinalizeOwed?: (projectRoot: string) => {
+    readonly lines: readonly string[];
+    readonly blocks: boolean;
+    readonly unknown: boolean;
+  };
   /** Process env for network opt-in resolution (tests inject). */
   readonly env?: NodeJS.ProcessEnv;
   /**
@@ -511,6 +533,127 @@ function restampSteps(
     };
   }
   return out;
+}
+
+/**
+ * Finalize-owed session gate (#4919 Recut item 7).
+ * Private tip fetch (not allowOptionalNetwork). Prints full inventory on any
+ * non-backlog hit; blocks mutation on owed/close-owed/stale/stale-unverified
+ * unless deferred.
+ */
+function resolveFinalizeOwedRepo(
+  projectRoot: string,
+  env: NodeJS.ProcessEnv,
+  runGit: GitRunner,
+): string {
+  const fromEnv = (env.GH_REPO ?? env.GITHUB_REPOSITORY ?? "").trim();
+  if (fromEnv.length > 0) {
+    return fromEnv;
+  }
+  const remote = runGit(projectRoot, ["remote", "get-url", "origin"]);
+  if (remote.code !== 0 || remote.stdout.trim().length === 0) {
+    return "";
+  }
+  return parseGitHubRemoteRepo(remote.stdout.trim()) ?? "";
+}
+
+export function evaluateFinalizeOwedSessionGate(
+  projectRoot: string,
+  options: Pick<SessionStartOptions, "probeFinalizeOwed" | "runGit" | "env" | "deferOwedReason">,
+): {
+  lines: string[];
+  blocks: boolean;
+  unknown: boolean;
+  deferred: boolean;
+  deferReason: string | null;
+} {
+  const deferReason =
+    typeof options.deferOwedReason === "string" && options.deferOwedReason.trim().length > 0
+      ? options.deferOwedReason.trim()
+      : null;
+  const deferred = deferReason !== null;
+  if (options.probeFinalizeOwed !== undefined) {
+    const probed = options.probeFinalizeOwed(projectRoot);
+    const lines = [...probed.lines];
+    if (probed.blocks && deferred && deferReason !== null) {
+      lines.push(`finalize owed deferred: ${deferReason}`);
+    }
+    if (probed.blocks && !deferred) {
+      lines.push(
+        "finalize owed blocks mutation: run `task swarm:finalize-owed` or pass --defer-owed <reason>",
+      );
+    }
+    return {
+      lines,
+      blocks: probed.blocks && !deferred,
+      unknown: probed.unknown,
+      deferred,
+      deferReason: deferred ? deferReason : null,
+    };
+  }
+  const runGit = options.runGit ?? defaultGitRunner;
+  const env = options.env ?? process.env;
+  const delivery = resolveDeliveryBranch(projectRoot, runGit).branch;
+  const fetched = fetchDeliveryTipPrivate(projectRoot, delivery, runGit);
+  if (fetched.tip === null) {
+    return {
+      lines: ["finalize owed: unknown"],
+      blocks: false,
+      unknown: true,
+      deferred: false,
+      deferReason: null,
+    };
+  }
+  const repo = resolveFinalizeOwedRepo(projectRoot, env, runGit);
+  if (repo.length === 0) {
+    // Fail closed: tip is known but mutation cannot inventory owed without a repo (#4919).
+    const lines = [
+      "finalize owed: repo required (set GH_REPO / GITHUB_REPOSITORY or configure origin)",
+      "finalize owed blocks mutation: run `task swarm:finalize-owed` or pass --defer-owed <reason>",
+    ];
+    if (deferred && deferReason !== null) {
+      return {
+        lines: [
+          "finalize owed: repo required (set GH_REPO / GITHUB_REPOSITORY or configure origin)",
+          `finalize owed deferred: ${deferReason}`,
+        ],
+        blocks: false,
+        unknown: true,
+        deferred: true,
+        deferReason,
+      };
+    }
+    return {
+      lines,
+      blocks: true,
+      unknown: true,
+      deferred: false,
+      deferReason: null,
+    };
+  }
+  const inventory = discoverFinalizeOwed(projectRoot, {
+    repo,
+    deliveryBranch: delivery,
+    tip: fetched.tip,
+    runGit,
+  });
+  const lines = formatFinalizeOwedInventoryLines(inventory);
+  const blocking = inventoryHasBlockingOwed(inventory);
+  if (blocking && deferred && deferReason !== null) {
+    lines.push(`finalize owed deferred: ${deferReason}`);
+  }
+  if (blocking && !deferred) {
+    lines.push(
+      "finalize owed blocks mutation: run `task swarm:finalize-owed` or pass --defer-owed <reason>",
+    );
+  }
+  return {
+    lines,
+    blocks: blocking && !deferred,
+    unknown: false,
+    deferred,
+    deferReason: deferred ? deferReason : null,
+  };
 }
 
 /** Resolve whether optional session:start network work is enabled (#2991). */
@@ -1187,6 +1330,34 @@ function runSessionRearm(
   ];
   pushLifecycleVisibleAdvisory(lines, projectRoot, options, runGit);
 
+  // #4919: re-arm also runs the finalize-owed gate (private tip fetch).
+  const owedGate = evaluateFinalizeOwedSessionGate(projectRoot, options);
+  lines.push(...owedGate.lines);
+  if (owedGate.blocks) {
+    emitSessionStartProcessCost(
+      {
+        ceremonyTier: REARM_CEREMONY_TIER,
+        durationMs: elapsedMs(overallStarted),
+        exitCode: 1,
+        ready: false,
+        optionalNetwork: false,
+      },
+      { projectRoot },
+    );
+    return {
+      code: 1,
+      payload: {
+        ready: false,
+        exit_code: 1,
+        ceremony_tier: REARM_CEREMONY_TIER,
+        environment: environmentContextToDict(environment),
+        finalize_owed_blocked: true,
+        message: "finalize owed blocks mutation",
+      },
+      lines,
+    };
+  }
+
   // Light branch-policy disclosure (local only) so re-arm still surfaces policy state.
   const policyResult = resolvePolicy(projectRoot);
   const policyMessage = disclosureLine(policyResult);
@@ -1290,6 +1461,15 @@ function runSessionRearm(
       gatedSteps,
     }),
     ceremony_tier: REARM_CEREMONY_TIER,
+    ...(owedGate.deferReason !== null
+      ? {
+          finalize_owed: ritualStep({
+            ok: true,
+            deferredReason: owedGate.deferReason,
+            message: `finalize owed deferred: ${owedGate.deferReason}`,
+          }),
+        }
+      : {}),
   };
   let statePath: string;
   try {
@@ -2035,6 +2215,36 @@ export function runSessionStart(
     lines.push(consentPrompt.trimEnd());
   }
 
+  // #4919: finalize-owed gate (private tip fetch; not allowOptionalNetwork).
+  const owedGate = evaluateFinalizeOwedSessionGate(projectRoot, options);
+  lines.push(...owedGate.lines);
+  if (owedGate.blocks) {
+    emitSessionStartProcessCost(
+      {
+        ceremonyTier: COLD_CEREMONY_TIER,
+        durationMs: elapsedMs(overallStarted),
+        exitCode: 1,
+        ready: false,
+        optionalNetwork: allowOptionalNetwork,
+        steps: stepTimings,
+      },
+      { projectRoot },
+    );
+    return {
+      code: 1,
+      payload: {
+        ready: false,
+        exit_code: 1,
+        posture: MUTATION_POSTURE,
+        ceremony_tier: COLD_CEREMONY_TIER,
+        environment: environmentContextToDict(environment),
+        finalize_owed_blocked: true,
+        message: "finalize owed blocks mutation",
+      },
+      lines,
+    };
+  }
+
   const writeStarted = performance.now();
   const persistedOccupancy = persistOccupancyOrDeny(
     projectRoot,
@@ -2076,6 +2286,15 @@ export function runSessionStart(
     ceremony_dial: dialDict,
     // #3282: durable preflight snapshot for harness / later check degraded mode.
     ...(preflightDict !== null ? { toolchain_preflight: preflightDict } : {}),
+    ...(owedGate.deferReason !== null
+      ? {
+          finalize_owed: ritualStep({
+            ok: true,
+            deferredReason: owedGate.deferReason,
+            message: `finalize owed deferred: ${owedGate.deferReason}`,
+          }),
+        }
+      : {}),
   };
   let statePath: string;
   try {
