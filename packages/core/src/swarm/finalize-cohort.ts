@@ -1,12 +1,17 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { evaluate as evaluateBranchPolicy } from "../branch/evaluate.js";
 import { extractIssueRef } from "../capacity/backfill.js";
 import { composeDocsImpactBody, verifyDocsImpactBodyFile } from "../docs/docs-impact.js";
 import { containedWrite } from "../fs/contained-write.js";
 import { resolveLifecycleRoot } from "../layout/resolve.js";
+import {
+  productPullRequestFromPlan,
+  stampProductPullRequestOntoPlan,
+} from "../orphan-active/running-briefs.js";
 import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
+import { parseAllDeftStoryMarks } from "../pr-closing-keywords/main.js";
 import { defaultRunGh, fetchClosingIssuesReferences } from "../pr-protected-issues/gh.js";
 import type { RunGhFn } from "../pr-protected-issues/types.js";
 import {
@@ -331,6 +336,7 @@ function completedBriefRelpathForIssue(projectRoot: string, issue: number): stri
 function collectOriginIssueNumbers(
   storyPaths: readonly string[],
   storyTokens: readonly string[],
+  extraIssues: readonly number[] = [],
 ): number[] {
   const issues = new Set<number>();
   for (const path of storyPaths) {
@@ -345,7 +351,153 @@ function collectOriginIssueNumbers(
       issues.add(Number(token));
     }
   }
+  for (const issue of extraIssues) {
+    if (Number.isInteger(issue) && issue > 0) {
+      issues.add(issue);
+    }
+  }
   return [...issues].sort((a, b) => a - b);
+}
+
+/**
+ * Briefs (active or completed) whose metadata.productPullRequest matches a
+ * product PR (#4864). Equivalent durable mark to PR-body `deft-story: N`.
+ * Active is required so `--pr N` can discover intent before leftover-complete.
+ */
+function collectProductPullRequestOrigins(
+  projectRoot: string,
+  prNumbers: readonly number[],
+): { issue: number; productPr: number }[] {
+  if (prNumbers.length === 0) {
+    return [];
+  }
+  const prSet = new Set(prNumbers);
+  const byIssue = new Map<number, number>();
+  for (const folder of [
+    "xbrief/active",
+    "xbrief/completed",
+    "vbrief/active",
+    "vbrief/completed",
+  ] as const) {
+    const dir = resolve(projectRoot, folder);
+    if (!existsSync(dir)) {
+      continue;
+    }
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".json")) {
+        continue;
+      }
+      const full = resolve(dir, name);
+      try {
+        const raw = JSON.parse(readFileSync(full, "utf8")) as unknown;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          continue;
+        }
+        const plan = (raw as Record<string, unknown>).plan;
+        if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+          continue;
+        }
+        const productPr = productPullRequestFromPlan(plan as Record<string, unknown>);
+        if (productPr === null || !prSet.has(productPr)) {
+          continue;
+        }
+        const issue = githubIssueFromBrief(full);
+        if (issue !== null) {
+          byIssue.set(issue, productPr);
+        }
+      } catch {
+        /* unreadable brief — skip */
+      }
+    }
+  }
+  return [...byIssue.entries()]
+    .map(([issue, productPr]) => ({ issue, productPr }))
+    .sort((a, b) => a.issue - b.issue);
+}
+
+/**
+ * PR-body `deft-story: N` may bind only when this PR is delivery for N (#4864):
+ * active or completed brief for N with metadata.productPullRequest === this PR.
+ * Absent stamp never binds (unrelated completed issue must not close).
+ */
+function deftStoryMarkBindsDelivery(projectRoot: string, issue: number, prNumber: number): boolean {
+  for (const folder of [
+    "xbrief/active",
+    "vbrief/active",
+    "xbrief/completed",
+    "vbrief/completed",
+  ] as const) {
+    const dir = resolve(projectRoot, folder);
+    if (!existsSync(dir)) {
+      continue;
+    }
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".json")) {
+        continue;
+      }
+      const full = resolve(dir, name);
+      try {
+        if (githubIssueFromBrief(full) !== issue) {
+          continue;
+        }
+        const raw = JSON.parse(readFileSync(full, "utf8")) as unknown;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          continue;
+        }
+        const plan = (raw as Record<string, unknown>).plan;
+        if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+          continue;
+        }
+        if (productPullRequestFromPlan(plan as Record<string, unknown>) === prNumber) {
+          return true;
+        }
+      } catch {
+        /* unreadable brief — try next */
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Persist productPullRequest on an active brief before leftover-complete so the
+ * completed artifact still binds this PR for deft-story origin-close (#4864).
+ */
+function stampProductPullRequestOnBriefFile(
+  projectRoot: string,
+  briefPath: string,
+  prNumber: number,
+): boolean {
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    return false;
+  }
+  try {
+    const raw = JSON.parse(readFileSync(briefPath, "utf8")) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return false;
+    }
+    const data = raw as Record<string, unknown>;
+    const plan = data.plan;
+    if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+      return false;
+    }
+    const planObj = plan as Record<string, unknown>;
+    if (productPullRequestFromPlan(planObj) === prNumber) {
+      return true;
+    }
+    if (!stampProductPullRequestOntoPlan(planObj, prNumber)) {
+      return false;
+    }
+    containedWrite({
+      root: projectRoot,
+      target: relative(projectRoot, briefPath),
+      data: `${JSON.stringify(data, null, 2)}\n`,
+      mode: "replace",
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function listLandedCompletedRelpaths(
@@ -1171,6 +1323,8 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
   const evidenceByIssue = new Map<number, DeliveryEvidenceInput>();
   const validatedEvidence = new Map<number, DeliveryEvidenceInput>();
   const validatedPrs: number[] = [];
+  /** Full-story close intent from PR-body `deft-story: N` (#4864). Not Tracking/Refs scrape. */
+  const fullStoryCloseIssues = new Set<number>();
   let closingLookupFailed = false;
 
   if (prNumbers.length > 0 && errors.length === 0) {
@@ -1237,6 +1391,20 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
           closingIssues.add(issue);
           evidenceByIssue.set(issue, prEvidence);
         }
+
+        const prBody = typeof snap.payload.body === "string" ? snap.payload.body : "";
+        for (const issue of parseAllDeftStoryMarks(prBody)) {
+          if (!deftStoryMarkBindsDelivery(projectRoot, issue, prNumber)) {
+            errors.push(
+              `#${String(issue)}: deft-story mark on PR #${String(prNumber)} does not bind PR delivery ` +
+                `(need active or completed brief #${String(issue)} with ` +
+                `metadata.productPullRequest=${String(prNumber)}) (#4864).`,
+            );
+            continue;
+          }
+          fullStoryCloseIssues.add(issue);
+          evidenceByIssue.set(issue, prEvidence);
+        }
       }
     }
   }
@@ -1245,8 +1413,20 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     errors.push(...deliveryErrors);
   }
 
-  if (storyTokens.length === 0 && closingIssues.size === 0) {
-    errors.push("empty cohort: pass --pr <numbers> and/or --stories <ids|paths>.");
+  const productPrOrigins = collectProductPullRequestOrigins(projectRoot, validatedPrs);
+  for (const { issue, productPr } of productPrOrigins) {
+    fullStoryCloseIssues.add(issue);
+    const bound = validatedEvidence.get(productPr);
+    if (bound !== undefined) {
+      evidenceByIssue.set(issue, bound);
+    }
+  }
+
+  if (storyTokens.length === 0 && closingIssues.size === 0 && fullStoryCloseIssues.size === 0) {
+    errors.push(
+      "empty cohort: pass --pr <numbers> and/or --stories <ids|paths> " +
+        "(or record full-story close intent via deft-story: N / productPullRequest).",
+    );
   }
 
   const warnings: string[] = [];
@@ -1333,7 +1513,34 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     }
   }
 
-  const originIssues = collectOriginIssueNumbers(storyPaths, storyTokens);
+  // Full-story marks (#4864): same active-story attach; completed-only stays for origin-close.
+  for (const issue of [...fullStoryCloseIssues].sort((a, b) => a - b)) {
+    if (closingIssues.has(issue)) {
+      continue;
+    }
+    const resolved = resolveStories(projectRoot, [String(issue)]);
+    if (resolved.resolved.length > 0) {
+      for (const story of resolved.resolved) {
+        addStory(story.path);
+      }
+      continue;
+    }
+    const noActiveBrief = resolved.errors.some((e) => e.includes("no active story references"));
+    if (!noActiveBrief) {
+      errors.push(...resolved.errors);
+      continue;
+    }
+    const completedBrief = completedBriefReferencesIssue(projectRoot, issue);
+    if (!completedBrief && !fetchIssueClosed(issue, repo, runGh)) {
+      errors.push(
+        `#${issue}: full-story close intent recorded but no active or completed brief references this issue (#4864).`,
+      );
+    }
+  }
+
+  const originIssues = collectOriginIssueNumbers(storyPaths, storyTokens, [
+    ...fullStoryCloseIssues,
+  ]);
 
   if (storyPaths.length === 0) {
     if (errors.length === 0 && originIssues.length > 0) {
@@ -1460,6 +1667,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
   // Single-PR cohorts: every story inherits that PR's evidence when issue binding misses
   // (operator --stories + one --pr is the common finalize path).
   // Empty closingIssuesReferences: the one validated snapshot is evidence for the given N.
+  // Full-story `deft-story: N` / productPullRequest is the same bind (#4864).
   // N alone and M alone are not that invocation.
   let defaultEvidence: DeliveryEvidenceInput | null = null;
   if (validatedPrs.length === 1 && evidenceByIssue.size > 0) {
@@ -1468,7 +1676,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     validatedPrs.length === 1 &&
     closingIssues.size === 0 &&
     !closingLookupFailed &&
-    storyTokens.length > 0
+    (storyTokens.length > 0 || fullStoryCloseIssues.size > 0)
   ) {
     const solePr = validatedPrs[0];
     defaultEvidence = solePr === undefined ? null : (validatedEvidence.get(solePr) ?? null);
@@ -1573,6 +1781,38 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
 
     let sweep: SweepResult | null = null;
     if (!skipSweep) {
+      // Stamp on the sweep root (checkout or project) so leftover-complete preserves bind (#4864).
+      // Fail closed: stamp false → no complete/sweep and no origin-close for that delivery.
+      if (!dryRun) {
+        const stampErrors: string[] = [];
+        for (const storyPath of sweepStories) {
+          const evidence =
+            sweepEvidence.get(resolve(storyPath)) ??
+            sweepEvidence.get(storyPath) ??
+            defaultEvidence;
+          const prNumber = evidence?.prNumber;
+          if (typeof prNumber === "number" && Number.isInteger(prNumber) && prNumber > 0) {
+            if (!stampProductPullRequestOnBriefFile(sweepRoot, storyPath, prNumber)) {
+              stampErrors.push(
+                `${basename(storyPath)}: failed to stamp productPullRequest=${String(prNumber)} ` +
+                  `(already bound to another PR, or write failed); brief left active; ` +
+                  `origin not closed (#4864).`,
+              );
+            }
+          }
+        }
+        if (stampErrors.length > 0) {
+          errors.push(...stampErrors);
+          return respond({
+            sweep: null,
+            commitSha: null,
+            branch,
+            prUrl: null,
+            ok: false,
+            exitCode: EXIT_GATE_FAILED,
+          });
+        }
+      }
       const hasDelivery = sweepEvidence.size > 0 || defaultEvidence !== null;
       const sweepResult = completeCohort({
         stories: sweepStories,

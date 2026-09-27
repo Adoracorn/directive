@@ -65,3 +65,51 @@ export function listActiveRunningBriefs(projectRoot: string): ActiveRunningBrief
   }
   return listActiveRunningBriefsFromLifecycleRoot(lifecycleRoot);
 }
+
+/**
+ * Brief-side full-story mark (#4864 / #4919): plan.metadata.productPullRequest.
+ * Equivalent durable mark to PR-body `deft-story: N`. Digits-only; null when absent.
+ */
+export function productPullRequestFromPlan(plan: Record<string, unknown>): number | null {
+  const metadata = plan.metadata;
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+    return null;
+  }
+  const raw = (metadata as Record<string, unknown>).productPullRequest;
+  if (typeof raw === "number" && Number.isInteger(raw) && raw > 0) {
+    return raw;
+  }
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      return n > 0 ? n : null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Record or preserve full-story delivery bind (#4864): set metadata.productPullRequest.
+ * No-op success when already equal. Refuses overwrite of a different positive stamp.
+ * Leftover-complete must keep this field so completed briefs still bind the product PR.
+ */
+export function stampProductPullRequestOntoPlan(
+  plan: Record<string, unknown>,
+  prNumber: number,
+): boolean {
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    return false;
+  }
+  const existing = productPullRequestFromPlan(plan);
+  if (existing !== null && existing !== prNumber) {
+    return false;
+  }
+  const metadata = plan.metadata;
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+    plan.metadata = { productPullRequest: prNumber };
+    return true;
+  }
+  (metadata as Record<string, unknown>).productPullRequest = prNumber;
+  return true;
+}
