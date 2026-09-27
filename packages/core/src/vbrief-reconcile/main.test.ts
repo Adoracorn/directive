@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hashIssueBodyBytes } from "../design-critique/completed-arc-record.js";
+import { GitHubBodyError } from "../intake/github-body.js";
 import * as scm from "../scm/call.js";
 import {
   computeDesiredLabels,
@@ -281,6 +283,16 @@ function mockIngestReadyComments(spy: ReturnType<typeof vi.spyOn>) {
   });
 }
 
+/** Live REST body for Target-digest admission after comments (#4995). Unpinned leans admit any body. */
+function mockIngestReadyBody(spy: ReturnType<typeof vi.spyOn>) {
+  return spy.mockReturnValueOnce({
+    args: [],
+    returncode: 0,
+    stdout: JSON.stringify({ body: "## Summary\n\nunpinned live body" }),
+    stderr: "",
+  });
+}
+
 describe("labels SCM client", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -302,7 +314,7 @@ describe("labels SCM client", () => {
 
   it("apply of a design-critique catalog chip removes the other catalog name (#3642)", () => {
     const spy = vi.spyOn(scm, "call");
-    mockIngestReadyComments(spy)
+    mockIngestReadyBody(mockIngestReadyComments(spy))
       .mockReturnValueOnce({
         args: [],
         returncode: 0,
@@ -314,8 +326,8 @@ describe("labels SCM client", () => {
       .mockReturnValueOnce({ args: [], returncode: 0, stdout: "", stderr: "" });
     const client = new ScmLabelClient();
     client.apply("deftai/directive", 3637, ["design-critique:ingest-ready"], []);
-    expect(spy).toHaveBeenCalledTimes(3);
-    const editArgs = spy.mock.calls[2]?.[2] ?? [];
+    expect(spy).toHaveBeenCalledTimes(4);
+    const editArgs = spy.mock.calls[3]?.[2] ?? [];
     expect(editArgs).toContain("design-critique:ingest-ready");
     expect(editArgs).toContain("design-critique:mechanism-shaped");
     expect(editArgs).toContain("--add-label");
@@ -324,7 +336,7 @@ describe("labels SCM client", () => {
 
   it("catalog chip plus another label is one remaining-set edit (#3642)", () => {
     const spy = vi.spyOn(scm, "call");
-    mockIngestReadyComments(spy)
+    mockIngestReadyBody(mockIngestReadyComments(spy))
       .mockReturnValueOnce({
         args: [],
         returncode: 0,
@@ -336,8 +348,8 @@ describe("labels SCM client", () => {
       .mockReturnValueOnce({ args: [], returncode: 0, stdout: "", stderr: "" });
     const client = new ScmLabelClient();
     client.apply("deftai/directive", 3637, ["design-critique:ingest-ready", "area:cli"], ["bug"]);
-    expect(spy).toHaveBeenCalledTimes(3);
-    const editArgs = spy.mock.calls[2]?.[2] ?? [];
+    expect(spy).toHaveBeenCalledTimes(4);
+    const editArgs = spy.mock.calls[3]?.[2] ?? [];
     expect(editArgs).toContain("design-critique:ingest-ready");
     expect(editArgs).toContain("design-critique:mechanism-shaped");
     expect(editArgs).toContain("area:cli");
@@ -347,7 +359,7 @@ describe("labels SCM client", () => {
 
   it("already-exclusive catalog chip still applies remaining non-catalog labels (#3642)", () => {
     const spy = vi.spyOn(scm, "call");
-    mockIngestReadyComments(spy)
+    mockIngestReadyBody(mockIngestReadyComments(spy))
       .mockReturnValueOnce({
         args: [],
         returncode: 0,
@@ -359,11 +371,76 @@ describe("labels SCM client", () => {
       .mockReturnValueOnce({ args: [], returncode: 0, stdout: "", stderr: "" });
     const client = new ScmLabelClient();
     client.apply("deftai/directive", 3642, ["design-critique:ingest-ready", "area:cli"], []);
-    expect(spy).toHaveBeenCalledTimes(3);
-    const editArgs = spy.mock.calls[2]?.[2] ?? [];
+    expect(spy).toHaveBeenCalledTimes(4);
+    const editArgs = spy.mock.calls[3]?.[2] ?? [];
     expect(editArgs).toContain("area:cli");
     expect(editArgs).toContain("--add-label");
     expect(editArgs).not.toContain("design-critique:mechanism-shaped");
+  });
+
+  it("ScmLabelClient.apply refuses stale-target with zero issue edits (#4995)", () => {
+    const liveBody = "## Summary\n\nNo trailing newline";
+    const pinned = hashIssueBodyBytes(`${liveBody}\n`);
+    const comments = [
+      {
+        id: 5442939496,
+        body: `**Lean:** pin.\n\nTarget-digest: sha256:${pinned}\n`,
+      },
+      { id: 5443106967, body: "## Verified-claims table\n\n| Verified claim | Result |\n" },
+      {
+        id: 5443114746,
+        body:
+          "model: grok-4.6\nrole: parent\n\n" +
+          "design-critique: synthesis accepted, because agents agreed (empty disagreement set)\n\n" +
+          "Bound contract: successor lean 5442939496, confirmed by operator, verified-claims table 5443106967.\n",
+      },
+    ];
+    const spy = vi.spyOn(scm, "call");
+    spy
+      .mockReturnValueOnce({
+        args: [],
+        returncode: 0,
+        stdout: JSON.stringify(comments),
+        stderr: "",
+      })
+      .mockReturnValueOnce({
+        args: [],
+        returncode: 0,
+        stdout: JSON.stringify({ body: liveBody }),
+        stderr: "",
+      })
+      .mockReturnValueOnce({
+        args: [],
+        returncode: 0,
+        // Overlay may read labels; chip is not standing — no edit either way.
+        stdout: JSON.stringify({ labels: [{ name: "bug" }] }),
+        stderr: "",
+      });
+    const client = new ScmLabelClient();
+    const refused = client.apply("deftai/directive", 4995, ["design-critique:ingest-ready"], []);
+    expect(refused).toEqual({
+      ok: false,
+      kind: "ingest-ready-blocked",
+      reason: "stale-target",
+      detail: expect.stringContaining("Target-digest"),
+    });
+    expect(spy.mock.calls.some((call) => (call[2] ?? []).includes("edit"))).toBe(false);
+  });
+
+  it("ScmLabelClient.apply refuses body fetch failure with zero issue edits (#4995)", () => {
+    const spy = vi.spyOn(scm, "call");
+    mockIngestReadyComments(spy).mockReturnValueOnce({
+      args: [],
+      returncode: 1,
+      stdout: "",
+      stderr: "gh api failed: GH_TOKEN required",
+    });
+    const client = new ScmLabelClient();
+    expect(() =>
+      client.apply("deftai/directive", 4995, ["design-critique:ingest-ready"], []),
+    ).toThrow(GitHubBodyError);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(spy.mock.calls.some((call) => (call[2] ?? []).includes("edit"))).toBe(false);
   });
 
   it("labels unchanged and errors", () => {
