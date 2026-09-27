@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #4978",
-    "updated": "2026-09-25T17:23:59Z"
+    "updated": "2026-09-27T00:52:53Z"
   },
   "plan": {
     "title": "leftover(#4751): closed node --test grammar including exact built-in --test-reporter names",
-    "status": "running",
+    "status": "completed",
     "narratives": {
       "Description": "leftover(#4751): closed node --test grammar including exact built-in --test-reporter names",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4978",
@@ -16,68 +16,68 @@
     "items": [
       {
         "title": "First ship is a closed `node --test` argv grammar inside `evaluateCommandSafety`. Add `node` to the static first-token list and route it through that grammar, same as python. Fall-through `{ ok: true, reason: null }` for `node` is forbidden. Do not ship a register-test-runner recipe. Do not wrap the filed command as `npm test` / `pnpm test`.",
-        "status": "pending",
+        "status": "completed",
         "id": "clause.1",
         "x-directive/evidence": {
-          "kind": "test",
-          "pointer": "packages/core/src/literal-acceptance/safety.ts",
-          "recorded_at": "2026-09-25T17:31:33Z",
-          "recorded_by": "scope:stamp-evidence"
+          "kind": "merge",
+          "pointer": "https://github.com/deftai/directive/pull/5045#cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+          "recorded_at": "2026-09-27T00:52:52.839Z",
+          "recorded_by": "MScottAdams"
         }
       },
       {
         "title": "After `node`, `tokens[0]` is exactly `--test`. Every later token that starts with `-` must start with `--test-` or `--experimental-test-`. Refuse `--test-reporter-destination` and `--test-rerun-failures` including `=value`. `--test-reporter` / `--test-reporter=` values are a closed allow-set of exact built-in names (`spec`, `tap`, `junit`, `lcov`, `dot`) matched as a whole string, either the token after `--test-reporter` or the suffix after `--test-reporter=`. Other `--test-reporter` tokens refuse, including missing values, `data:`, path-like, package-name, percent-encoded URLs, and the live space form `--test-reporter data:…`. Non-dash positionals pass. Coverage flags only after `--test`. Keep `-r` / `-e` / `-p` on the negative list. Do not copy `tool-events/classify.ts` `some(--test)`.",
-        "status": "pending",
+        "status": "completed",
         "id": "clause.2",
         "x-directive/evidence": {
-          "kind": "test",
-          "pointer": "packages/core/src/literal-acceptance/safety.ts",
-          "recorded_at": "2026-09-25T17:31:33Z",
-          "recorded_by": "scope:stamp-evidence"
+          "kind": "merge",
+          "pointer": "https://github.com/deftai/directive/pull/5045#cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+          "recorded_at": "2026-09-27T00:52:52.839Z",
+          "recorded_by": "MScottAdams"
         }
       },
       {
         "title": "Negative cases: `--import=`, `--require=`, `--experimental-loader=`, `--loader=`, `--inspect=`, `--inspect-port=`, `--eval=`, `--test-reporter-destination=`, `--test-rerun-failures=`, `--test-reporter=data:`, `--test-reporter=./file`, space forms of `--import` / `--require` / `--watch` / `--inspect-brk`, plus `-r` / `-e` / `-p`, plus `--test-reporter data:` and `--test-reporter ./file` as tests of the allow-set.",
-        "status": "pending",
+        "status": "completed",
         "id": "clause.3",
         "x-directive/evidence": {
-          "kind": "test",
-          "pointer": "packages/core/src/literal-acceptance/safety-branches.test.ts",
-          "recorded_at": "2026-09-25T17:31:33Z",
-          "recorded_by": "scope:stamp-evidence"
+          "kind": "merge",
+          "pointer": "https://github.com/deftai/directive/pull/5045#cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+          "recorded_at": "2026-09-27T00:52:52.839Z",
+          "recorded_by": "MScottAdams"
         }
       },
       {
         "title": "Persist recovery: at `readStoredLiteralAcceptanceDetailed` copy or evaluate merge, recheck each stored `literal_acceptance_rejected` row with current `evaluateCommandSafety`. Drop only rows whose command now returns ok. Leave other rejected rows. Do not clear the whole ledger.",
-        "status": "pending",
+        "status": "completed",
         "id": "clause.4",
         "x-directive/evidence": {
-          "kind": "test",
-          "pointer": "packages/core/src/literal-acceptance/capture.ts",
-          "recorded_at": "2026-09-25T17:31:33Z",
-          "recorded_by": "scope:stamp-evidence"
+          "kind": "merge",
+          "pointer": "https://github.com/deftai/directive/pull/5045#cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+          "recorded_at": "2026-09-27T00:52:52.839Z",
+          "recorded_by": "MScottAdams"
         }
       },
       {
         "title": "Refusal reason for an unknown first token enumerates the accepted first tokens. The `safety-rejected` remedy names `npm test` / `pnpm test` as the known-safe wrap of a different recorded command.",
-        "status": "pending",
+        "status": "completed",
         "id": "clause.5",
         "x-directive/evidence": {
-          "kind": "test",
-          "pointer": "packages/core/src/product-first-done-gate/acceptance-resolver.ts",
-          "recorded_at": "2026-09-25T17:31:33Z",
-          "recorded_by": "scope:stamp-evidence"
+          "kind": "merge",
+          "pointer": "https://github.com/deftai/directive/pull/5045#cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+          "recorded_at": "2026-09-27T00:52:52.839Z",
+          "recorded_by": "MScottAdams"
         }
       },
       {
         "title": "Scope sentence: this remainder changes the first-token grammar only. It does not change which fields are AC oracles. Flip the `safety-branches.test.ts` pins that refuse `node --test`. `run.ts` `shell: true` / `env: process.env` stays the #4702 residual.",
-        "status": "pending",
+        "status": "completed",
         "id": "clause.6",
         "x-directive/evidence": {
-          "kind": "test",
-          "pointer": "packages/core/src/literal-acceptance/safety-branches.test.ts",
-          "recorded_at": "2026-09-25T17:31:33Z",
-          "recorded_by": "scope:stamp-evidence"
+          "kind": "merge",
+          "pointer": "https://github.com/deftai/directive/pull/5045#cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+          "recorded_at": "2026-09-27T00:52:52.839Z",
+          "recorded_by": "MScottAdams"
         }
       }
     ],
@@ -324,6 +324,29 @@
         "schema": "deft.scope.admitted-target-digest.v1",
         "algorithm": "sha256",
         "sha256": "0f864755a46d204d903c6a654669d5468112ba1c82196a6d141159f4bd61f665"
+      },
+      "completionProvenance": {
+        "repository": null,
+        "implementationCommit": null,
+        "prNumber": 5045,
+        "prBase": null,
+        "mergeCommit": "cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+        "deliveryBranch": "master",
+        "deliveryCommit": "cc40c6824bd4a1dae0b802bfd17fda30c6223f0b",
+        "verifiedAt": "2026-09-27T00:52:53Z",
+        "verifier": "scope:complete",
+        "disposition": "delivered",
+        "handoffState": "delivered",
+        "deployed": null,
+        "uatVerified": null
+      },
+      "deliveryDisposition": "delivered",
+      "handoffState": "delivered",
+      "completedAt": "2026-09-27T00:52:53Z",
+      "capacityBucket": "technical-debt",
+      "lifecycleWrite": {
+        "action": "complete",
+        "writtenAt": "2026-09-27T00:52:53Z"
       }
     },
     "acceptance": {
@@ -383,9 +406,17 @@
           "provenance": "statement"
         }
       ],
-      "ambiguity_attestation": "none_found"
+      "ambiguity_attestation": "none_found",
+      "confessions": [
+        "First ship is a closed `node --test` argv grammar inside `evaluateCommandSafety`. Add `node` to the static first-token list and route it through that grammar, same as python. Fall-through `{ ok: true, reason: null }` for `node` is forbidden. Do not ship a register-test-runner recipe. Do not wrap the filed command as `npm test` / `pnpm test`.",
+        "After `node`, `tokens[0]` is exactly `--test`. Every later token that starts with `-` must start with `--test-` or `--experimental-test-`. Refuse `--test-reporter-destination` and `--test-rerun-failures` including `=value`. `--test-reporter` / `--test-reporter=` values are a closed allow-set of exact built-in names (`spec`, `tap`, `junit`, `lcov`, `dot`) matched as a whole string, either the token after `--test-reporter` or the suffix after `--test-reporter=`. Other `--test-reporter` tokens refuse, including missing values, `data:`, path-like, package-name, percent-encoded URLs, and the live space form `--test-reporter data:…`. Non-dash positionals pass. Coverage flags only after `--test`. Keep `-r` / `-e` / `-p` on the negative list. Do not copy `tool-events/classify.ts` `some(--test)`.",
+        "Negative cases: `--import=`, `--require=`, `--experimental-loader=`, `--loader=`, `--inspect=`, `--inspect-port=`, `--eval=`, `--test-reporter-destination=`, `--test-rerun-failures=`, `--test-reporter=data:`, `--test-reporter=./file`, space forms of `--import` / `--require` / `--watch` / `--inspect-brk`, plus `-r` / `-e` / `-p`, plus `--test-reporter data:` and `--test-reporter ./file` as tests of the allow-set.",
+        "Persist recovery: at `readStoredLiteralAcceptanceDetailed` copy or evaluate merge, recheck each stored `literal_acceptance_rejected` row with current `evaluateCommandSafety`. Drop only rows whose command now returns ok. Leave other rejected rows. Do not clear the whole ledger.",
+        "Refusal reason for an unknown first token enumerates the accepted first tokens. The `safety-rejected` remedy names `npm test` / `pnpm test` as the known-safe wrap of a different recorded command.",
+        "Scope sentence: this remainder changes the first-token grammar only. It does not change which fields are AC oracles. Flip the `safety-branches.test.ts` pins that refuse `node --test`. `run.ts` `shell: true` / `env: process.env` stays the #4702 residual."
+      ]
     },
     "id": "github.issue.5557957621",
-    "updated": "2026-09-25T17:23:59Z"
+    "updated": "2026-09-27T00:52:53Z"
   }
 }
