@@ -1,11 +1,13 @@
 /**
- * Design-critique run-posture front door (#4072 / #4296).
+ * Design-critique run-posture front door (#4072 / #4296 / #5111).
  *
  * Session-local execution posture chosen before mutation-capable session
  * start. Not a second ingest switch and not a third occupancy concept.
- * Closed tokens only; missing or `ingest` asks. GitHub-only means no-ingest,
- * not no-worktree. Direct tokens resolve to `no-ingest`. Ingest stays
- * `issue:ingest` after the completed-arc record.
+ * Closed tokens only; missing-token defaults to no-ingest via
+ * resolveArcRunPostureForHost. Launch-utterance `ingest` is checkout opt-out
+ * only — never an arc-mode value. GitHub-only means no-ingest, not
+ * no-worktree. Direct tokens resolve to `no-ingest`. Ingest as
+ * `issue:ingest` stays a later verb after the completed-arc record.
  */
 import { type EnsureArcDestInput, type EnsureArcDestResult, ensureArcDest } from "./arc-dest.js";
 
@@ -13,7 +15,7 @@ export const ARC_RUN_POSTURES = ["no-ingest", "checkout"] as const;
 
 export type ArcRunPosture = (typeof ARC_RUN_POSTURES)[number];
 
-export type RunPostureAskReason = "missing-token" | "ingest-is-not-posture" | "ambiguous";
+export type RunPostureAskReason = "missing-token" | "ambiguous";
 
 export type RunPostureParse =
   | { kind: "resolved"; posture: ArcRunPosture }
@@ -30,10 +32,16 @@ export const DIRECT_RUN_POSTURE_TOKENS = [
   "no worktrees",
   "no-ingest",
   "no ingest",
+  "do not ingest",
+  "does not ingest",
+  "don't ingest",
+  "dont ingest",
+  "never ingest",
+  "not ingest",
 ] as const;
 
-/** Published closed token that resolves to `checkout`. */
-export const CHECKOUT_RUN_POSTURE_TOKENS = ["checkout"] as const;
+/** Published closed tokens that resolve to `checkout`. */
+export const CHECKOUT_RUN_POSTURE_TOKENS = ["checkout", "ingest"] as const;
 
 export const DIRECT_SESSION_START = "session:start --read-only";
 
@@ -50,15 +58,20 @@ export type DirectDispatchVerdict =
   | { ok: false; violations: readonly DirectDispatchViolation[] };
 
 const NO_INGEST_TOKEN_RE =
-  /\b(?:direct|directly|forge-only|github-only|github[ \t]+only|on[ \t]+github|no[ \t]+worktrees|no-ingest|no[ \t]+ingest)\b/i;
+  /\b(?:direct|directly|forge-only|github-only|github[ \t]+only|on[ \t]+github|no[ \t]+worktrees|no-ingest|no[ \t]+ingest|do(?:es)?[ \t]+not[ \t]+ingest|don'?t[ \t]+ingest|never[ \t]+ingest|not[ \t]+ingest)\b/i;
 const CHECKOUT_TOKEN_RE = /\bcheckout\b/i;
-/** Bare `ingest` only. `no-ingest` / `no ingest` are github-only tokens. */
-const INGEST_TOKEN_RE = /(?<!no[ \t-])\bingest\b/i;
+/**
+ * Bare `ingest` only (checkout opt-out). Negated forms (`no-ingest`,
+ * `do not ingest`, `don't ingest`, …) are github-only tokens, not checkout.
+ */
+const INGEST_TOKEN_RE = /(?<!(?:no|not|never)[ \t-]|don'?t[ \t])\bingest\b/i;
 const DISPATCH_SHA_RE = /^[0-9a-f]{7,40}$/i;
 
 /**
  * Parse an operator utterance for the run-posture closed set.
- * Yolo is not a posture token. `ingest` is not a front-door mode.
+ * Yolo is not a posture token. Bare `ingest` resolves to checkout posture
+ * only — never as a front-door arc-mode named ingest. Negated ingest
+ * (`do not ingest`, `don't ingest`, …) resolves to `no-ingest`, not checkout.
  * GitHub-only closed tokens resolve to `no-ingest`, not no-worktree.
  */
 export function parseOperatorRunPosture(utterance: string): RunPostureParse {
@@ -71,30 +84,30 @@ export function parseOperatorRunPosture(utterance: string): RunPostureParse {
   if (hasNoIngest) {
     return { kind: "resolved", posture: "no-ingest" };
   }
-  if (hasCheckout) {
+  if (hasCheckout || hasIngest) {
     return { kind: "resolved", posture: "checkout" };
-  }
-  if (hasIngest) {
-    return { kind: "ask", reason: "ingest-is-not-posture" };
   }
   return { kind: "ask", reason: "missing-token" };
 }
 
 /**
- * Host-facing run-posture resolver (#4202). Consumes parseOperatorRunPosture.
- * On grok-bot detect, missing-token defaults to no-ingest. Checkout tokens still
- * win. Does not clone the parser and does not implement grok-bot detect.
- * Spend has no host default: do not copy this onto parseOperatorSpend (#4705).
+ * Host-facing run-posture resolver (#4202 / #5111). Consumes
+ * parseOperatorRunPosture. Missing-token defaults to no-ingest for all hosts.
+ * Checkout / ingest tokens still win. Ambiguous mixes still ask. Does not
+ * clone the parser. `grokBotDetected` is retained for callers; it no longer
+ * gates the default. Spend has no host default: do not copy this onto
+ * parseOperatorSpend (#4705).
  */
 export function resolveArcRunPostureForHost(input: {
   utterance: string;
   grokBotDetected: boolean;
 }): RunPostureParse {
+  void input.grokBotDetected;
   const parsed = parseOperatorRunPosture(input.utterance);
   if (parsed.kind === "resolved") {
     return parsed;
   }
-  if (input.grokBotDetected && parsed.reason === "missing-token") {
+  if (parsed.reason === "missing-token") {
     return { kind: "resolved", posture: "no-ingest" };
   }
   return parsed;
