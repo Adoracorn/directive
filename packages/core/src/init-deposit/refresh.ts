@@ -11,7 +11,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { platform as osPlatform } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative as pathRelative, resolve } from "node:path";
 import type { ResolutionFacts, ResolutionPlan } from "@deftai/directive-types";
 import { assertDepositContained } from "../deposit/contain.js";
 import {
@@ -62,7 +62,12 @@ import {
   NO_DEFT_DIRECTIVE_INCONSISTENT_MESSAGE,
   NO_DEFT_DIRECTIVE_INCONSISTENT_POLICY,
 } from "../policy/no-deft-directive.js";
-import { runOrgForceOnMigration } from "../policy/org-force-on-migration.js";
+import {
+  type OrgForceOnMigrationResult,
+  PROJECT_DEFINITION_CONSUMER_OWNED_SKIP,
+  runOrgForceOnMigration,
+} from "../policy/org-force-on-migration.js";
+import { PROJECT_DEFINITION_REL_PATH, projectDefinitionPath } from "../policy/resolve.js";
 import {
   type ClassifySeams,
   checkLocalEngineIntegrity,
@@ -144,6 +149,22 @@ export interface RefreshDepositArgs extends InitDepositArgs {
   readonly allowDirtyNoStage?: boolean;
 }
 
+/** #5096 partitioned consumer-facing projection dispositions. */
+export type ConsumerProjectionDisposition = "skipped" | "refused" | "rewritten";
+
+export type ConsumerProjectionWriteClass =
+  | "schema"
+  | "pin"
+  | "project-definition"
+  | "version-marker";
+
+export interface ConsumerProjectionLedgerEntry {
+  readonly path: string;
+  readonly disposition: ConsumerProjectionDisposition;
+  readonly write_class: ConsumerProjectionWriteClass;
+  readonly reason: string;
+}
+
 export interface RefreshDepositResult {
   readonly projectDir: string;
   readonly deftDir: string;
@@ -159,19 +180,12 @@ export interface RefreshDepositResult {
   readonly stagedPaths: string[];
   /** This-run write/remove ledger (#3392). Same source as printf + JSON. */
   readonly mutations: MutationSummary;
+  /** #5096 skip/refuse/rewrite ledger for consumer-facing projections. */
+  readonly consumerProjections?: readonly ConsumerProjectionLedgerEntry[];
   /** Pin+lock reconstitution failed; pin was reverted (#4710). */
   readonly pinLockRefreshError?: string;
   /** #4120 generation rewind gate refused before dest writes. */
   readonly generationRewindError?: string;
-}
-
-function hasCanonicalXbriefLifecycle(projectDir: string): boolean {
-  try {
-    resolveLifecycleRoot(projectDir);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export type RefreshDepositStrategy = "file-swap" | "no-op";
@@ -193,8 +207,11 @@ export interface RefreshDepositSeams {
   gitLsFiles?: GitLsFiles;
   /** #2530: injected git config seams for {@link writeConsumerGitHooks}. */
   gitHooks?: GitHooksSeams;
-  /** #2822: optional seam. Default {@link runOrgForceOnMigration} already writes via containedWrite. */
-  runOrgForceOn?: (projectRoot: string) => void;
+  /**
+   * #2822 / #5096: optional seam. Default runs org-force-on with
+   * `projectDefinitionMutation: "skip"` so update never rewrites PROJECT-DEFINITION.
+   */
+  runOrgForceOn?: (projectRoot: string) => OrgForceOnMigrationResult | undefined;
   /** Post-deposit functional readiness gate (#3100). */
   evaluateAgentHookReadiness?: (projectRoot: string) => AgentHookReadinessResult;
   /** Injected three-state Git probe (#4158). Default {@link probeUpdateGit}. */
@@ -656,6 +673,7 @@ export function buildUpdateSummaryJson(input: {
 }): Record<string, unknown> {
   const { result, options, updateState, readiness, gitPreflight } = input;
   const allowDirtyNoStage = options.allowDirtyNoStage === true;
+  const ledger = result.consumerProjections ?? [];
   return {
     success: readiness ? readiness.code === 0 : true,
     deposit_completed: true,
@@ -673,7 +691,16 @@ export function buildUpdateSummaryJson(input: {
     missing_tools: [],
     maintainer_mode: false,
     maintainer_tools: [],
-    skipped_consumer_projections: [],
+    // Full ledger (skip/refuse/rewrite). Name kept for #5096 observability.
+    consumer_projections: ledger.map((entry) => ({ ...entry })),
+    // Legacy key: skipped + refused only (not rewritten).
+    skipped_consumer_projections: ledger
+      .filter((entry) => entry.disposition === "skipped" || entry.disposition === "refused")
+      .map((entry) => ({ ...entry })),
+    pin_writes: ledger.filter((entry) => entry.write_class === "pin").map((entry) => entry.path),
+    version_marker_writes: ledger
+      .filter((entry) => entry.write_class === "version-marker")
+      .map((entry) => entry.path),
     user_config_dir: "",
     skills_created: false,
     payload_layout: "vendored",
@@ -721,6 +748,35 @@ export function formatPrettierSensitiveAnnounce(paths: readonly string[]): strin
   );
 }
 
+/** Human rows for the #5096 consumer-projection ledger (pin / PD / version markers). */
+export function formatConsumerProjectionLedger(
+  entries: readonly ConsumerProjectionLedgerEntry[],
+): string {
+  if (entries.length === 0) return "";
+  const lines = ["Consumer projection ledger (#5096):\n"];
+  for (const entry of entries) {
+    lines.push(`  ${entry.disposition.padEnd(9)} ${entry.path}  (${entry.reason})\n`);
+  }
+  return lines.join("");
+}
+
+function posixRel(projectDir: string, absPath: string): string {
+  return pathRelative(projectDir, absPath).split("\\").join("/");
+}
+
+function wroteSince(before: readonly string[], after: readonly string[]): string[] {
+  const prior = new Set(before);
+  return after.filter((path) => !prior.has(path));
+}
+
+function consumerProjectDefinitionRel(projectDir: string): string {
+  try {
+    return posixRel(projectDir, projectDefinitionPath(projectDir)) || PROJECT_DEFINITION_REL_PATH;
+  } catch {
+    return PROJECT_DEFINITION_REL_PATH;
+  }
+}
+
 /** Human summary row for post-add index state (#4562). Sourced from cached names. */
 export function formatStagedIndexRow(cachedNames: readonly string[]): string {
   const label = "  Staged       : ";
@@ -758,6 +814,10 @@ export function printUpdateComplete(
   const prettierText = formatPrettierSensitiveAnnounce(prettierSensitiveRewrites(result.mutations));
   if (prettierText.length > 0) {
     io.printf(`\n${prettierText}`);
+  }
+  const ledgerText = formatConsumerProjectionLedger(result.consumerProjections ?? []);
+  if (ledgerText.length > 0) {
+    io.printf(`\n${ledgerText}`);
   }
   printMigrateNudgeIfNeeded(result.projectDir, io);
   io.printf("\n");
@@ -1172,8 +1232,16 @@ export async function runRefreshDeposit(
     }
   }
 
+  const consumerProjections: ConsumerProjectionLedgerEntry[] = [];
+  const wroteBeforeReconstitute = snapshotMutationSummary().wrote;
   const pinLockRefreshError = reconstituteConsumerPinAndLock(projectDir, contentVersion, io, seams);
   if (pinLockRefreshError !== null) {
+    consumerProjections.push({
+      path: "package.json",
+      disposition: "refused",
+      write_class: "pin",
+      reason: "pin reconstitution / lockfile refresh failed (#4710)",
+    });
     return {
       projectDir,
       deftDir,
@@ -1188,39 +1256,126 @@ export async function runRefreshDeposit(
       taskfileWired: false,
       stagedPaths: [],
       mutations: snapshotMutationSummary(),
+      consumerProjections,
       pinLockRefreshError,
     };
   }
+  for (const path of wroteSince(wroteBeforeReconstitute, snapshotMutationSummary().wrote)) {
+    if (path === "package.json" || path.endsWith("/package.json")) {
+      consumerProjections.push({
+        path,
+        disposition: "rewritten",
+        write_class: "pin",
+        reason: "lagging-pin reconstitute (#4710)",
+      });
+    }
+  }
+  const wroteBeforeNullPin = snapshotMutationSummary().wrote;
   restoreNullPinAtRecordedDepositVersion({
     projectDir,
     deftDir,
     recordedVersion: readRecordedDepositVersion(deftDir) ?? previousDepositVersion,
     io,
   });
+  for (const path of wroteSince(wroteBeforeNullPin, snapshotMutationSummary().wrote)) {
+    if (path === "package.json" || path.endsWith("/package.json")) {
+      consumerProjections.push({
+        path,
+        disposition: "rewritten",
+        write_class: "pin",
+        reason: "null-pin restore at recorded deposit version (#4533)",
+      });
+    }
+  }
 
   // #2595: payload freshness and consumer derivative freshness are independent.
   // Always repair these cheap projections, including on the #2118 no-op path.
+  const wroteBeforeMarker = snapshotMutationSummary().wrote;
   if (alreadyCurrent) {
     syncExistingBareVersionMarker(projectDir, contentVersion);
   } else {
     syncBareVersionMarker(projectDir, contentVersion);
   }
+  for (const path of wroteSince(wroteBeforeMarker, snapshotMutationSummary().wrote)) {
+    if (path.endsWith(".deft-version") || path === ".deft-version") {
+      consumerProjections.push({
+        path,
+        disposition: "rewritten",
+        write_class: "version-marker",
+        reason: "engine/content version marker sync (#2595)",
+      });
+    }
+  }
   // Do not turn a legacy-only or cache-only support tree into canonical
   // lifecycle content before migrate:xbrief can transactionally converge it.
-  if (hasCanonicalXbriefLifecycle(projectDir)) {
-    syncConsumerXbriefSchemas(projectDir, payloadReadRoot);
+  // Gate MUST call resolveLifecycleRoot at this site (SLizard xbrief-schema-projection-gaps).
+  // Catch only lifecycle-root refusal — schema sync / cleanup errors must surface (#5096 Greptile P1).
+  let canonicalLifecycleRoot: string | undefined;
+  try {
+    canonicalLifecycleRoot = resolveLifecycleRoot(projectDir);
+  } catch {
+    // legacy-only / cache-only — do not mkdir xbrief/schemas.
+  }
+  if (canonicalLifecycleRoot !== undefined) {
+    const wroteBeforeSchemas = snapshotMutationSummary().wrote;
+    const schemasChanged = syncConsumerXbriefSchemas(projectDir, payloadReadRoot);
+    for (const path of wroteSince(wroteBeforeSchemas, snapshotMutationSummary().wrote)) {
+      if (path === "xbrief/schemas" || path.startsWith("xbrief/schemas/")) {
+        consumerProjections.push({
+          path,
+          disposition: "rewritten",
+          write_class: "schema",
+          reason: "installer-managed schema sync (#2595)",
+        });
+      }
+    }
+    // Removals (e.g. obsolete schema) may not appear in wrote[]; ledger when sync changed without wrote paths.
+    if (schemasChanged) {
+      const schemaWrote = wroteSince(wroteBeforeSchemas, snapshotMutationSummary().wrote).some(
+        (path) => path === "xbrief/schemas" || path.startsWith("xbrief/schemas/"),
+      );
+      if (!schemaWrote) {
+        consumerProjections.push({
+          path: "xbrief/schemas/",
+          disposition: "rewritten",
+          write_class: "schema",
+          reason: "installer-managed schema sync removal/cleanup (#2595)",
+        });
+      }
+    }
     removeStaleMigratedFrameworkNarrative(projectDir);
   }
 
-  const runOrgForceOn =
-    seams.runOrgForceOn ??
-    ((root) => {
-      runOrgForceOnMigration(root, { actor: "directive-update" });
-    });
+  // #5096: update must skip+preserve consumer-owned PROJECT-DEFINITION.
+  let orgForceResult: OrgForceOnMigrationResult = {
+    ran: false,
+    skippedReason: null,
+    valueFeedbackChanged: false,
+    productSignalChanged: false,
+  };
   try {
-    runOrgForceOn(projectDir);
+    if (seams.runOrgForceOn !== undefined) {
+      // Injected seam fully replaces the default path (even when it returns undefined).
+      const seamResult = seams.runOrgForceOn(projectDir);
+      if (seamResult !== undefined) {
+        orgForceResult = seamResult;
+      }
+    } else {
+      orgForceResult = runOrgForceOnMigration(projectDir, {
+        actor: "directive-update",
+        projectDefinitionMutation: "skip",
+      });
+    }
   } catch {
     // Policy migration is best-effort; never block framework refresh (#2822).
+  }
+  if (orgForceResult.skippedReason === PROJECT_DEFINITION_CONSUMER_OWNED_SKIP) {
+    consumerProjections.push({
+      path: consumerProjectDefinitionRel(projectDir),
+      disposition: "skipped",
+      write_class: "project-definition",
+      reason: "consumer-owned; org-force-on not applied on update (#5096 / #3029)",
+    });
   }
 
   const agentsMdUpdated = writeAgentsMd(projectDir, payloadReadRoot, io);
@@ -1315,6 +1470,7 @@ export async function runRefreshDeposit(
     taskfileWired,
     stagedPaths,
     mutations: snapshotMutationSummary(),
+    consumerProjections,
   };
 }
 
