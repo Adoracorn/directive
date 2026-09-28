@@ -52,9 +52,14 @@ import {
   MIGRATED_INFO_ROOT_KEY,
   VBRIEF_VERSION,
 } from "../xbrief-migrate/constants.js";
-import { applyClauseQualityForIngest, emitAcceptanceStampFromPlan } from "./clause-derivation.js";
+import {
+  applyClauseQualityForIngest,
+  applyEmptyAfterHarvestNoticeForIngest,
+  emitAcceptanceStampFromPlan,
+} from "./clause-derivation.js";
 import {
   extractBoundRemedyHarvest,
+  extractRequirementsSectionItems,
   findAcHeading,
   parseCheckboxItems,
   parseListItems,
@@ -353,7 +358,15 @@ export function extractPlanItems(body: string): Record<string, string>[] {
   if (checkboxItems.length > 0) {
     return checkboxItems.map((item) => ({ title: item.title, status: item.status }));
   }
-  return extractAcSectionItems(text);
+  const acItems = extractAcSectionItems(text);
+  if (acItems.length > 0) {
+    return acItems;
+  }
+  // #4671: whole-line Requirements: colon-label on bodyStr only (not Overview/thread).
+  return extractRequirementsSectionItems(text).map((item) => ({
+    title: item.title,
+    status: item.status,
+  }));
 }
 
 export function extractAcSectionItems(text: string): Record<string, string>[] {
@@ -1648,6 +1661,8 @@ export function buildIssueVbrief(
     // No body: still record none_stated acceptance so absence is a decision.
     Object.assign(plan, stampAcceptanceFromLiteralCapture(plan));
   }
+  // #4671: empty plan.items after harvest must not print silent CREATED.
+  applyEmptyAfterHarvestNoticeForIngest(plan);
   bindPlanItemIdsToClauses(plan);
 
   stampIntendedPlacement(plan);
@@ -2307,8 +2322,14 @@ export function ingestBulk(
     const [result, path, msg] = ingested;
     const rel = path !== null ? path.replace(`${options.vbriefDir}/`, "").replace(/\\/g, "/") : "";
     (summary[result] as string[]).push(rel);
+    // Bulk already prints CREATED/DRY-RUN from the path list; keep notice body with
+    // a path/issue label so operators can tell which brief needs remediation (#4671).
     if (msg.includes("\n")) {
-      (summary.notices as string[]).push(msg);
+      const noticeBody = msg.slice(msg.indexOf("\n") + 1).trimEnd();
+      if (noticeBody.length > 0) {
+        const label = rel.length > 0 ? rel : `#${String(issue.number)}`;
+        (summary.notices as string[]).push(`${label}\n${noticeBody}`);
+      }
     }
     if (result === "created" && path !== null) {
       const origin = originFromIssue(issue, options.repoUrl);
