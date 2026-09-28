@@ -3,7 +3,14 @@
  * No process I/O — operates on an already-read string.
  */
 
-import { firstString, landProcessOnlyFlagOnToolInput, record, toolInputRecord } from "./payload.js";
+import { isApplyPatchTool } from "../tools.js";
+import {
+  fieldString,
+  firstString,
+  landProcessOnlyFlagOnToolInput,
+  record,
+  toolInputRecord,
+} from "./payload.js";
 import type { ParsedHookPayload } from "./types.js";
 
 const UTF8_BOM = "\uFEFF";
@@ -83,18 +90,58 @@ function declaredWritePathFromParsed(payload: unknown): string | null {
   ]);
 }
 
-function applyPatchBodyTextFromParsed(payload: unknown): string | null {
+const APPLY_PATCH_BODY_KEYS = ["patch", "unified_diff", "diff"] as const;
+
+/**
+ * Declared ApplyPatch tool name — not inferred from command text.
+ * Same normalizer as dispatcher `isApplyPatchTool` so `apply-patch` admits
+ * command-body harvest (#5094 Greptile).
+ */
+function payloadDeclaresApplyPatchTool(payload: Record<string, unknown>): boolean {
+  const toolObject = record(payload.tool);
+  const toolCall = record(payload.tool_call) ?? record(payload.toolCall);
+  const name =
+    fieldString(payload, "tool_name") ??
+    fieldString(payload, "toolName") ??
+    fieldString(payload, "tool") ??
+    (toolObject !== null ? fieldString(toolObject, "name") : null) ??
+    (toolCall !== null ? fieldString(toolCall, "name") : null);
+  return name !== null && isApplyPatchTool(name);
+}
+
+function pushUniqueBodyText(into: string[], value: unknown): void {
+  if (typeof value !== "string") return;
+  const text = value.trim();
+  if (text.length === 0 || into.includes(text)) return;
+  into.push(text);
+}
+
+/**
+ * ApplyPatch body field texts. `command` is admitted only when the payload
+ * declares an ApplyPatch tool (`isApplyPatchTool`) — never via host-agnostic
+ * firstString, and never for Shell/Bash command strings (#5094).
+ */
+export function applyPatchBodyFieldTexts(payload: unknown): string[] {
   const input = record(payload);
-  if (input === null) return null;
+  if (input === null) return [];
   const toolInput = toolInputRecord(input);
-  return firstString([
-    toolInput?.patch,
-    toolInput?.unified_diff,
-    toolInput?.diff,
-    input.patch,
-    input.unified_diff,
-    input.diff,
-  ]);
+  const texts: string[] = [];
+  for (const key of APPLY_PATCH_BODY_KEYS) {
+    if (toolInput !== null) pushUniqueBodyText(texts, toolInput[key]);
+    pushUniqueBodyText(texts, input[key]);
+  }
+  if (payloadDeclaresApplyPatchTool(input)) {
+    if (toolInput !== null) pushUniqueBodyText(texts, toolInput.command);
+    pushUniqueBodyText(texts, input.command);
+  }
+  return texts;
+}
+
+/** Union of present ApplyPatch body fields as one parseable blob. */
+export function applyPatchBodyTextFromParsed(payload: unknown): string | null {
+  const texts = applyPatchBodyFieldTexts(payload);
+  if (texts.length === 0) return null;
+  return texts.join("\n");
 }
 
 function withToolInputPath(parsed: unknown, path: string): unknown {
