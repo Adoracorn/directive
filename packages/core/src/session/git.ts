@@ -11,6 +11,10 @@ export interface GitRunResult {
 
 export type GitRunner = (projectRoot: string, args: readonly string[]) => GitRunResult;
 
+/** Recovery copy when spawnSync git fails with EPERM under a host sandbox (#4664). */
+export const CODEX_RITUAL_GIT_EPERM_TIP =
+  "git spawn EPERM (Codex sandbox?): approve outside-sandbox for ritual git once via Codex TUI /approvals; see README Codex ritual git";
+
 function coerceGitBytes(value: unknown): Buffer {
   if (Buffer.isBuffer(value)) return value;
   if (typeof value === "string") return Buffer.from(value, "utf8");
@@ -44,6 +48,24 @@ function execGit(projectRoot: string, args: readonly string[], timeoutMs?: numbe
     };
     if (e.code === "ENOENT") {
       return { code: 127, stdout: "", stderr: "git executable not found on PATH" };
+    }
+    // #4664: spawn EPERM is not a git exit. Always code 2 — never 0
+    // (false ancestry) or 1 (false history drift for gitIsAncestor).
+    // Keep original diagnostic and point at the Codex ritual-git tip.
+    if (e.code === "EPERM") {
+      const detail = resolveCaptureFailureStderr({
+        captured: coerceGitBytes(e.stderr).toString("utf8").trimEnd(),
+        status: e.status,
+        message: e.message,
+      });
+      return {
+        code: 2,
+        stdout: gitStdoutString(coerceGitBytes(e.stdout), args),
+        stderr:
+          detail.length > 0
+            ? `${detail}\n${CODEX_RITUAL_GIT_EPERM_TIP}`
+            : CODEX_RITUAL_GIT_EPERM_TIP,
+      };
     }
     return {
       code: typeof e.status === "number" ? e.status : 2,

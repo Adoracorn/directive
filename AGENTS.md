@@ -160,7 +160,9 @@ Same `!` / `⊗` rules as managed below; `task issue:ingest` (#2143).
 
 Note: root-relative paths (this repo IS deft/); run `task agents:refresh` after agents-entry edits (#1309).
 
-<!-- deft:managed-section v3 sha=a60bb4d8695a refreshed=2026-09-28T19:43:47Z session=f8b83c8f1d2e -->
+<!-- placeholder -->
+
+<!-- deft:managed-section v3 sha=acb5cfc3641f refreshed=2026-09-28T21:26:31Z session=d1040c6c48d2 -->
 # Deft — AI Development Framework
 
 Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
@@ -176,6 +178,10 @@ Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
 
 ! Opaque non-zero exit (usually 127) on every mutation = `deft-hook` is not executable on this host, not a Directive deny — no Directive code ran, and no in-session flag reaches it. Out of band: `deft policy:disable-host-hooks --host cursor --confirm`, or install the runtime (`npm i -g @deftai/directive@<pin>`). Depth: `.deft/core/docs/hook-runtime-unavailable.md`.
 ⊗ Hand-edit `failClosed` in `.cursor/hooks.json` — the next `deft update` rewrites it and silently re-arms the lockout.
+
+## Codex ritual-git recovery (#4664)
+
+! Codex sandbox EPERM on ritual `git` → approve outside-sandbox once for the session (`/approvals` / session trust). Depth: `.deft/core/contracts/agent-hook-readiness.md`. ⊗ Invent an in-process git substitute; ⊗ treat repeated per-verb prompts as Continuity discharge.
 
 ## Session routing (#2176)
 
