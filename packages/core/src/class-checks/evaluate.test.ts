@@ -322,6 +322,79 @@ describe("evaluateClassChecks (#4980)", () => {
     expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
   });
 
+  it("allows GitHub Actions workflows to reference declared fixture roots (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/ci.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [
+          ".github/workflows/ci.yml",
+          "Copy-Item tests\\fixtures\\pre_cutover_customized\\* $fixtureDir -Recurse\n",
+        ],
+      ]),
+    });
+    expect(
+      result.findings.filter((f) => f.kind === "production-references-test-root"),
+    ).toHaveLength(0);
+  });
+
+  it("keeps class 2 on release/publish workflows (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/release.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".github/workflows/release.yml", "cp tests/fixtures/seed.json ./dist/\n"],
+      ]),
+    });
+    expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
+  });
+
+  it("unknown workflow names stay class-2 fail-closed (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/release-prod.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".github/workflows/release-prod.yml", "cp tests/fixtures/seed.json ./dist/\n"],
+      ]),
+    });
+    expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
+  });
+
+  it("docs-site.yml stays class-2 (Pages deploy) (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/docs-site.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".github/workflows/docs-site.yml", "cp tests/fixtures/seed.json docs-site/\n"],
+      ]),
+    });
+    expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
+  });
+
   it("fails closed on malformed merge-base PROJECT-DEFINITION classChecks", () => {
     const badJson = parseClassChecksFromProjectDefinition("{ not json");
     expect(badJson.ok).toBe(false);
