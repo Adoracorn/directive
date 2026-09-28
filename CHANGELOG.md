@@ -15,10 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **feat(lifecycle): explicit merge-kind acceptance evidence (#5105).** Criteria may declare merge via `x-directive/requires` (outside the strict smoke/uat/deploy/observed_behavior axes). Declared merge stamps from delivery tip ancestry on `scope:complete`; undeclared empty-axis criteria still refuse bare `kind:merge`. Refs #3791, #3240.
 
 ### Changed
 
 ### Fixed
+- **fix(lifecycle): merge declaration no longer hides co-declared smoke/strict axes (#5105).** Explicit `x-directive/requires: merge` plus `x-directive/acceptanceAxis: smoke` (or another strict axis) still requires the strict-axis evidence; merge alone cannot complete the criterion.
 
 ### Removed
 
