@@ -27,11 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(design-critique): negated ingest no longer selects checkout (#5111).** `do not ingest` / `don't ingest` / similar resolve to `no-ingest`; bare `ingest` still selects checkout.
 - **fix(hooks,verify): missing-runtime readiness tip when `deft-hook` is off PATH (Tracking #5110).** Unavailable live readiness points at `npm i -g @deftai/directive` + doctor/update; does not restore disable-host-hooks for matcher drift.
 
+- **Durable-effect acquisition repair (#5080).** Resolve immutable URL and call provenance, preserve effect multiplicity across harmless markup and CSS edits, and compare live files without resurrecting deletions. Recognize all #5056 ceiling shapes, require typed human approval for grants, and include the gate in generated agent guidance. Refs PR #5101.
 - **fix(lifecycle): merge declaration no longer hides co-declared smoke/strict axes (#5105).** Explicit `x-directive/requires: merge` plus `x-directive/acceptanceAxis: smoke` (or another strict axis) still requires the strict-axis evidence; merge alone cannot complete the criterion.
 
 - **fix(lifecycle): finalize leftover auto-merge requires bot-merge override (#3791 / PR #5113).** `evaluateFinalizeClassMergeCarveOut` arms only when durable `swarm/finalize/*` membership AND the documented #1193 bot-merge override (`policy:allow-bot-merge` / `DEFT_ALLOW_BOT_MERGE` / requireHumanMerge effective false) both hold. Branch prefix alone no longer bypasses requireHumanMerge; denied path names bot-merge policy or human merge. First-ship surface-3 assumption retained when the override is on.
 
 - **fix(lifecycle): harden #3791 unmarked compose + finalize carve-out residual.** Carve-out goes through `evaluateFinalizeClassMergeCarveOut` (durable `swarm/finalize/*` membership + recorded first-ship assumption), not a bare branch-prefix. Unmarked admit requires same-repo delivery identity for PR and origin issue; `firstMergedPrRef` is the sole merge probe so a second lookup failure cannot drop confirmed admission. Tracking #3791 / PR #5113.
+- **Durable-effect acquisition repair (#5080).** Resolve immutable URL and call provenance, preserve effect multiplicity across harmless markup and CSS edits, and compare live files without resurrecting deletions. Recognize all #5056 ceiling shapes and require typed human approval for grants. Refs PR #5101.
 
 ### Removed
 
@@ -40,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Dirty-deposit update partition (#5096), Step 5 hang detector 45 to 60 minutes (#5091), win32 gh.cmd SCM spawn (#5081), finalize-owed backstop (#4919), Tracking origin-close after leftover (#4864), coverage-of-record Step 5 (#5026), Target-digest ingest-ready (#4995), operator scope-limit (#4545), and suite-load testTimeout (#5107). Step 5 skipped with --allow-skip-ci=5107 after nearly-green 44m suite (1 timeout flake) per operator approval.
 
 ### Added
+- **In-class durable-effect acquisition gate under a presentation ceiling (#5080).** `verify:durable-effect-acquisition` consumes the #5056 ceiling artifact and refuses storage, cookies, non-GET or non-sentinel network, and markup submission in changed `.tsx` / `.jsx` / `.html`. Submitter `formmethod`, non-sentinel `<base href>`, and any-namespace `on*` handlers refuse. skipped/N/A is not an exit under an armed ceiling. Composed on consumer and framework `task check`. Closes #5080.
 - **Operator scope-limit ceiling + warn-first untraceable-surface check (#4545).** Closed-lexicon phrases (`do not add`, `nothing beyond`, `initial version only`, …) seed a hard ceiling on the proposed brief (or durable artifact) even when rapid/greenfield has no `xbrief/active/` brief; `deft verify:operator-scope-limit` lists exported actions/routes/pages not traceable to a requirement line (warn-first; remediation: remove, or add to the brief and get operator approval). Distinct from slash-verb intent-ceiling (#1193). Refs #4545.
 - **perf(vitest): committed durations + DurationSequencer arm slowest-first on cold release worktrees (Tracking #5028).** Fresh trees no longer depend on host-global vitest cache.dir. Fixture packages/core/fixtures/vitest-file-durations.json (interim until #5027). Refs #5028, #5027, #5024.
 - **Step 5 tee duration ranking helper (#5027).** Scrape flushed `ts:check-lane timeline file <path> <ms>` lines from `.deft/check-tees/**` and print top-N by duration (`packages/core/src/ts-check-lane/duration-rank.ts`). Sub-30s files are omitted (progress reporter heartbeat gate). Does not claim stock vitest JsonReporter flushes on hang kill. RELEASING.md documents tee location, ranking command, and the #5024 top-20 paste. Tracking #5027. Refs #5024, #5023, #4567.
@@ -56,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **test(win32): raise worker-auth-assignment owner-bound-remove suite-load testTimeout (Tracking #5107).**
 - **fix(update): partition dirty-deposit consumer projections; skip PROJECT-DEFINITION org-force-on (Tracking #5096).** Schema sync (#2595) and pin restore (#4533/#4710) stay intentional with mandatory report. Full skip/refuse/rewrite ledger is `consumer_projections`; `skipped_consumer_projections` lists skipped+refused only. Refs #3029, #3395, #4710.
 - **fix(hooks): Codex apply_patch `command` payloads extract mutation targets; empty targets deny (Refs #5094).** String `tool_input.command` is an ApplyPatch body when `isApplyPatchTool` matches (`ApplyPatch`, `apply_patch`, `apply-patch`). Conflicting `command` / `patch` / `unified_diff` / `diff` fields union. Canonical apply_patch with no extracted targets fails closed. Codex write-form audit is unobserved until a live payload. P2 class-check docs leftover.
+- **Durable-effect residual: live tree bytes, unique same-kind facts, fetch/XHR channels, scoped bindings, request-capable URL attrs (#5080).** Working-tree then index then HEAD; a second POST form is a new channel; quoted `method` keys, option spreads, `XMLHttpRequest.open`, and `const send = fetch` classify; inner same-name bindings do not hide an outer URL; title/alt/aria text is not a request channel. Refs PR #5101.
+- **Durable-effect acquisition repair (#5080).** Resolve immutable URL and call provenance, preserve effect multiplicity without source offsets, and compare live files without resurrecting deletions. Recognize all #5056 ceiling shapes and require typed human approval for grants. Refs PR #5101.
 - **test(win32): retry EPERM temp cleanup in doctor disable tests (Tracking #5089).**
 - **test(win32): raise two more Step 5 suite-load testTimeouts (Tracking #5086).**
 - **test(win32): raise suite-load timeouts for occupancy hooks + worker-auth cleanup (Tracking #5084).** Step 5 under full ts:check-lane no longer fails closed on 10s beforeAll / 20s testTimeout flakes.
@@ -6867,7 +6872,6 @@ If you have custom scripts or references to deft files, update these paths:
 [0.2.0]: https://github.com/visionik/warping/releases/tag/v0.2.0
 
 [0.1.0]: https://github.com/visionik/warping/releases/tag/v0.1.0
-
 
 
 
