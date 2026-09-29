@@ -1,11 +1,12 @@
 {
   "xBRIEFInfo": {
     "version": "0.8",
-    "description": "Scope xBRIEF ingested from GitHub issue #3718"
+    "description": "Scope xBRIEF ingested from GitHub issue #3718",
+    "updated": "2026-09-29T13:06:34Z"
   },
   "plan": {
     "title": "bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate",
-    "status": "proposed",
+    "status": "completed",
     "narratives": {
       "Description": "bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/3718",
@@ -15,27 +16,33 @@
     "items": [
       {
         "title": "A freshly-accepted story can reach `swarm:launch` without hand-authoring fifteen fields, or the requirement to do so is stated where the operator meets it",
-        "status": "proposed"
+        "status": "completed",
+        "completed": "2026-09-29T13:06:34Z"
       },
       {
         "title": "`swarm:readiness` and `verify:scope-provenance` are jointly satisfiable without a per-story approval PR and TTY mint",
-        "status": "proposed"
+        "status": "completed",
+        "completed": "2026-09-29T13:06:34Z"
       },
       {
         "title": "`swarm:launch` failing on a `pending/` brief says activation is the prerequisite",
-        "status": "proposed"
+        "status": "completed",
+        "completed": "2026-09-29T13:06:34Z"
       },
       {
         "title": "`xbrief:preflight` and `swarm:readiness` no longer disagree silently about the same artifact, or the difference is explained where both are used",
-        "status": "proposed"
+        "status": "completed",
+        "completed": "2026-09-29T13:06:34Z"
       },
       {
         "title": "No gate weakened purely to make launch succeed (#3156)",
-        "status": "proposed"
+        "status": "completed",
+        "completed": "2026-09-29T13:06:34Z"
       },
       {
         "title": "CHANGELOG `[Unreleased]` entry",
-        "status": "proposed"
+        "status": "completed",
+        "completed": "2026-09-29T13:06:34Z"
       }
     ],
     "tags": [
@@ -161,6 +168,7 @@
         }
       ],
       "ambiguity_attestation": "none_found"
-    }
+    },
+    "updated": "2026-09-29T13:06:34Z"
   }
 }
