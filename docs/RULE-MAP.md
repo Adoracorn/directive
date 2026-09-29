@@ -8,8 +8,8 @@ Maintainer-facing map of how Directive's rules are layered and grouped. This is 
 
 ## Overview
 
-- **Rules:** 24 groupings, 280 documents
-- **Tasks:** 62 namespaces, 263 Taskfile declarations (includes + unlisted tasks/*.yml, not `task --list`)
+- **Rules:** 24 groupings, 281 documents
+- **Tasks:** 62 namespaces, 264 Taskfile declarations (includes + unlisted tasks/*.yml, not `task --list`)
 - **Packs:** 6 source-of-truth packs (704 entries from rules|lessons|patterns|skills|strategies|entries)
 
 Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the Taskfile gates that enforce them), and the **Lifecycle** that ties them together.
@@ -24,7 +24,7 @@ Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the 
 | contracts | Interface/behavioral contracts the framework enforces. | 16 | 197 | 16 | 140 | 0 | 5 |
 | conventions | Cross-cutting naming, formatting, and repo conventions. | 4 | 16 | 2 | 16 | 0 | 3 |
 | deployments | Provider-specific deployment playbooks (AWS, Azure, GCP, Cloudflare, Vercel, fly.io…). | 52 | 107 | 74 | 24 | 13 | 6 |
-| docs | Explanatory docs and the framework glossary. | 41 | 21 | 12 | 62 | 1 | 2 |
+| docs | Explanatory docs and the framework glossary. | 42 | 21 | 12 | 62 | 1 | 2 |
 | events | Event and signal definitions used across the framework. | 1 | 0 | 0 | 0 | 0 | 0 |
 | incidents | Incident handling and postmortem guidance. | 2 | 0 | 0 | 0 | 0 | 0 |
 | interfaces | Interface definitions and boundaries. | 4 | 119 | 66 | 37 | 2 | 9 |
@@ -159,6 +159,7 @@ _Explanatory docs and the framework glossary._
 - `operator-log-hygiene-consumer-pack-stub.md` — Skeleton for **consumer projects** that want a ship-gate for operator-facing logs. Wire this into *your* check aggregate only if you opt in.
 - `orphan-active-verdict-basis.md` — `verify:orphan-active` decides whether an `xbrief/active/` brief with `plan.status == running` is really still live work. Until #3767 it answered that question from a triage-cache hit returned **unconditionally** — no age
 - `plan-acceptance.md` — Fields the product AC gate actually reads. Not a schema dump. Derivation (`#3323` / `#3360`) owns the stamp. Setup stays silent on this block.
+- `presentation-ceiling.md` — Refs: #5056 · Related: #4541 intent-constraint, #4545 operator scope-limit, #4774 membership, leftover(#5056) #5059
 - `presentation-coverage.md` — `deft verify:presentation-coverage` (#5079) checks that a candidate under a recorded presentation ceiling has successful required checks and merge-base authority for every changed product path. The independent…
 - `product-signal.md` — Phase 1 consented product-improvement signal under epic #2603 (#2693). Defaults **off**.
 - `project-invariants.md` — Refs: #3425 · Related: #3238 `coverage_map`, #3241 parent lineage, #516 / #3145 `file_scope`
@@ -450,7 +451,7 @@ _How agents prove work is done: gates, validators, coverage, review._
 | umbrella | Fetch umbrella ## Current shape comment (#1152) — task umbrella:current-shape <N> [-- --repo OWNER/REPO \| --json \| --strict]. Does NOT… | 1 |
 | value | Pull-based attributed-value trend readout (#1709). -- task value:show -- [--window=7d\|30d] [--format=text\|json] | 1 |
 | vbrief | Validate and manage vBRIEF lifecycle state and structure. | 6 |
-| verify | Verification gates: stub scans, session ritual, story-ready, oracles. | 67 |
+| verify | Verification gates: stub scans, session ritual, story-ready, oracles. | 68 |
 | xbrief | Validate xBRIEF lifecycle folder structure and cross-file consistency. Alias of vbrief:validate with xbrief-first naming (#3483). | 3 |
 
 ## Lifecycle
