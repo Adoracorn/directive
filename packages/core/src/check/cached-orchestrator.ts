@@ -608,7 +608,9 @@ export function dispatchCachedTaskCheck(
           id: gateId,
           status: "run",
           exit_code: result.exitCode,
-          cause: `advisory hygiene failure: ${named.cause}`,
+          cause: named.opaqueOrGenericOnly
+            ? `advisory hygiene failure: ${named.cause} (opaque-or-generic named-cause bug #1883)`
+            : `advisory hygiene failure: ${named.cause}`,
           remedy: named.remedy,
           from_cache: result.fromCache,
         });
@@ -625,13 +627,16 @@ export function dispatchCachedTaskCheck(
         spawnError: lastSpawn.spawnError,
         hangTimeout: lastSpawn.timedOut === true,
       });
+      // named.lines already carry opaque/generic-only #1883 note when applicable.
       writeLines(named.lines);
       gateOutcomes.push({
         id: gateId,
         status: "failed",
         ...(coverageReport === undefined ? {} : { coverage: coverageReport.coverage }),
         exit_code: result.exitCode,
-        cause: named.cause,
+        cause: named.opaqueOrGenericOnly
+          ? `${named.cause} (opaque-or-generic named-cause bug #1883)`
+          : named.cause,
         remedy: named.remedy,
         from_cache: result.fromCache,
       });
