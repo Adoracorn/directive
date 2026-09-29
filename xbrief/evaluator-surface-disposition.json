@@ -1,11 +1,23 @@
 {
   "schema": "deft.evaluator-surface-disposition.v1",
   "kind": "disclosure",
-  "issue": 5097,
+  "issue": 5079,
   "surfaces": [
-    "packages/core/src/class-checks/evaluate.ts",
-    "packages/core/src/class-checks/evaluate.test.ts",
-    "xbrief/evaluator-surface-disposition.json"
+    "Taskfile.yml",
+    "tasks/verify.yml",
+    "vitest.config.ts",
+    "packages/core/src/check/gate-lists.ts",
+    "packages/core/src/evaluator-surface/**",
+    "packages/core/src/presentation-coverage/**",
+    "packages/core/src/intent-constraint/**",
+    "packages/core/src/observable-scope/**",
+    "packages/core/src/class-checks/**",
+    "packages/cli/src/verify-presentation-coverage.ts",
+    "xbrief/evaluator-surface-disposition.json",
+    "packages/core/src/check/**",
+    "packages/core/src/consumer-check-contract/**",
+    "packages/core/src/product-first-done-gate/**",
+    "packages/core/src/run-summary/types.ts"
   ],
-  "note": "Disclosure for #5097: class-checks class-2 CI harness allowlist for .github/workflows (ci.yml family). Shipping/docs-site/unknown workflows stay fail-closed. Disclosure only; not #3164 authorization."
+  "note": "Disclosure for the operator-approved #5079 repair: real required gate composition, pinned Git candidate reads, base story/path admission, and mandatory aggregate/consumer coverage. Shared supplier #5056 remains an independent gate. Disclosure only; not #3164 authorization."
 }

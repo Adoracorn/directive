@@ -75,6 +75,10 @@
       "types": "./dist/operator-scope-limit/index.d.ts",
       "default": "./dist/operator-scope-limit/index.js"
     },
+    "./presentation-coverage": {
+      "types": "./dist/presentation-coverage/index.d.ts",
+      "default": "./dist/presentation-coverage/index.js"
+    },
     "./class-checks": {
       "types": "./dist/class-checks/index.d.ts",
       "default": "./dist/class-checks/index.js"
