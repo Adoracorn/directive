@@ -172,6 +172,8 @@ Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
 
 ## Human merge gate (#1193)
 
+! Merge-gate enforcement readiness (#1517): forge required-status-check detect+record at strategy start (`evaluateMergeGateEnforcementAtStrategyStart`); durable `.deft/merge-gate-enforcement/`; optional configure never empty-PUT/auto-promote; does not grant bot-merge. Depth: `.deft/core/scm/github.md`.
+
 ! When `plan.policy.requireHumanMerge` is true (default if `autoDeployOnMerge`), agents may open PRs, may not merge. Override: `deft policy:allow-bot-merge -- --confirm` or `DEFT_ALLOW_BOT_MERGE=1` — `commands.md` / `contracts/intent-ceiling.md`.
 
 ### Story Start Gate
