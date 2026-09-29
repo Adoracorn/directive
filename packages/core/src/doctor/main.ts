@@ -43,6 +43,7 @@ import {
   plan as resolvePlan,
 } from "../resolution/index.js";
 import { isLinkedWorktreePath } from "../session/main-worktree.js";
+import { occupancyLiveness, readOccupancy } from "../session/occupancy.js";
 import { type ResolveUserMdResult, resolveUserMdPath } from "../user-config/resolve-user-md.js";
 import { evaluateAgentHooks } from "../verify-env/agent-hooks.js";
 import { probeAgentHooksLive } from "../verify-env/agent-hooks-live-probe.js";
@@ -133,6 +134,51 @@ import {
 } from "./taskfile.js";
 import type { DoctorSeams, Finding, ResolutionSummary } from "./types.js";
 import { defaultWhich } from "./which.js";
+
+/**
+ * Cold-start recovery copy for abandoned live occupancy (#4667).
+ * Mirrors README cold-start; live actor is session_id. Bare session:end with
+ * empty identity refuses; TTL claim-over and deny-embedded recipe remain.
+ * host:none / address:none are unset metadata. Does not reopen anonymous
+ * live auto-release (#3954).
+ */
+/** Help / cold-start recovery recipe (#4667). Does not assert abandonment by itself. */
+export const ABANDONED_OCCUPANCY_LEASE_RECOVERY =
+  "Occupancy lease recovery: bare session:end / occupancy:release without a presented " +
+  "session identity refuses while a lease is live. Immediate recovery when you intend to " +
+  "clear that session: occupancy:release --session-id=<id from .deft/occupancy.json> " +
+  "(read session_id from that file). Or wait for TTL claim-over. " +
+  "host:none / address:none are ordinary unset metadata, not the lock cause.";
+
+/**
+ * Tip for a present `.deft/occupancy.json` (#4667 Greptile). File presence alone
+ * is not abandonment — only stale/capped (or unreadable) leases get that label.
+ */
+export function occupancyLeaseDoctorTip(
+  projectRoot: string,
+  now: Date = new Date(),
+): string | null {
+  if (!existsSync(join(projectRoot, ".deft", "occupancy.json"))) return null;
+  const record = readOccupancy(projectRoot);
+  if (record === null) {
+    return (
+      "Occupancy lease file present but unreadable or invalid. " +
+      "Delete or rewrite `.deft/occupancy.json` — occupancy:release cannot clear a corrupt file."
+    );
+  }
+  const liveness = occupancyLiveness(record, now);
+  if (liveness === "live") {
+    return (
+      `Occupancy lease present (session ${record.sessionId}, live). ` +
+      "Do not release another owner's live lease. " +
+      ABANDONED_OCCUPANCY_LEASE_RECOVERY
+    );
+  }
+  return (
+    `Abandoned or expired occupancy lease (session ${record.sessionId}, ${liveness}). ` +
+    ABANDONED_OCCUPANCY_LEASE_RECOVERY
+  );
+}
 
 const DEFAULT_RESOLUTION_PLATFORMS = ["linux", "darwin", "win32"] as const;
 
@@ -350,6 +396,8 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
 
   if (flags.help) {
     process.stdout.write(formatDoctorHelp());
+    // Cold-start recovery copy (#4667): keep discoverable beside doctor --help.
+    process.stdout.write(`${ABANDONED_OCCUPANCY_LEASE_RECOVERY}\n`);
     return 0;
   }
 
@@ -363,7 +411,6 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
   const consumerContext = resolve(projectRoot) !== resolve(frameworkRoot);
   const whichFn = seams.whichFn ?? defaultWhich;
   const nowFn = seams.now ?? (() => new Date());
-
   // #3039: temporary test kill-switch. Active (untracked) → disabled short-circuit.
   // Tracked/committed flag → warn only and continue normal doctor (no enforcement bypass).
   const killSwitch = detectDeftDirectiveDisable(projectRoot, { skipTrackedCache: true });
@@ -491,6 +538,11 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
         process.stdout.write(`${pythonJsonDump(payload)}\n`);
       } else {
         process.stdout.write(`${renderDoctorStatusLine(decision, nowFn())}\n`);
+      }
+      // #4667: throttle-skipped runs still surface lease recovery when a file is present.
+      const throttleLeaseTip = occupancyLeaseDoctorTip(projectRoot, nowFn());
+      if (throttleLeaseTip !== null && !jsonMode && !quietMode) {
+        throttleSink.info(throttleLeaseTip);
       }
       const signpostWarnings = throttleFindings.filter((f) => f.severity === "warning").length;
       if (hygieneFailed && !jsonMode) {
@@ -835,6 +887,11 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
   }
 
   sink.blank();
+  // #4667: name lease recovery when a file is present; do not assert abandonment on presence alone.
+  const leaseTip = occupancyLeaseDoctorTip(projectRoot, nowFn());
+  if (leaseTip !== null && !quietMode) {
+    sink.info(leaseTip);
+  }
   if (errorCount === 0 && warningCount === 0) {
     sink.finalSuccess("System check passed!");
     emitSessionCodaAfterFinalSuccess({
