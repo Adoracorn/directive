@@ -34,14 +34,27 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 - **#1299** -- When to use CRUD tool vs direct vBRIEF authoring (contributor doc) -- `[proposed]`
 - **#2651** -- ADR-002: Forge-provider Azure DevOps adoption gate (proposed) -- `[proposed]`
 - **#3014** -- research(deposit): opt-in minimal consumer AGENTS profile for app-bank / greenfield -- `[proposed]`
-- **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[proposed]`
 - **#3729** -- bug(session): the occupancy lease is exclusion-only -- an agent that never claims is never gated -- `[proposed]`
 - **#3739** -- bug(hooks): nested hosts get a 5s budget the framework itself calls too small, and a killed hook renders identically to an allow -- `[proposed]`
 
 ## Completed
 
-_Showing 25 of 1657 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1671 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[completed]`
+- **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[completed]`
+- **#1517** -- Gate project start on merge-gate readiness (CI + branch protection) or an explicit opt-out, before strategies run -- `[completed]`
+- **#3669** -- swarm: #3032 mandates a 'solo-worker launch path' that no verb implements -- the supported interactive path is discoverable only from references/ -- `[completed]`
+- **#5126** -- bug(scope,swarm): scope:cancel after Tracking merge is not leftover-complete -- `[completed]`
+- **#5111** -- process(design-critique): default arc to yolo no-ingest + recommended Dual-stop; add ingest and noyolo -- `[completed]`
+- **#5110** -- bug(hooks,verify): readiness recovery must not concatenate UNUSED_HOST_HOOKS_RECOVERY on matcher drift (leftover from #4574) -- `[completed]`
+- **#4574** -- bug(hooks,update): engine 0.119 expects EditNotebook matcher but update leaves 0.116 grok hooks drifted/missing -- `[completed]`
+- **#4664** -- [UAT Tester 1] Codex sandbox EPERM on git for session:start, doctor ritual, ingest, and promote -- `[completed]`
+- **#4659** -- [UAT Tester 1] Trusted Codex hooks exit 1 until PowerShell execution policy is loosened -- `[completed]`
+- **#4533** -- bug(init): concurrent app scaffold overwrites the Directive pin and AGENTS.md -- `[completed]`
+- **#3791** -- feat(lifecycle): automate the post-merge brief sweep and stamp the evidence a merge can honestly produce -- `[completed]`
+- **#5105** -- feat(lifecycle): merge-kind acceptance evidence needs an explicit declaration, not keyword inference -- `[completed]`
+- **#4671** -- [UAT Tester 1] issue:ingest Requirements harvest + empty-after-harvest notice (#4671) -- `[completed]`
 - **#5081** -- bug(scm,win32): worker-auth T5 fails Step 5 — host gh.exe wins over fake gh.cmd (/user exit 1) -- `[completed]`
 - **#4919** -- bug(swarm): a merged Tracking story is finalized by hand, one brief at a time -- `[completed]`
 - **#5020** -- verify:review-monitor --live-wait must evidence still-running wait (not lease+flag alone) -- `[completed]`
@@ -53,18 +66,4 @@ _Showing 25 of 1657 completed scopes (newest first). Full history: lifecycle `co
 - **#4539** -- bug(doctor): already-installed skip leaves a stale global engine -- `[completed]`
 - **#4978** -- leftover(#4751): closed node --test grammar including exact built-in --test-reporter names -- `[completed]`
 - **#4660** -- [UAT Tester 1] Setup interview cannot persist: no host session identity / read-only session:start -- `[completed]`
-- **#4870** -- scope:complete exits 0 when the clause walk verified nothing -- `[completed]`
-- **#4987** -- fix(setup): USER.md freshness stamps the literal 0.20.0 — read the installed version (version-stamp split from #4378) -- `[completed]`
-- **#5024** -- chore(release): raise Windows Step 5 hang detector 30→45m and keep cheapening suite efficiency -- `[completed]`
-- **#5016** -- design(scm): trust provisioned GitHub credentials and enforce explicit worker assignments -- `[completed]`
-- **#3664** -- security(scm,skills): gh auth status prints a live installation token that deft guidance tells agents to run -- `[completed]`
-- **#5027** -- chore(release): Step 5 tee leaves a per-file vitest durations artifact so "what is slow" is a sort -- `[completed]`
-- **#5028** -- perf(vitest): persist slowest-first sequencing across release worktrees so Step 5 has no idle tail -- `[completed]`
-- **#5026** -- chore(release): decide whether Windows Step 5 runs vitest without --coverage (coverage-of-record from GHA) -- `[completed]`
-- **#5022** -- bug(release): Windows Step 5 hang detector kills ts:check-lane at 52/1284 files during v0.119.9 cut -- `[completed]`
-- **#4882** -- Parent-retained merge babysit stands down with no live wait -- `[completed]`
-- **#3858** -- bug(scm): the enforcing SCM readiness gate never invokes the worker-principal validator -- `[completed]`
-- **#5010** -- design(verify): retire TTY intent-constraint and observable-scope mint mid-build — detect + in-harness ask, returned failures free -- `[completed]`
-- **#3663** -- bug(swarm): worker github_auth_mode is stamped from the parent process and never re-validated in the worker envelope -- `[completed]`
-- **#4973** -- leftover(#1708): recorded planning choice before the first Cursor Plan prompt -- `[completed]`
 

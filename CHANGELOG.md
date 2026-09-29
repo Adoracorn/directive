@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.119.11] - 2026-09-29
+
+> Presentation ceilings + durable-effect (#5056/#5079/#5080), merge-gate enforcement readiness (#1517), finalize-class bot-merge carve-out (#3791), merge-kind acceptance (#5105), swarm:launch N=1 scaffold (#3718), design-critique bare-arc defaults (#5111), and cancel refuse after Tracking (#5126).
+
 ### Fixed
 - **docs(agents): mirror #1517 merge-gate enforcement readiness into agents-entry + refresh (#1517).** Consumer AGENTS.md managed section now names the strategy-start detect+record axis distinct from local allowDirectCommitsToMaster / requireHumanMerge.
 - **fix(scm): migrate merge-gate enforcement durable + configure PUT writes to containedWrite (#1517).** Clears verify:contained-writes --enforce on the strategy-start record/configure path. Tracking #1517.
@@ -6652,7 +6664,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.119.10...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.119.11...HEAD
+[0.119.11]: https://github.com/deftai/directive/compare/v0.119.10...v0.119.11
 [0.119.10]: https://github.com/deftai/directive/compare/v0.119.9...v0.119.10
 [0.119.9]: https://github.com/deftai/directive/compare/v0.119.8...v0.119.9
 [0.119.8]: https://github.com/deftai/directive/compare/v0.119.7...v0.119.8
