@@ -7,7 +7,12 @@ import {
   gitTrackedFiles,
 } from "../encoding/git.js";
 import { fnmatchCase } from "../encoding/text.js";
-import { isLifecycleArtifactPath, LIFECYCLE_DIR_NAMES } from "../layout/resolve.js";
+import {
+  isLifecycleArtifactPath,
+  LIFECYCLE_DIR_NAMES,
+  projectDefinitionRelPath,
+  resolveProjectDefinitionPath,
+} from "../layout/resolve.js";
 import { validateCreatedUpdatedChronology } from "./chronology.js";
 import { filenameConventionExamples, isScopeLifecyclePath, validateFilename } from "./filename.js";
 import { evaluateExtensionRoundtrip } from "./roundtrip.js";
@@ -231,6 +236,89 @@ function isVbriefPath(posix: string): boolean {
   return isLifecycleArtifactPath(posix);
 }
 
+/**
+ * Canonical PROJECT-DEFINITION on disk (#4876). Untracked / non-injected PD
+ * must still enter the candidate set; absence is not an error (Setup may not
+ * have written it yet). Legacy vbrief-only trees keep the on-disk path without
+ * forcing migrate:xbrief here.
+ */
+function canonicalProjectDefinitionOnDisk(
+  root: string,
+): { fullPath: string; displayPath: string } | null {
+  let fullPath: string;
+  let displayPath: string;
+  try {
+    fullPath = resolveProjectDefinitionPath(root);
+    displayPath = projectDefinitionRelPath(root).replace(/\\/g, "/");
+  } catch {
+    fullPath = join(root, "vbrief", "PROJECT-DEFINITION.vbrief.json");
+    displayPath = "vbrief/PROJECT-DEFINITION.vbrief.json";
+  }
+  if (!existsSync(fullPath)) {
+    return null;
+  }
+  return { fullPath, displayPath };
+}
+
+type ConformanceCandidate = {
+  displayPath: string;
+  fullPath: string;
+  /** Fail-closed on IO/parse; true for DEFT_PROJECT_PATH and on-disk PD (#4876). */
+  required: boolean;
+  /** Display/recovery label from DEFT_PROJECT_PATH (#3796). */
+  configured: boolean;
+};
+
+function injectProjectDefinitionCandidate(
+  candidates: ConformanceCandidate[],
+  input: {
+    lexicalPath: string;
+    displayPath: string;
+    configured: boolean;
+    missingMessage: string;
+    unreadableMessage: string;
+  },
+): ConformanceEvaluateResult | null {
+  if (!existsSync(input.lexicalPath)) {
+    return {
+      exitCode: 2,
+      findings: [],
+      message: input.missingMessage,
+    };
+  }
+  let fullPath: string;
+  try {
+    fullPath = realpathSync(input.lexicalPath);
+  } catch {
+    return {
+      exitCode: 2,
+      findings: [],
+      message: input.unreadableMessage,
+    };
+  }
+  const existing = candidates.find((candidate) => {
+    try {
+      return realpathSync(candidate.fullPath) === fullPath;
+    } catch {
+      return resolve(candidate.fullPath) === fullPath;
+    }
+  });
+  if (existing === undefined) {
+    candidates.push({
+      displayPath: input.displayPath,
+      fullPath,
+      required: true,
+      configured: input.configured,
+    });
+  } else {
+    existing.displayPath = input.displayPath;
+    existing.fullPath = fullPath;
+    existing.required = true;
+    existing.configured = input.configured;
+  }
+  return null;
+}
+
 function formatChronologyWarnings(warnings: readonly string[]): string {
   if (warnings.length === 0) {
     return "";
@@ -337,52 +425,85 @@ export function evaluateConformance(
     throw err;
   }
 
-  const candidates: Array<{ displayPath: string; fullPath: string; configured: boolean }> = relPaths
+  const candidates: ConformanceCandidate[] = relPaths
     .map((p) => p.replace(/\\/g, "/"))
     .filter((posix) => isVbriefPath(posix) && !isAllowListed(posix, customGlobs))
-    .map((posix) => ({ displayPath: posix, fullPath: join(root, posix), configured: false }));
+    .map((posix) => ({
+      displayPath: posix,
+      fullPath: join(root, posix),
+      required: false,
+      configured: false,
+    }));
 
+  // Prefer DEFT_PROJECT_PATH / projectDefinitionPath; otherwise force on-disk
+  // canonical PD into the candidate set so clean-zero cannot false-certify (#4876).
   const configuredPath = options.projectDefinitionPath?.trim();
   if (configuredPath) {
-    const lexicalPath = resolve(root, configuredPath);
-    if (!existsSync(lexicalPath)) {
-      return {
-        exitCode: 2,
-        findings: [],
-        message:
-          "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION does not exist.\n" +
-          "  Recovery: fix or unset DEFT_PROJECT_PATH, then rerun conformance.",
-      };
-    }
-    let fullPath: string;
-    try {
-      fullPath = realpathSync(lexicalPath);
-    } catch {
-      return {
-        exitCode: 2,
-        findings: [],
-        message:
-          "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION is unreadable.\n" +
-          "  Recovery: fix its permissions or DEFT_PROJECT_PATH, then rerun conformance.",
-      };
-    }
-    const existing = candidates.find((candidate) => {
-      try {
-        return realpathSync(candidate.fullPath) === fullPath;
-      } catch {
-        return resolve(candidate.fullPath) === fullPath;
-      }
+    const injected = injectProjectDefinitionCandidate(candidates, {
+      lexicalPath: resolve(root, configuredPath),
+      displayPath: "<configured PROJECT-DEFINITION>",
+      configured: true,
+      missingMessage:
+        "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION does not exist.\n" +
+        "  Recovery: fix or unset DEFT_PROJECT_PATH, then rerun conformance.",
+      unreadableMessage:
+        "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION is unreadable.\n" +
+        "  Recovery: fix its permissions or DEFT_PROJECT_PATH, then rerun conformance.",
     });
-    if (existing === undefined) {
-      candidates.push({
-        displayPath: "<configured PROJECT-DEFINITION>",
-        fullPath,
-        configured: true,
+    if (injected !== null) {
+      return injected;
+    }
+  } else if (mode === "all") {
+    // #4876 / Greptile: force on-disk PD for --all only. --staged must not pull
+    // an unstaged/untracked PROJECT-DEFINITION into the candidate set.
+    const canonical = canonicalProjectDefinitionOnDisk(root);
+    if (canonical !== null && !isAllowListed(canonical.displayPath, customGlobs)) {
+      const injected = injectProjectDefinitionCandidate(candidates, {
+        lexicalPath: canonical.fullPath,
+        displayPath: canonical.displayPath,
+        configured: false,
+        missingMessage:
+          "❌ verify_vbrief_conformance: PROJECT-DEFINITION on disk was not counted.\n" +
+          "  Recovery: rerun conformance; if this persists, report a gate defect (#4876).",
+        unreadableMessage:
+          "❌ verify_vbrief_conformance: PROJECT-DEFINITION on disk is unreadable.\n" +
+          "  Recovery: fix its permissions, then rerun conformance.",
       });
-    } else {
-      existing.displayPath = "<configured PROJECT-DEFINITION>";
-      existing.fullPath = fullPath;
-      existing.configured = true;
+      if (injected !== null) {
+        return injected;
+      }
+    }
+  } else if (mode === "staged") {
+    // #4876: staged canonical PD stays in the git candidate set (no on-disk
+    // inject), but must be required so invalid JSON cannot clean-pass.
+    for (const candidate of candidates) {
+      const base = candidate.displayPath.split("/").pop() ?? "";
+      if (
+        (base === "PROJECT-DEFINITION.xbrief.json" || base === "PROJECT-DEFINITION.vbrief.json") &&
+        !isAllowListed(candidate.displayPath, customGlobs)
+      ) {
+        candidate.required = true;
+      }
+    }
+    const canonical = canonicalProjectDefinitionOnDisk(root);
+    if (canonical !== null && !isAllowListed(canonical.displayPath, customGlobs)) {
+      let canonicalReal: string | null = null;
+      try {
+        canonicalReal = realpathSync(canonical.fullPath);
+      } catch {
+        canonicalReal = resolve(canonical.fullPath);
+      }
+      for (const candidate of candidates) {
+        let candidateReal: string;
+        try {
+          candidateReal = realpathSync(candidate.fullPath);
+        } catch {
+          candidateReal = resolve(candidate.fullPath);
+        }
+        if (candidateReal === canonicalReal) {
+          candidate.required = true;
+        }
+      }
     }
   }
 
@@ -390,20 +511,23 @@ export function evaluateConformance(
   const filenameErrors: string[] = [];
   const chronologyWarnings: string[] = [];
   for (const candidate of candidates) {
-    if (!candidate.configured && isScopeLifecyclePath(candidate.displayPath)) {
+    // Always validate staged/lifecycle filenames — required PD must not skip D7 (#4876).
+    if (isScopeLifecyclePath(candidate.displayPath)) {
       filenameErrors.push(...validateFilename(candidate.displayPath));
     }
     let text: string;
     try {
       text = readFileSync(candidate.fullPath, "utf8");
     } catch {
-      if (candidate.configured) {
+      if (candidate.required) {
         return {
           exitCode: 2,
           findings,
-          message:
-            "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION is unreadable.\n" +
-            "  Recovery: fix its permissions or DEFT_PROJECT_PATH, then rerun conformance.",
+          message: candidate.configured
+            ? "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION is unreadable.\n" +
+              "  Recovery: fix its permissions or DEFT_PROJECT_PATH, then rerun conformance."
+            : "❌ verify_vbrief_conformance: PROJECT-DEFINITION on disk is unreadable.\n" +
+              "  Recovery: fix its permissions, then rerun conformance.",
         };
       }
       continue;
@@ -412,13 +536,15 @@ export function evaluateConformance(
     try {
       data = JSON.parse(text);
     } catch {
-      if (candidate.configured) {
+      if (candidate.required) {
         return {
           exitCode: 2,
           findings,
-          message:
-            "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION is not valid JSON.\n" +
-            "  Recovery: repair the JSON, then rerun conformance.",
+          message: candidate.configured
+            ? "❌ verify_vbrief_conformance: configured PROJECT-DEFINITION is not valid JSON.\n" +
+              "  Recovery: repair the JSON, then rerun conformance."
+            : "❌ verify_vbrief_conformance: PROJECT-DEFINITION on disk is not valid JSON.\n" +
+              "  Recovery: repair the JSON, then rerun conformance.",
         };
       }
       continue;
