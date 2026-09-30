@@ -565,7 +565,7 @@ function resolveFinalizeOwedRepo(
   return parseGitHubRemoteRepo(remote.stdout.trim()) ?? "";
 }
 
-/** #5145: Prefer-A reason when dest inherits a primary finalize-owed record. */
+/** #5145/#5171: defer reason when dest inherits a primary finalize-owed record (block-suppress only). */
 export const PRIMARY_INHERITED_DEFER_OWED_REASON = "primary-finalize-owed";
 
 function inheritDeferOwedFromPrimary(
@@ -631,8 +631,8 @@ function resolveEffectiveDeferOwedReason(
   if (typeof options.deferOwedReason === "string" && options.deferOwedReason.trim().length > 0) {
     return options.deferOwedReason.trim();
   }
-  // Dest leaves Prefer-A only when primary already recorded finalize_owed (deferred or ok).
-  // Standalone linked worktrees without a primary record still scan (#5145 Class A).
+  // Dest may inherit defer reason from primary finalize_owed (deferred or ok).
+  // Inheritance suppresses blocks only; inventory still runs (#5171).
   return inheritDeferOwedFromPrimary(projectRoot, options);
 }
 
@@ -651,18 +651,9 @@ export function evaluateFinalizeOwedSessionGate(
 } {
   const deferReason = resolveEffectiveDeferOwedReason(projectRoot, options);
   const deferred = deferReason !== null;
-  // #5145 Prefer-A: defer skips tip inventory entirely (match doctor/cache_fresh defer skip).
-  // Soft-pass alone still paid discoverFinalizeOwed / fetchDeliveryTipPrivate before this cut.
-  // Linked dest Prefer-A when primary ritual already recorded finalize_owed (deferred/ok).
-  if (deferred && deferReason !== null && options.probeFinalizeOwed === undefined) {
-    return {
-      lines: [`finalize owed deferred: ${deferReason}`],
-      blocks: false,
-      unknown: false,
-      deferred: true,
-      deferReason,
-    };
-  }
+  // #5171: reverse Prefer-A #5145 inventory skip. Defer / dest-inherit only clear
+  // blocks after a real inventory (blocks: blocking && !deferred). Inventory stays
+  // on every mutation session:start / --rearm; no first-ship day-cache.
   if (options.probeFinalizeOwed !== undefined) {
     const probed = options.probeFinalizeOwed(projectRoot);
     const lines = [...probed.lines];
@@ -687,12 +678,17 @@ export function evaluateFinalizeOwedSessionGate(
   const delivery = resolveDeliveryBranch(projectRoot, runGit).branch;
   const fetched = fetchDeliveryTipPrivate(projectRoot, delivery, runGit);
   if (fetched.tip === null) {
+    // Preserve operator deferral so linked dests can inherit it (#5172 P1 / #5171).
+    const lines = ["finalize owed: unknown"];
+    if (deferred && deferReason !== null) {
+      lines.push(`finalize owed deferred: ${deferReason}`);
+    }
     return {
-      lines: ["finalize owed: unknown"],
+      lines,
       blocks: false,
       unknown: true,
-      deferred: false,
-      deferReason: null,
+      deferred,
+      deferReason: deferred ? deferReason : null,
     };
   }
   const repo = resolveFinalizeOwedRepo(projectRoot, env, runGit);

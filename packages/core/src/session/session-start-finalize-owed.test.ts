@@ -49,6 +49,30 @@ describe("evaluateFinalizeOwedSessionGate (#4919)", () => {
     expect(result.blocks).toBe(false);
   });
 
+  it("preserves --defer-owed when tip fetch fails so dests can inherit (#5172)", () => {
+    const result = evaluateFinalizeOwedSessionGate("/tmp/proj", {
+      deferOwedReason: "afk-release",
+      env: { GH_REPO: "deftai/directive" },
+      runGit: (_cwd, args) => {
+        if (args[0] === "fetch") {
+          return { code: 1, stdout: "", stderr: "network down" };
+        }
+        if (args[0] === "symbolic-ref" || args.includes("--abbrev-ref")) {
+          return { code: 0, stdout: "master\n", stderr: "" };
+        }
+        if (args[0] === "rev-parse") {
+          return { code: 1, stdout: "", stderr: "missing tip" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+    });
+    expect(result.unknown).toBe(true);
+    expect(result.blocks).toBe(false);
+    expect(result.deferred).toBe(true);
+    expect(result.deferReason).toBe("afk-release");
+    expect(result.lines.join("\n")).toContain("deferred");
+  });
+
   it("fails closed when tip fetch works but repo cannot be resolved", () => {
     const result = evaluateFinalizeOwedSessionGate("/tmp/proj", {
       env: {},
@@ -185,25 +209,44 @@ describe("evaluateFinalizeOwedSessionGate (#4919)", () => {
     expect(result.deferred).toBe(false);
     expect(result.lines.join("\n")).toContain("blocks mutation");
   });
-  it("skips tip fetch when --defer-owed is set (#5145 Prefer-A)", () => {
-    let fetchCalls = 0;
+  it("deferred still inventories; defer only clears blocks (#5171 reverse Prefer-A)", () => {
+    let probeCalls = 0;
     const result = evaluateFinalizeOwedSessionGate("/tmp/proj", {
       deferOwedReason: "cohort-add",
-      runGit: () => {
-        fetchCalls += 1;
-        return { code: 0, stdout: "TIP\n", stderr: "" };
+      probeFinalizeOwed: () => {
+        probeCalls += 1;
+        return {
+          lines: ["finalize owed inventory:", "  #4919 owed [blocks]"],
+          blocks: true,
+          unknown: false,
+        };
       },
-      env: { GH_REPO: "deftai/directive" },
     });
+    expect(probeCalls).toBe(1);
     expect(result.blocks).toBe(false);
     expect(result.deferred).toBe(true);
     expect(result.deferReason).toBe("cohort-add");
     expect(result.lines.join("\n")).toContain("deferred");
-    // Live path must not thrash tip/network under defer (spy via runGit never called).
-    expect(fetchCalls).toBe(0);
+    expect(result.lines.join("\n")).toContain("#4919");
   });
 
-  it("linked worktree Prefer-A when primary already deferred (#5145 dest-default)", () => {
+  it("live deferred path still attempts tip inventory (#5171)", () => {
+    let gitCalls = 0;
+    const result = evaluateFinalizeOwedSessionGate("/tmp/proj", {
+      deferOwedReason: "cohort-add",
+      runGit: () => {
+        gitCalls += 1;
+        return { code: 1, stdout: "", stderr: "fail" };
+      },
+      env: { GH_REPO: "deftai/directive" },
+    });
+    // Prefer-A skip would leave gitCalls at 0; reverse requires entering tip fetch.
+    expect(gitCalls).toBeGreaterThan(0);
+    expect(result.unknown).toBe(true);
+    expect(result.blocks).toBe(false);
+  });
+
+  it("linked worktree inherits defer reason but still inventories (#5171)", () => {
     const { mkdtempSync, mkdirSync, writeFileSync, rmSync } = require("node:fs");
     const { join } = require("node:path");
     const { tmpdir } = require("node:os");
@@ -232,7 +275,7 @@ describe("evaluateFinalizeOwedSessionGate (#4919)", () => {
         }),
         "utf8",
       );
-      let fetchCalls = 0;
+      let probeCalls = 0;
       const result = evaluateFinalizeOwedSessionGate(dest, {
         isLinkedWorktree: () => true,
         runGit: (_cwd, args) => {
@@ -242,15 +285,22 @@ describe("evaluateFinalizeOwedSessionGate (#4919)", () => {
           if (args[0] === "rev-parse" && args.includes("HEAD")) {
             return { code: 0, stdout: "abc\n", stderr: "" };
           }
-          fetchCalls += 1;
           return { code: 0, stdout: "TIP\n", stderr: "" };
         },
-        env: { GH_REPO: "deftai/directive" },
+        probeFinalizeOwed: () => {
+          probeCalls += 1;
+          return {
+            lines: ["finalize owed inventory:", "  #4919 owed [blocks]"],
+            blocks: true,
+            unknown: false,
+          };
+        },
       });
+      expect(probeCalls).toBe(1);
       expect(result.blocks).toBe(false);
       expect(result.deferred).toBe(true);
       expect(result.deferReason).toBe("primary:cohort-add");
-      expect(fetchCalls).toBe(0);
+      expect(result.lines.join("\n")).toContain("#4919");
     } finally {
       rmSync(primary, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });
