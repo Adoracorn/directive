@@ -12,6 +12,8 @@ describe("occupancy-namespace unrecognized arguments (#4411)", () => {
     );
   });
 
+  // occupancy:release owns a real --help path (exit 0). Other occupancy verbs
+  // still refuse --help as unrecognized (#4411 tip-rot / Greptile P1 on #5151).
   it.each([
     ["grant", parseGrant, runGrant],
     ["heartbeat", parseHeartbeat, runHeartbeat],

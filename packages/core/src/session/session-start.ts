@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { resolveFrameworkRootForProject, runningInsideDeftRepo } from "../doctor/paths.js";
 import { emitSessionEvalReadback } from "../eval/readback.js";
 import { bindSessionGeneration } from "../freshness/bind.js";
@@ -101,6 +102,7 @@ import {
 } from "./effort-budget.js";
 import type { GitRunner } from "./git.js";
 import { defaultGitRunner, gitHead, gitIsAncestor, worktreePath } from "./git.js";
+import { isLinkedWorktreePath, mainWorktreeRoot } from "./main-worktree.js";
 import {
   type ApplyOccupancyInput,
   applyWorktreeOccupancy,
@@ -134,6 +136,7 @@ import {
   ritualStep,
   writeRitualState,
 } from "./ritual-sentinel.js";
+import { resolveSessionRitualStalenessHours } from "./staleness.js";
 import { timestampIso } from "./time.js";
 import {
   runToolchainPreflight,
@@ -342,6 +345,11 @@ export interface SessionStartOptions {
    * When set, blocking owed/close-owed/stale inventory does not refuse mutation.
    */
   readonly deferOwedReason?: string | null;
+  /**
+   * #5145: test seam for linked-worktree dest-default defer. Production uses
+   * `isLinkedWorktreePath`; linked dest leaves Prefer-A without a CLI flag.
+   */
+  readonly isLinkedWorktree?: (projectRoot: string) => boolean;
   /**
    * #4919: test/prod seam for owed inventory. Default runs private tip fetch + discover.
    * Read-only / requirements postures never call this.
@@ -557,9 +565,83 @@ function resolveFinalizeOwedRepo(
   return parseGitHubRemoteRepo(remote.stdout.trim()) ?? "";
 }
 
+/** #5145: Prefer-A reason when dest inherits a primary finalize-owed record. */
+export const PRIMARY_INHERITED_DEFER_OWED_REASON = "primary-finalize-owed";
+
+function inheritDeferOwedFromPrimary(
+  projectRoot: string,
+  options: Pick<SessionStartOptions, "runGit" | "isLinkedWorktree">,
+): string | null {
+  const linkedProbe = options.isLinkedWorktree ?? isLinkedWorktreePath;
+  if (!linkedProbe(projectRoot)) {
+    return null;
+  }
+  const primary = mainWorktreeRoot(projectRoot, options.runGit ?? undefined);
+  if (primary === null) {
+    return null;
+  }
+  try {
+    if (resolve(primary) === resolve(projectRoot)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const [state] = readRitualState(primary);
+  if (state === null) {
+    return null;
+  }
+  // Refuse stale primary ritual: HEAD drift or age beyond sessionRitualStalenessHours.
+  const runGit = options.runGit ?? defaultGitRunner;
+  const headResult = gitHead(primary, runGit);
+  const primaryHead = (headResult.head ?? "").trim();
+  if (primaryHead.length === 0 || state.gitHead !== primaryHead) {
+    return null;
+  }
+  const staleness = resolveSessionRitualStalenessHours(primary);
+  // Invalid sessionRitualStalenessHours must not soft-fallback into Prefer-A inherit.
+  if (staleness.source === "default-on-error") {
+    return null;
+  }
+  const { hours } = staleness;
+  const ageMs = Date.now() - state.startedAt.getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > hours * 60 * 60 * 1000) {
+    return null;
+  }
+  // session:start writes finalize_owed at ritual-state top level (not gated_steps).
+  const step = state.raw.finalize_owed;
+  if (step === undefined || step === null || typeof step !== "object" || Array.isArray(step)) {
+    return null;
+  }
+  const rec = step as Record<string, unknown>;
+  const deferred = rec.deferred_reason;
+  if (typeof deferred === "string" && deferred.trim().length > 0) {
+    return `primary:${deferred.trim()}`;
+  }
+  if (rec.ok === true) {
+    return PRIMARY_INHERITED_DEFER_OWED_REASON;
+  }
+  return null;
+}
+
+function resolveEffectiveDeferOwedReason(
+  projectRoot: string,
+  options: Pick<SessionStartOptions, "deferOwedReason" | "isLinkedWorktree" | "runGit">,
+): string | null {
+  if (typeof options.deferOwedReason === "string" && options.deferOwedReason.trim().length > 0) {
+    return options.deferOwedReason.trim();
+  }
+  // Dest leaves Prefer-A only when primary already recorded finalize_owed (deferred or ok).
+  // Standalone linked worktrees without a primary record still scan (#5145 Class A).
+  return inheritDeferOwedFromPrimary(projectRoot, options);
+}
+
 export function evaluateFinalizeOwedSessionGate(
   projectRoot: string,
-  options: Pick<SessionStartOptions, "probeFinalizeOwed" | "runGit" | "env" | "deferOwedReason">,
+  options: Pick<
+    SessionStartOptions,
+    "probeFinalizeOwed" | "runGit" | "env" | "deferOwedReason" | "isLinkedWorktree"
+  >,
 ): {
   lines: string[];
   blocks: boolean;
@@ -567,11 +649,20 @@ export function evaluateFinalizeOwedSessionGate(
   deferred: boolean;
   deferReason: string | null;
 } {
-  const deferReason =
-    typeof options.deferOwedReason === "string" && options.deferOwedReason.trim().length > 0
-      ? options.deferOwedReason.trim()
-      : null;
+  const deferReason = resolveEffectiveDeferOwedReason(projectRoot, options);
   const deferred = deferReason !== null;
+  // #5145 Prefer-A: defer skips tip inventory entirely (match doctor/cache_fresh defer skip).
+  // Soft-pass alone still paid discoverFinalizeOwed / fetchDeliveryTipPrivate before this cut.
+  // Linked dest Prefer-A when primary ritual already recorded finalize_owed (deferred/ok).
+  if (deferred && deferReason !== null && options.probeFinalizeOwed === undefined) {
+    return {
+      lines: [`finalize owed deferred: ${deferReason}`],
+      blocks: false,
+      unknown: false,
+      deferred: true,
+      deferReason,
+    };
+  }
   if (options.probeFinalizeOwed !== undefined) {
     const probed = options.probeFinalizeOwed(projectRoot);
     const lines = [...probed.lines];
