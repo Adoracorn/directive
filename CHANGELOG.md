@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Scope completion now explains how to record human provenance (#4877).** When a disposition has no provenance, the refusal and help text show the information needed to record it. Bare strings remain invalid. Tracking #4877.
 
 - **Abandoned occupancy lease recovery is discoverable (#4667).** Tracking #4667.
+- **Soft-missing acceptance checks pick one active story (#4285).** With more than one active story, name which story to check or pass its path; otherwise the check fails closed instead of running every story. Tracking #4285.
 
 ### Removed
 

@@ -3,7 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fenceUntrustedAcceptanceText } from "../scope/acceptance-evidence.js";
-import { ACTIVE_SCOPE_PIN_ENV, inspectActiveScope, matchPinnedActiveScope } from "./index.js";
+import {
+  ACTIVE_SCOPE_PIN_ENV,
+  inspectActiveScope,
+  matchPinnedActiveScope,
+  resolveSoftMissingAcTargets,
+} from "./index.js";
 
 const originFreshness = vi.hoisted(() => ({
   evaluate: vi.fn((_payload: unknown, _options?: { readonly skip?: boolean }) => ({
@@ -280,5 +285,89 @@ describe("omitted-env production pin fail-closed (#4506)", () => {
     expect(result.ready).toBe(false);
     expect(result.message).toContain(ACTIVE_SCOPE_PIN_ENV);
     expect(result.message).toContain("ineligible.xbrief.json");
+  });
+});
+
+describe("soft-missing AC target selection (#4285)", () => {
+  function writeRunning(project: string, name: string, fileScope: readonly string[]): string {
+    const active = join(project, "xbrief", "active");
+    mkdirSync(active, { recursive: true });
+    const path = join(active, name);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        plan: {
+          ...runningPlacement,
+          metadata: {
+            ...runningPlacement.metadata,
+            swarm: { file_scope: [...fileScope] },
+          },
+        },
+      }),
+      "utf8",
+    );
+    return path;
+  }
+
+  it("fails closed on two actives without pin or path", () => {
+    const project = root();
+    writeRunning(project, "a-story.xbrief.json", ["packages/a/**"]);
+    writeRunning(project, "b-story.xbrief.json", ["packages/b/**"]);
+    const result = resolveSoftMissingAcTargets(project, { env: {} });
+    expect(result.kind).toBe("need-pin");
+    if (result.kind !== "need-pin") return;
+    expect(result.scannedCount).toBe(2);
+    expect(result.message).toContain(ACTIVE_SCOPE_PIN_ENV);
+    expect(result.message).toContain("#4285");
+  });
+
+  it("selects only the pinned story under soft-missing multi-active", () => {
+    const project = root();
+    writeRunning(project, "a-story.xbrief.json", ["packages/a/**"]);
+    const storyB = writeRunning(project, "b-story.xbrief.json", ["packages/b/**"]);
+    const byPin = resolveSoftMissingAcTargets(project, {
+      env: { [ACTIVE_SCOPE_PIN_ENV]: "xbrief/active/b-story.xbrief.json" },
+    });
+    expect(byPin).toEqual({ kind: "one", path: storyB });
+    const byBound = resolveSoftMissingAcTargets(project, { boundPath: storyB, env: {} });
+    expect(byBound).toEqual({ kind: "one", path: storyB });
+  });
+
+  it("refuses unpinned multi-active when only one artifact passes preflight", () => {
+    const project = root();
+    const active = join(project, "xbrief", "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(active, "blocked-dispatched.xbrief.json"),
+      JSON.stringify({ plan: { status: "blocked" } }),
+      "utf8",
+    );
+    writeRunning(project, "foreign-leftover.xbrief.json", ["packages/foreign/**"]);
+    // inspectActiveScope would select the sole eligible leftover; soft-missing must not.
+    expect(inspectActiveScope(project, { env: {} })).toMatchObject({
+      ready: true,
+      path: join(active, "foreign-leftover.xbrief.json"),
+    });
+    const result = resolveSoftMissingAcTargets(project, { env: {} });
+    expect(result.kind).toBe("need-pin");
+    if (result.kind !== "need-pin") return;
+    expect(result.scannedCount).toBe(2);
+    expect(result.denyKind).toBe("multiple-eligible");
+    expect(result.message).toContain(ACTIVE_SCOPE_PIN_ENV);
+  });
+
+  it("selects a pinned blocked story for soft-missing acceptance", () => {
+    const project = root();
+    const active = join(project, "xbrief", "active");
+    mkdirSync(active, { recursive: true });
+    const blocked = join(active, "blocked-dispatched.xbrief.json");
+    writeFileSync(blocked, JSON.stringify({ plan: { status: "blocked" } }), "utf8");
+    writeRunning(project, "foreign-leftover.xbrief.json", ["packages/foreign/**"]);
+    const byPin = resolveSoftMissingAcTargets(project, {
+      env: { [ACTIVE_SCOPE_PIN_ENV]: "xbrief/active/blocked-dispatched.xbrief.json" },
+    });
+    expect(byPin).toEqual({ kind: "one", path: blocked });
+    const byBound = resolveSoftMissingAcTargets(project, { boundPath: blocked, env: {} });
+    expect(byBound).toEqual({ kind: "one", path: blocked });
   });
 });
