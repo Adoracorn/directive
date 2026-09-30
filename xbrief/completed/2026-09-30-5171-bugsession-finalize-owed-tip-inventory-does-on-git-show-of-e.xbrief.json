@@ -18,7 +18,7 @@
       {
         "id": "1",
         "title": "Chunked showBlobsBatch for finalize-owed tip plan reads; forbid silent whole-N git show fallback",
-        "status": "done",
+        "status": "completed",
         "x-directive/evidence": {
           "kind": "test",
           "pointer": "packages/core/src/session/git.test.ts + session-start-finalize-owed.test.ts + swarm/finalize-owed.test.ts (vitest 57 passed); PR #5172 Greptile CLEAN sha 187ea192bd93",
@@ -29,7 +29,7 @@
       {
         "id": "2",
         "title": "Map-backed twin/completed loops after one tip inventory batch",
-        "status": "done",
+        "status": "completed",
         "x-directive/evidence": {
           "kind": "test",
           "pointer": "packages/core/src/session/git.test.ts + session-start-finalize-owed.test.ts + swarm/finalize-owed.test.ts (vitest 57 passed); PR #5172 Greptile CLEAN sha 187ea192bd93",
@@ -40,7 +40,7 @@
       {
         "id": "3",
         "title": "Reverse Prefer-A #5145 inventory-skip early return; defer = block-suppress after inventory",
-        "status": "done",
+        "status": "completed",
         "x-directive/evidence": {
           "kind": "test",
           "pointer": "packages/core/src/session/git.test.ts + session-start-finalize-owed.test.ts + swarm/finalize-owed.test.ts (vitest 57 passed); PR #5172 Greptile CLEAN sha 187ea192bd93",
@@ -51,7 +51,7 @@
       {
         "id": "4",
         "title": "Keep inventory on every mutation session:start/--rearm; no first-ship day-cache",
-        "status": "done",
+        "status": "completed",
         "x-directive/evidence": {
           "kind": "test",
           "pointer": "packages/core/src/session/git.test.ts + session-start-finalize-owed.test.ts + swarm/finalize-owed.test.ts (vitest 57 passed); PR #5172 Greptile CLEAN sha 187ea192bd93",
@@ -62,7 +62,7 @@
       {
         "id": "5",
         "title": "Regression tests for batch/chunk path and deferred-still-runs-inventory",
-        "status": "done",
+        "status": "completed",
         "x-directive/evidence": {
           "kind": "test",
           "pointer": "packages/core/src/session/git.test.ts + session-start-finalize-owed.test.ts + swarm/finalize-owed.test.ts (vitest 57 passed); PR #5172 Greptile CLEAN sha 187ea192bd93",
