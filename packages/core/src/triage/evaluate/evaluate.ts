@@ -16,7 +16,7 @@ import {
   ORIGIN_MASTER,
   type SessionStartFn,
 } from "./types.js";
-import { evaluateValidity, joinValidityWithGithub } from "./validity.js";
+import { applyLiveResidualOverlay, evaluateValidity, joinValidityWithGithub } from "./validity.js";
 import { buildValueAdvice } from "./value.js";
 import { collectWipCensus, wipHitsForIssue } from "./wip-census.js";
 import { addEvaluatorWorktree, removeEvaluatorWorktree } from "./worktrees.js";
@@ -154,8 +154,13 @@ export async function evaluateIssues(options: EvaluateOptions): Promise<Evaluate
     try {
       worktreePath = addEvaluatorWorktree(options.projectRoot, issue, invocationId, originSha, git);
       sessionStart(worktreePath);
-      const validity = evaluateValidity(worktreePath, issue);
-      const joined = joinValidityWithGithub(validity, snap?.state ?? null);
+      const validity = evaluateValidity(worktreePath, issue, options.repo);
+      const joined = applyLiveResidualOverlay(
+        joinValidityWithGithub(validity, snap?.state ?? null),
+        options.projectRoot,
+        issue,
+        options.repo,
+      );
       const duplicates =
         snap?.duplicateOf !== null && snap?.duplicateOf !== undefined ? [snap.duplicateOf] : [];
       verdict = {

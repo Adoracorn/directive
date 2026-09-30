@@ -14,6 +14,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { referenceTypeMatches } from "@deftai/directive-types";
 import {
+  briefOwnsIssue,
+  isResidualPlanId,
+  issueOriginFromRepoSlug,
+} from "../intake/residual-identity.js";
+import {
   hasArtifactSuffix,
   LEGACY_ARTIFACT_DIR,
   MIGRATED_ARTIFACT_DIR,
@@ -23,6 +28,7 @@ import { collectGithubRefs, type IssueRef } from "../orphan-active/refs.js";
 import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
 import { defaultRunGh } from "../pr-protected-issues/gh.js";
 import type { RunGhFn } from "../pr-protected-issues/types.js";
+import { extractPlanId } from "../scope/parent-lineage.js";
 import { defaultGitRunner, type GitRunner, showBlobsBatch } from "../session/git.js";
 import { CACHE_DIR_NAME, CACHE_SOURCE_GITHUB_ISSUE } from "../triage/queue/constants.js";
 import { resolveRepo } from "../triage/queue/repo.js";
@@ -492,6 +498,91 @@ function issuesFromBlobBodies(
   return hits;
 }
 
+function planIdsFromBlobBodies(
+  paths: readonly string[],
+  bodies: ReadonlyMap<string, string | null>,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const path of paths) {
+    const body = bodies.get(path);
+    if (body === undefined || body === null) {
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      continue;
+    }
+    const id = extractPlanId(parsed as Record<string, unknown>);
+    if (id !== null && id.trim().length > 0) {
+      ids.add(id.trim());
+    }
+  }
+  return ids;
+}
+
+/** Local residual plan.ids that must land before predecessor completed can certify (#5177). */
+function scanLocalResidualPlanIds(
+  projectRoot: string,
+  issueNumber: number,
+  repoSlug: string | null,
+): { readonly planIds: readonly string[]; readonly origins: readonly string[] } {
+  const ownershipTarget = issueOriginFromRepoSlug(repoSlug, issueNumber) ?? issueNumber;
+  const planIds: string[] = [];
+  const origins: string[] = [];
+  const roots: string[] = [];
+  try {
+    roots.push(resolveLifecycleRoot(projectRoot));
+  } catch {
+    // no xbrief layout
+  }
+  const legacyRoot = join(projectRoot, LEGACY_ARTIFACT_DIR);
+  if (existsSync(legacyRoot) && !roots.includes(legacyRoot)) {
+    roots.push(legacyRoot);
+  }
+  const migrated = join(projectRoot, MIGRATED_ARTIFACT_DIR);
+  if (existsSync(migrated) && !roots.includes(migrated)) {
+    roots.push(migrated);
+  }
+  // cancelled/ is abandon-only — do not treat it as residual land debt or evidence.
+  const residualFolders = ["proposed", "pending", "active", "completed"] as const;
+  for (const root of roots) {
+    for (const folder of residualFolders) {
+      const dir = join(root, folder);
+      if (!existsSync(dir)) {
+        continue;
+      }
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const name of entries.sort()) {
+        if (!hasArtifactSuffix(name)) {
+          continue;
+        }
+        const path = join(dir, name);
+        const data = readJson(path);
+        if (data === null || !briefOwnsIssue(data, ownershipTarget)) {
+          continue;
+        }
+        const id = extractPlanId(data);
+        if (id === null || !isResidualPlanId(id)) {
+          continue;
+        }
+        planIds.push(id);
+        origins.push(relPath(path, projectRoot));
+      }
+    }
+  }
+  return { planIds, origins };
+}
+
 /**
  * Narrow the origin map to the requested issue.
  *
@@ -667,6 +758,15 @@ export function evaluateCompletedTracked(
     `tip:${tip}`,
   );
   const landedKeys = new Set(tipTerminalHits.map((h) => issueKey(h.issue)));
+  // Residual land evidence is completed-only — cancelled/ must not certify (#5177).
+  const tipCompletedPaths = tipTerminalPaths.filter((path) => {
+    const normalized = path.replace(/\\/g, "/");
+    return (
+      normalized.includes(`${MIGRATED_ARTIFACT_DIR}/completed/`) ||
+      normalized.includes(`${LEGACY_ARTIFACT_DIR}/completed/`)
+    );
+  });
+  const tipCompletedPlanIds = planIdsFromBlobBodies(tipCompletedPaths, tipBodies);
 
   const issueFilter = options.issue ?? null;
   if (issueFilter !== null) {
@@ -730,7 +830,38 @@ export function evaluateCompletedTracked(
 
   const missing: MissingCompletedLand[] = [];
   for (const [key, entry] of originMap) {
-    if (landedKeys.has(key)) {
+    const residual = scanLocalResidualPlanIds(root, entry.issue.number, entry.issue.repo);
+    // Every current residual identity must appear on completed tip — an earlier
+    // residual landing must not certify a later lean reopen (#5177).
+    const residualLanded =
+      residual.planIds.length === 0 || residual.planIds.every((id) => tipCompletedPlanIds.has(id));
+    if (landedKeys.has(key) && residualLanded) {
+      continue;
+    }
+    // Predecessor completed on tip is not enough when a residual identity exists (#5177).
+    // Drive-to DONE (--issue N) must fail closed on unknown GitHub state here — do not
+    // treat null/unresolved as "not orphaned" success (SLizard premature-success class;
+    // locked by residual-unknown --skip-gh test). This path does not reuse
+    // assessOrphanSignature; unknown under --issue or live lookup is terminal debt.
+    if (landedKeys.has(key) && !residualLanded) {
+      const stateWhenResidual = resolveState(entry.issue);
+      if (stateWhenResidual === "open") {
+        continue;
+      }
+      const unknownIsTerminalResidual = !skipGh || issueFilter !== null;
+      if (
+        stateWhenResidual === "closed" ||
+        (stateWhenResidual === null && unknownIsTerminalResidual)
+      ) {
+        missing.push({
+          issue: entry.issue,
+          origins: [
+            ...entry.origins,
+            ...residual.origins.map((p) => `residual:${p}`),
+            `residual-plan-id:${residual.planIds.join(",")}`,
+          ],
+        });
+      }
       continue;
     }
     const state = resolveState(entry.issue);
