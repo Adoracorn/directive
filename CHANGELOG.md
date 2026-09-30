@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Windows Step 5 cold-worktree sequencing + unit git-tail cheapen (#5140).** Refresh committed Vitest file durations from a retained Step 5 tee; keep prior ≥30s timings the incomplete tee omitted; share-plus-reset the durable-effect unit git tail; keep unit/spawn-heavy overlapping (no `groupOrder` serial drain). Host probe and fixture notes: `docs/RELEASING.md`. Keep 60m hang detector and #5026 no-coverage host lane; first ship tracks reliable sub-60m without `--skip-ci`. Refs #5022, #5026, #5027, #5028, #4567. Tracking #5140.
+
 ### Fixed
 
 ### Removed
