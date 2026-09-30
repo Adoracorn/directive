@@ -3,6 +3,7 @@ import {
   parseCommentsAdded,
 } from "../content-contracts/skills/greptile-detector.js";
 import { resolveMinGreptileConfidence } from "../policy/min-greptile-confidence.js";
+import { resolveReviewers } from "../policy/reviewers.js";
 import type { CiGateOptions } from "./ci-gate.js";
 import { buildCiSummaryLine, evaluateCiGate } from "./ci-gate.js";
 import {
@@ -50,6 +51,13 @@ import {
 } from "./mergeability.js";
 import { emptyVerdict, parseGreptileBody } from "./parse.js";
 import { attachPlatformStatusUrls } from "./platform-status.js";
+import {
+  botReviewCheckPresent,
+  evaluateReviewerExpectation,
+  MERGE_READY_NO_REVIEWER_FAILURE,
+  REVIEWER_STATE_NO_REVIEWER_INSTALLED,
+  reviewerConfigPresent,
+} from "./reviewer-presence.js";
 import type { SlizardGateOptions } from "./slizard-gate.js";
 import { evaluateSlizardGate, isSlizardCheck } from "./slizard-gate.js";
 import type { GateResult, GreptileVerdict, RunGhFn } from "./types.js";
@@ -379,9 +387,15 @@ function finalizeVerdictGate(
   partialData.min_greptile_confidence = minConfidence;
   let greptileReviewTerminalOnHead = false;
   let commentsAdded: number | null = null;
+  let checkRunsUnknown = true;
+  let botCheckPresent = false;
+  let ciReadyState: string | null = null;
   if (resolved.repo !== null) {
     const check = fetchCheckRunsRest(headSha, resolved.repo, runGh);
     if (check.summary !== null) {
+      checkRunsUnknown = false;
+      botCheckPresent = botReviewCheckPresent(check.checkRuns);
+      ciReadyState = evaluateCiGate(check.checkRuns, {}).summary.ready_state;
       const greptileRun = check.checkRuns.find((run) => run.name === "Greptile Review");
       greptileReviewTerminalOnHead = isGreptileReviewTerminal(
         greptileRun?.status,
@@ -392,11 +406,28 @@ function finalizeVerdictGate(
       partialData.greptile_comments_added = commentsAdded;
     }
   }
+  const root = options.projectRoot ?? process.cwd();
+  const commentOnHead =
+    verdict.found && verdict.lastReviewedSha !== null && verdict.lastReviewedSha === headSha;
+  const expectation = evaluateReviewerExpectation({
+    policyReviewers: resolveReviewers(root).reviewers,
+    reviewCommentPresent: commentOnHead,
+    botReviewCheckPresent: botCheckPresent,
+    reviewerConfigPresent: reviewerConfigPresent(root),
+    checkRunsUnknown,
+    ciReadyState,
+  });
+  partialData.reviewer_ready_state = expectation.state;
+  partialData.review_cycle_handback = expectation.handback;
   const failures = evaluateGates(prNumber, headSha, verdict, inline, {
     minConfidence,
     greptileReviewTerminalOnHead,
     commentsAdded,
+    reviewerReadyState: expectation.state,
   });
+  const noReviewerInstalled =
+    expectation.state === REVIEWER_STATE_NO_REVIEWER_INSTALLED ||
+    failures.includes(MERGE_READY_NO_REVIEWER_FAILURE);
 
   if (failures.length === 0) {
     const ci = applyCiGateForHead(prNumber, resolved.repo, headSha, runGh, options);
@@ -424,9 +455,11 @@ function finalizeVerdictGate(
   // #2260 reconciliation: the verdict gate failed. If the block is a HARD
   // finding (genuine P0/P1, ERRORED, low confidence on the current head), keep
   // blocking. Only reconcile a SOFT block (verdict absent / stale head SHA).
+  // #3630: no-reviewer is a named hard terminal — GitHub CLEAN must not drop it.
   if (
     options.disableMergeabilityReconcile === true ||
     resolved.repo === null ||
+    noReviewerInstalled ||
     !verdictBlockIsSoftOnly(verdict, headSha, inline, minConfidence)
   ) {
     return { failures, partialData };
