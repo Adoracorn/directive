@@ -22,10 +22,6 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 - **#628** -- chore(sync): complete Phase 6c LegacyArtifacts review for v0.20.0 self-migration (120 sections deferred) -- `[proposed]`
 - **#629** -- chore(conventions): document migration-artifact exclusion pattern for consumer content-linting tests -- `[proposed]`
 - **#630** -- migrator: auto-invoke render tasks at end of task migrate:xbrief -- `[proposed]`
-- **#635** -- Events: behavioral wiring (3 items: session interrupt/resume pair, plan:approved, legacy:detected) -- `[proposed]`
-- **#635** -- Events: detection-bound wiring (5 events with existing detectors) -- `[proposed]`
-- **#635** -- RFC: Phase 0 spec scaffolding -- generated per-phase task gates (needs-discussion) -- `[proposed]`
-- **#635** -- Rule Ownership Map: data file + lint enforcement (replaces REFERENCES.md prose section) -- `[proposed]`
 - **#762** -- feat(vbrief): centralize phase taxonomy in PROJECT-DEFINITION.xbrief.json; renderer reads from there -- `[proposed]`
 - **#1084** -- chore(security): PyPI OIDC trusted-publishing workflow (blocked-by #11) -- `[proposed]`
 - **#1293** -- scripts/vbrief_crud.py -- typed CRUD tool for vBRIEF JSON -- `[proposed]`
@@ -39,9 +35,25 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 
 ## Completed
 
-_Showing 25 of 1671 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1687 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- **#5171** -- bug(session): finalize-owed tip inventory does O(n) git show of every completed xBRIEF; --defer-owed still scans (~10min) -- `[completed]`
+- **#5145** -- perf(session): --defer-owed still runs full finalize-owed tip scan; dest leaves cold-start stampede -- `[completed]`
+- **#4285** -- bug(check): verify:ac --soft-missing-xbrief runs every active brief so leftover master WIP poisons worktree task check -- `[completed]`
+- **#5162** -- process(review-cycle): sha_match stall must escalate to @greptileai review -- `[completed]`
+- **#3630** -- bug(review-cycle): named zero-reviewer terminal before poll -- `[completed]`
+- **#4667** -- [UAT Tester 1] Abandoned Codex session holds occupancy lease; session:end from CLI cannot release it -- `[completed]`
+- **#4877** -- scope:complete provenance refusal invites a self-asserted human-origin string -- `[completed]`
+- **#5154** -- docs(readme): link deftai/directive-training from Getting Started -- `[completed]`
+- **#5143** -- bug(swarm): finalize-owed false-positive on proposed briefs that cite a merged trim PR -- `[completed]`
+- **#4876** -- verify:vbrief-conformance reports a clean zero while PROJECT-DEFINITION is on disk -- `[completed]`
+- **#635** -- Rule Ownership Map: data file + lint enforcement (replaces REFERENCES.md prose section) -- `[completed]`
+- **#635** -- Events: detection-bound wiring (5 events with existing detectors) -- `[completed]`
+- **#635** -- Events: behavioral wiring (3 items: session interrupt/resume pair, plan:approved, legacy:detected) -- `[completed]`
 - **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[completed]`
+- **#5080** -- design(scope): in-class durable-effect acquisition gate under a presentation ceiling (supersedes deferred #5059 P1) -- `[completed]`
+- **#5079** -- design(gates): under a recorded ceiling, no gate converts "cannot evaluate" into "pass" -- `[completed]`
+- **#5056** -- [framework-gap] Presentation-only work can include SQL and backend mutations without a semantic scope refusal -- `[completed]`
 - **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[completed]`
 - **#1517** -- Gate project start on merge-gate readiness (CI + branch protection) or an explicit opt-out, before strategies run -- `[completed]`
 - **#3669** -- swarm: #3032 mandates a 'solo-worker launch path' that no verb implements -- the supported interactive path is discoverable only from references/ -- `[completed]`
@@ -50,20 +62,4 @@ _Showing 25 of 1671 completed scopes (newest first). Full history: lifecycle `co
 - **#5110** -- bug(hooks,verify): readiness recovery must not concatenate UNUSED_HOST_HOOKS_RECOVERY on matcher drift (leftover from #4574) -- `[completed]`
 - **#4574** -- bug(hooks,update): engine 0.119 expects EditNotebook matcher but update leaves 0.116 grok hooks drifted/missing -- `[completed]`
 - **#4664** -- [UAT Tester 1] Codex sandbox EPERM on git for session:start, doctor ritual, ingest, and promote -- `[completed]`
-- **#4659** -- [UAT Tester 1] Trusted Codex hooks exit 1 until PowerShell execution policy is loosened -- `[completed]`
-- **#4533** -- bug(init): concurrent app scaffold overwrites the Directive pin and AGENTS.md -- `[completed]`
-- **#3791** -- feat(lifecycle): automate the post-merge brief sweep and stamp the evidence a merge can honestly produce -- `[completed]`
-- **#5105** -- feat(lifecycle): merge-kind acceptance evidence needs an explicit declaration, not keyword inference -- `[completed]`
-- **#4671** -- [UAT Tester 1] issue:ingest Requirements harvest + empty-after-harvest notice (#4671) -- `[completed]`
-- **#5081** -- bug(scm,win32): worker-auth T5 fails Step 5 — host gh.exe wins over fake gh.cmd (/user exit 1) -- `[completed]`
-- **#4919** -- bug(swarm): a merged Tracking story is finalized by hand, one brief at a time -- `[completed]`
-- **#5020** -- verify:review-monitor --live-wait must evidence still-running wait (not lease+flag alone) -- `[completed]`
-- **#4864** -- bug(pr): a finished story cannot say Closes while its brief is still active -- `[completed]`
-- **#4995** -- design-critique: ingest-ready writes omit target-digest admission -- `[completed]`
-- **#4774** -- [UAT Tester 4] PR scope verification does not detect unrelated baseline files -- `[completed]`
-- **#4545** -- Explicit operator scope limit ("do not add features beyond the requirements") not treated as a ceiling -- `[completed]`
-- **#5055** -- [framework-gap] Acceptance checks lose original scope restrictions when an agent rewrites an ingested brief -- `[completed]`
-- **#4539** -- bug(doctor): already-installed skip leaves a stale global engine -- `[completed]`
-- **#4978** -- leftover(#4751): closed node --test grammar including exact built-in --test-reporter names -- `[completed]`
-- **#4660** -- [UAT Tester 1] Setup interview cannot persist: no host session identity / read-only session:start -- `[completed]`
 

@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.119.12] - 2026-09-30
+
+> Batched finalize-owed tip inventory (#5171), named zero-reviewer terminal (#3630), sticky tip-rot greptile-sha-stall (#5162), finalize-owed FP refuse (#5143), and clearer check-gate remedies (#1883).
+
+### Added
 - **Named zero-reviewer terminal for review-cycle / pr:watch (#3630).** Presence probe plus optional `plan.policy.review.reviewers` (`[]` = explicit none) exits `NO_REVIEWER_INSTALLED` (exit 2) before the poll loop; `pr:merge-ready` inherits it. Empty observation never CLEAN. Young/incomplete check-run inventory and green non-bot CI fail-close to poll (late bot). Soft GitHub CLEAN reconcile does not drop the no-reviewer failure. Slow reviewers still poll. Handback `review_cycle: skipped:no-reviewer-installed` routes to pre-pr self-review. Doctor reports local presence. #769 stays substitution. Closes #3630.
 
 - **README Getting Started links the Directive training course (#5154).** Points at [`deftai/directive-training`](https://github.com/deftai/directive-training). Tracking #5154.
@@ -6683,7 +6695,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.119.11...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.119.12...HEAD
+[0.119.12]: https://github.com/deftai/directive/compare/v0.119.11...v0.119.12
 [0.119.11]: https://github.com/deftai/directive/compare/v0.119.10...v0.119.11
 [0.119.10]: https://github.com/deftai/directive/compare/v0.119.9...v0.119.10
 [0.119.9]: https://github.com/deftai/directive/compare/v0.119.8...v0.119.9
