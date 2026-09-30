@@ -1,6 +1,7 @@
 export * from "./complete-cohort.js";
 export { completeCohortMain } from "./complete-cohort-cli.js";
 export * from "./constants.js";
+export * from "./dest-place.js";
 export * from "./finalize-cohort.js";
 export { finalizeCohortMain, parseFinalizeCohortArgv } from "./finalize-cohort-cli.js";
 export * from "./finalize-owed.js";
