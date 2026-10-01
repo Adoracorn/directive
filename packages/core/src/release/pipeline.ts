@@ -1,10 +1,12 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { restIssueListOpenInventory } from "../scm/gh-rest.js";
+import { isStep5HostNoCoverage } from "../ts-check-lane/run-lane.js";
 import { readCoverageTotalsFromReport } from "../vitest-runner/coverage-debt.js";
 import {
   buildCoverageDebtIssueDraft,
   classifyStep5FailureWithFreshness,
+  countFailedTestsFromSanitizedOutput,
   evaluateAutoHatch,
   formatAutoHatchBanner,
   parseExitCodeFromReason,
@@ -92,6 +94,29 @@ function resolveCoverageReportMtimeMs(
   } catch {
     return null;
   }
+}
+
+/** True only when this Step 5 invocation was expected to write coverage-final.json. */
+function suiteExpectedToWriteLocalCoverage(
+  reason: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (isStep5HostNoCoverage(env)) return false;
+  if (countFailedTestsFromSanitizedOutput(reason) !== null) return true;
+  return /\bts:check-lane\b/i.test(reason);
+}
+
+function formatSuiteBoundCoverageDecline(
+  coverageReportMtimeMs: number | null,
+  reason: string,
+): string {
+  if (coverageReportMtimeMs != null) {
+    return "coverage-final.json mtime not strictly after suite start";
+  }
+  if (!suiteExpectedToWriteLocalCoverage(reason)) {
+    return "coverage-final.json not produced (suite was not expected to write a local report)";
+  }
+  return "coverage-final.json missing after suite";
 }
 
 function resolveCoverageCite(projectRoot: string, seams: ReleaseSeams): CoverageOfRecordResult {
@@ -342,12 +367,18 @@ export function runPipeline(config: ReleaseConfig, seams: ReleaseSeams = {}): nu
             : coverageReportMtimeMs != null && coverageReportMtimeMs > suiteStartedAtMs
               ? coverageReportMtimeMs
               : null;
+        if (coverageReportMtimeMs !== undefined && suiteBoundMtime === null) {
+          const declined = formatSuiteBoundCoverageDecline(coverageReportMtimeMs, reason);
+          process.stderr.write(`auto-hatch: suite-bound coverage mtime declined (${declined})\n`);
+        }
         const exitCode = parseExitCodeFromReason(reason);
+        const failedTests = countFailedTestsFromSanitizedOutput(reason);
         const classification = classifyStep5FailureWithFreshness({
           output: reason,
           totals,
           exitCode,
           timedOut: reasonLooksLikeTimeout(reason) || exitCode === 124,
+          failedTests,
           coverageReportMtimeMs: suiteBoundMtime,
           nowMs: Date.now(),
         });

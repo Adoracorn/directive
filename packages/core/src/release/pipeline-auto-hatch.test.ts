@@ -351,6 +351,149 @@ describe("pipeline Step 5 auto-hatch + suite stamp (#3187)", () => {
     }
   });
 
+  it("does not auto-hatch a vitest assertion failure with hairline totals (#4244)", () => {
+    const cap = captureStderr();
+    let created = false;
+    const seams: ReleaseSeams = {
+      validateReleaseInputs: passReleaseInputs,
+      todayIso: () => "2026-08-07",
+      spawnText: (_c, a) => {
+        if (a.includes("status")) return { status: 0, stdout: "", stderr: "" };
+        if (a.includes("branch")) return { status: 0, stdout: "master\n", stderr: "" };
+        if (a.includes("rev-parse")) {
+          return { status: 0, stdout: "aaaabbbbccccddddeeeeffffaaaabbbbccccdddd\n", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      checkTagAvailable: () => [true, "ok"],
+      runCi: () => [false, "task check failed (exit 1; 2 failed tests)"],
+      readCoverageTotals: () => hairlineTotals,
+      listOpenCoverageDebtIssues: () => [],
+      createCoverageDebtIssue: () => {
+        created = true;
+        return 1;
+      },
+      fileExists: (p) => p.endsWith("CHANGELOG.md") || p.endsWith("ROADMAP.md"),
+      readFile: () => CHANGELOG,
+      writeFile: () => undefined,
+      isCi: () => false,
+    };
+
+    try {
+      expect(runPipeline(baseConfig(tempProject()), seams)).toBe(1);
+      expect(created).toBe(false);
+      expect(cap.lines.join("")).toMatch(/FAIL/);
+      expect(cap.lines.join("")).toMatch(/failed tests|real failure/i);
+    } finally {
+      cap.restore();
+    }
+  });
+
+  it("names stderr when suite-bound coverage mtime declines (#4244)", () => {
+    const cap = captureStderr();
+    const seams: ReleaseSeams = {
+      validateReleaseInputs: passReleaseInputs,
+      todayIso: () => "2026-08-07",
+      spawnText: (_c, a) => {
+        if (a.includes("status")) return { status: 0, stdout: "", stderr: "" };
+        if (a.includes("branch")) return { status: 0, stdout: "master\n", stderr: "" };
+        if (a.includes("rev-parse")) {
+          return { status: 0, stdout: "aaaabbbbccccddddeeeeffffaaaabbbbccccdddd\n", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      checkTagAvailable: () => [true, "ok"],
+      runCi: () => [false, "task check failed (exit 1; 2 failed tests)"],
+      listOpenCoverageDebtIssues: () => [],
+      createCoverageDebtIssue: () => 1,
+      fileExists: (p) => p.endsWith("CHANGELOG.md") || p.endsWith("ROADMAP.md"),
+      readFile: () => CHANGELOG,
+      writeFile: () => undefined,
+      isCi: () => false,
+    };
+
+    try {
+      expect(runPipeline(baseConfig(tempProject()), seams)).toBe(1);
+      expect(cap.lines.join("")).toMatch(
+        /auto-hatch: suite-bound coverage mtime declined \(coverage-final\.json missing after suite\)/,
+      );
+    } finally {
+      cap.restore();
+    }
+  });
+
+  it("does not say missing-after-suite when an earlier gate failed (#4244 P2)", () => {
+    const cap = captureStderr();
+    const seams: ReleaseSeams = {
+      validateReleaseInputs: passReleaseInputs,
+      todayIso: () => "2026-08-07",
+      spawnText: (_c, a) => {
+        if (a.includes("status")) return { status: 0, stdout: "", stderr: "" };
+        if (a.includes("branch")) return { status: 0, stdout: "master\n", stderr: "" };
+        if (a.includes("rev-parse")) {
+          return { status: 0, stdout: "aaaabbbbccccddddeeeeffffaaaabbbbccccdddd\n", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      checkTagAvailable: () => [true, "ok"],
+      runCi: () => [false, "task check failed (exit 1)"],
+      listOpenCoverageDebtIssues: () => [],
+      createCoverageDebtIssue: () => 1,
+      fileExists: (p) => p.endsWith("CHANGELOG.md") || p.endsWith("ROADMAP.md"),
+      readFile: () => CHANGELOG,
+      writeFile: () => undefined,
+      isCi: () => false,
+    };
+
+    try {
+      expect(runPipeline(baseConfig(tempProject()), seams)).toBe(1);
+      expect(cap.lines.join("")).toMatch(
+        /auto-hatch: suite-bound coverage mtime declined \(coverage-final\.json not produced \(suite was not expected to write a local report\)\)/,
+      );
+      expect(cap.lines.join("")).not.toMatch(/missing after suite/);
+    } finally {
+      cap.restore();
+    }
+  });
+
+  it("does not say missing-after-suite on the no-coverage host lane (#4244 P2 / #5026)", () => {
+    const cap = captureStderr();
+    const prev = process.env.DEFT_RELEASE_PREFLIGHT;
+    process.env.DEFT_RELEASE_PREFLIGHT = "1";
+    const seams: ReleaseSeams = {
+      validateReleaseInputs: passReleaseInputs,
+      todayIso: () => "2026-08-07",
+      spawnText: (_c, a) => {
+        if (a.includes("status")) return { status: 0, stdout: "", stderr: "" };
+        if (a.includes("branch")) return { status: 0, stdout: "master\n", stderr: "" };
+        if (a.includes("rev-parse")) {
+          return { status: 0, stdout: "aaaabbbbccccddddeeeeffffaaaabbbbccccdddd\n", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      checkTagAvailable: () => [true, "ok"],
+      runCi: () => [false, "task check failed (exit 1; 2 failed tests)"],
+      listOpenCoverageDebtIssues: () => [],
+      createCoverageDebtIssue: () => 1,
+      fileExists: (p) => p.endsWith("CHANGELOG.md") || p.endsWith("ROADMAP.md"),
+      readFile: () => CHANGELOG,
+      writeFile: () => undefined,
+      isCi: () => false,
+    };
+
+    try {
+      expect(runPipeline(baseConfig(tempProject()), seams)).toBe(1);
+      expect(cap.lines.join("")).toMatch(
+        /coverage-final\.json not produced \(suite was not expected to write a local report\)/,
+      );
+      expect(cap.lines.join("")).not.toMatch(/missing after suite/);
+    } finally {
+      cap.restore();
+      if (prev === undefined) delete process.env.DEFT_RELEASE_PREFLIGHT;
+      else process.env.DEFT_RELEASE_PREFLIGHT = prev;
+    }
+  });
+
   it("does not trust suite stamp under CI", () => {
     const cap = captureStderr();
     let runCiCalls = 0;
