@@ -1,9 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { SHELL_TOOL_NAMES } from "../hooks/tools.js";
 import {
   classifyHookAuthzOps,
   classifyShellAuthzOps,
   harvestDestsOfWriteForRealpath,
+  hasAuthzDirShellWrite,
+  hasProtectedDestOfWriteUnknown,
+  inactiveShellTargetsProtectedStore,
 } from "./classify.js";
 
 describe("classifyShellAuthzOps (#2944)", () => {
@@ -2380,5 +2386,121 @@ describe("unique destination grammar (#3804)", () => {
     expect(
       classifyShellAuthzOps("flatpak-builder --repodir=.deft/authz/grants build manifest"),
     ).toEqual(["settings"]);
+  });
+});
+
+describe("inactive Shell classifiers (#4709)", () => {
+  it("pins hasAuthzDirShellWrite for grant-store writes, not reads", () => {
+    expect(hasAuthzDirShellWrite("cp /tmp/g.json .deft/authz/grants/g.json")).toBe(true);
+    expect(hasAuthzDirShellWrite('echo {"x":1} > .deft/authz/grants/evil.json')).toBe(true);
+    expect(hasAuthzDirShellWrite("cat .deft/authz/state.json")).toBe(false);
+    expect(hasAuthzDirShellWrite("git status")).toBe(false);
+  });
+
+  it("pins dest-of-write unknown targeting the protected set, not issue-close unknown", () => {
+    expect(hasProtectedDestOfWriteUnknown("mkfile 1k .deft/authz/grants/evil.json")).toBe(true);
+    expect(hasProtectedDestOfWriteUnknown("zip .deft/authz/grants/evil.json /etc/hosts")).toBe(
+      true,
+    );
+    expect(hasProtectedDestOfWriteUnknown("gh issue close 4494")).toBe(false);
+    expect(hasProtectedDestOfWriteUnknown("git status")).toBe(false);
+  });
+
+  it("does not treat harvestDestsOfWriteForRealpath as the Write realpath", () => {
+    expect(harvestDestsOfWriteForRealpath("ar cr .deft/authz/grants/evil.json foo.o")).toContain(
+      ".deft/authz/grants/evil.json",
+    );
+    expect(inactiveShellTargetsProtectedStore("cp /tmp/g.json .deft/authz/grants/g.json")).toBe(
+      true,
+    );
+    expect(inactiveShellTargetsProtectedStore("gh issue close 4494")).toBe(false);
+  });
+
+  it("appends protected_store last on hook Shell so unknown stays first", () => {
+    const destUnknown = classifyHookAuthzOps({
+      toolName: "Bash",
+      shellCommand: "mkfile 1k .deft/authz/grants/evil.json",
+      isDirectWrite: false,
+    });
+    expect(destUnknown[0]).toBe("unknown");
+    expect(destUnknown.at(-1)).toBe("protected_store");
+
+    const storeWrite = classifyHookAuthzOps({
+      toolName: "Bash",
+      shellCommand: "cp /tmp/g.json .deft/authz/grants/g.json",
+      isDirectWrite: false,
+    });
+    expect(storeWrite).toEqual(["protected_store"]);
+    expect(storeWrite).not.toContain("settings");
+
+    expect(
+      classifyHookAuthzOps({
+        toolName: "Bash",
+        shellCommand: "gh issue close 4494",
+        isDirectWrite: false,
+      }),
+    ).not.toContain("protected_store");
+    expect(
+      classifyHookAuthzOps({
+        toolName: "Write",
+        shellCommand: null,
+        isDirectWrite: true,
+      }),
+    ).toEqual(["edit"]);
+  });
+
+  const itSymlink = it.skipIf(process.platform === "win32");
+  itSymlink("appends protected_store for harvest-only symlink dests (#4709)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-4709-classify-harvest-"));
+    mkdirSync(join(root, ".deft", "authz", "grants"), { recursive: true });
+    writeFileSync(join(root, ".deft", "authz", "grants", "g.json"), "{}\n");
+    symlinkSync(join(root, ".deft", "authz"), join(root, "build-cache"));
+    const command = "mkfile 1k build-cache/grants/g.json";
+    expect(inactiveShellTargetsProtectedStore(command)).toBe(false);
+    try {
+      expect(
+        classifyHookAuthzOps({
+          toolName: "Bash",
+          shellCommand: command,
+          isDirectWrite: false,
+          projectRoot: root,
+        }),
+      ).toEqual(["unknown", "protected_store"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  itSymlink("omitted projectRoot skips harvest against a process-directory alias (#4709)", () => {
+    const cwdRoot = mkdtempSync(join(tmpdir(), "deft-4709-classify-cwd-"));
+    const payload = mkdtempSync(join(tmpdir(), "deft-4709-classify-payload-"));
+    mkdirSync(join(cwdRoot, ".deft", "authz", "grants"), { recursive: true });
+    writeFileSync(join(cwdRoot, ".deft", "authz", "grants", "g.json"), "{}\n");
+    symlinkSync(join(cwdRoot, ".deft", "authz"), join(cwdRoot, "build-cache"));
+    mkdirSync(join(payload, "build-cache", "grants"), { recursive: true });
+    writeFileSync(join(payload, "build-cache", "grants", "g.json"), "{}\n");
+    const command = "mkfile 1k build-cache/grants/g.json";
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwdRoot);
+    try {
+      expect(
+        classifyHookAuthzOps({
+          toolName: "Bash",
+          shellCommand: command,
+          isDirectWrite: false,
+        }),
+      ).not.toContain("protected_store");
+      expect(
+        classifyHookAuthzOps({
+          toolName: "Bash",
+          shellCommand: command,
+          isDirectWrite: false,
+          projectRoot: payload,
+        }),
+      ).not.toContain("protected_store");
+    } finally {
+      cwdSpy.mockRestore();
+      rmSync(cwdRoot, { recursive: true, force: true });
+      rmSync(payload, { recursive: true, force: true });
+    }
   });
 });
