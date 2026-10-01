@@ -427,6 +427,7 @@ describe("swarmLaunch identity-bound injection (#1351)", { timeout: 20_000 }, ()
     return project;
   }
 
+  // Parallel swarm suite load on Windows can push these past the default 20s (#5219 AC).
   it("stamps expected_github_login on the manifest when a user credential is held", () => {
     const project = launchProject();
     const result = swarmLaunch({
@@ -452,7 +453,7 @@ describe("swarmLaunch identity-bound injection (#1351)", { timeout: 20_000 }, ()
     );
     expect(result.stdout).not.toContain(FAKE_TOKEN);
     expect(JSON.stringify(manifest)).not.toContain(FAKE_TOKEN);
-  });
+  }, 60_000);
 
   it("exposes a distinct delivery id per dest in spawn env and C2", () => {
     const project = launchProject();
@@ -504,7 +505,7 @@ describe("swarmLaunch identity-bound injection (#1351)", { timeout: 20_000 }, ()
       );
     }
     expect(result.stdout).not.toContain(FAKE_TOKEN);
-  });
+  }, 60_000);
 
   it("rolls back dest assignments when a later launch write fails", () => {
     const project = launchProject();

@@ -6,12 +6,14 @@ import { ContainedWriteError, containedWrite } from "../fs/contained-write.js";
 import { defaultRunGh } from "../pr-merge-readiness/gh.js";
 import { platformStatusUrlsForWeather } from "../pr-merge-readiness/platform-status.js";
 import { defaultSubagentStatusDir } from "../review-monitor/record.js";
+import { writeMergePathCleanAttestation } from "../review-monitor/verify.js";
 import {
   DEFAULT_MAX_WAIT_MINUTES,
   DEFAULT_POLL_SECONDS,
   EXIT_CLEAN,
   EXIT_TERMINAL_ERROR,
   GREPTILE_SHA_STALL_REMEDY,
+  VERDICT_CLEAN,
   VERDICT_GREPTILE_SHA_STALL,
   WATCH_HELP,
 } from "./constants.js";
@@ -61,6 +63,11 @@ export interface ParsedWatchArgs {
   readonly oneShot: boolean;
   readonly emitJson: boolean;
   readonly projectRoot: string | null;
+  /**
+   * Approach 1 / review-monitor child id stamped into wait heartbeat `parent_id`
+   * (#5219). Falls back to `DEFT_MONITOR_AGENT_ID` when unset.
+   */
+  readonly monitorAgentId: string | null;
   readonly help: boolean;
   readonly error?: string;
 }
@@ -80,6 +87,7 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
     oneShot: false,
     emitJson: false,
     projectRoot: null,
+    monitorAgentId: null,
     help: false,
   };
   let prNumber: number | null = null;
@@ -89,6 +97,7 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
   let oneShot = false;
   let emitJson = false;
   let projectRoot: string | null = null;
+  let monitorAgentId: string | null = null;
   let help = false;
 
   const takePositive = (
@@ -149,6 +158,15 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
       i += 1;
     } else if (arg?.startsWith("--project-root=")) {
       projectRoot = arg.slice("--project-root=".length);
+    } else if (arg === "--monitor-agent-id") {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        return fail(acc, "argument --monitor-agent-id: expected one argument");
+      }
+      monitorAgentId = value;
+      i += 1;
+    } else if (arg?.startsWith("--monitor-agent-id=")) {
+      monitorAgentId = arg.slice("--monitor-agent-id=".length);
     } else if (arg?.startsWith("-")) {
       return fail(acc, `unrecognized arguments: ${arg}`);
     } else if (prNumber === null) {
@@ -176,6 +194,7 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
         oneShot,
         emitJson,
         projectRoot,
+        monitorAgentId,
         help: true,
       };
     }
@@ -190,6 +209,7 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
         oneShot,
         emitJson,
         projectRoot,
+        monitorAgentId,
         help: true,
       };
     }
@@ -203,6 +223,7 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
       oneShot,
       emitJson,
       projectRoot,
+      monitorAgentId,
       help: true,
     };
   }
@@ -224,6 +245,7 @@ export function parseWatchArgs(argv: readonly string[]): ParsedWatchArgs {
     oneShot,
     emitJson,
     projectRoot,
+    monitorAgentId,
     help: false,
   };
 }
@@ -732,6 +754,42 @@ export function printWatchHuman(result: WatchResult): string {
 
 export interface RunWatchOptions extends WatchOptions {}
 
+/**
+ * Resolve heartbeat `parent_id` for #5219 merge-path identity join.
+ *
+ * Spawn/one-liner `DEFT_MONITOR_AGENT_ID` is authoritative (may differ from
+ * `GROK_SESSION_ID` when the registered monitor id is an explicit handle).
+ * CLI `--monitor-agent-id` alone must not let a parent shell impersonate the
+ * leased child: CLI-only elevates only when it matches `GROK_SESSION_ID`.
+ */
+export function resolveMergePathHeartbeatParentId(
+  cliMonitorAgentId: string | null | undefined,
+  environ: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
+): string | undefined {
+  const trim = (raw: string | undefined): string | null => {
+    if (typeof raw !== "string") return null;
+    const t = raw.trim();
+    return t.length > 0 ? t : null;
+  };
+  const envId = trim(environ.DEFT_MONITOR_AGENT_ID);
+  const sessionId = trim(environ.GROK_SESSION_ID);
+  const cliId = trim(cliMonitorAgentId ?? undefined);
+
+  if (envId !== null) {
+    if (cliId !== null && cliId !== envId) {
+      // Conflicting CLI vs spawn env — do not stamp either as child identity.
+      return undefined;
+    }
+    return envId;
+  }
+
+  // CLI-only: allow only when this process is already the named child session.
+  if (cliId !== null && sessionId !== null && cliId === sessionId) {
+    return cliId;
+  }
+  return undefined;
+}
+
 export function runWatch(argv: readonly string[], options: RunWatchOptions = {}): number {
   const args = parseWatchArgs(argv);
   if (args.help) {
@@ -757,15 +815,26 @@ export function runWatch(argv: readonly string[], options: RunWatchOptions = {})
 
   const projectRoot = args.projectRoot !== null ? resolve(args.projectRoot) : process.cwd();
   const prNumber = args.prNumber as number;
+  // Stamp child identity into heartbeat parent_id for #5219 join — env/session bound
+  // so a parent shell cannot impersonate via `--monitor-agent-id <leased child id>` alone.
+  const heartbeatParentId = resolveMergePathHeartbeatParentId(args.monitorAgentId, process.env);
   // Arm hasActivePollingHeartbeat for this PR while the wait is alive (#5020).
-  reportWaitHeartbeatWrite(writePrWatchWaitHeartbeat(projectRoot, prNumber, { phase: "polling" }));
+  reportWaitHeartbeatWrite(
+    writePrWatchWaitHeartbeat(projectRoot, prNumber, {
+      phase: "polling",
+      parentId: heartbeatParentId,
+    }),
+  );
   const baseSleep: SleepFn = options.sleepFn ?? defaultWatchSleep;
   const sleepFn: SleepFn = (seconds) => {
     // Chunk long polls so heartbeat freshness cannot lag the 30m stale floor.
     let remaining = Math.max(0, seconds);
     while (remaining > 0) {
       reportWaitHeartbeatWrite(
-        writePrWatchWaitHeartbeat(projectRoot, prNumber, { phase: "polling" }),
+        writePrWatchWaitHeartbeat(projectRoot, prNumber, {
+          phase: "polling",
+          parentId: heartbeatParentId,
+        }),
       );
       const chunk = Math.min(remaining, WAIT_HEARTBEAT_REFRESH_SECONDS);
       baseSleep(chunk);
@@ -791,6 +860,19 @@ export function runWatch(argv: readonly string[], options: RunWatchOptions = {})
     } else {
       process.stdout.write(printWatchHuman(result));
     }
+    // Local CLEAN attestation so post-CLEAN pr-wait-mergeable can arm (#5219).
+    // Only a child-bound watch (spawn-injected DEFT_MONITOR_AGENT_ID / matching
+    // GROK_SESSION_ID) may attest — a parent-shell `pr:watch` must not arm the closer.
+    if (result.verdict === VERDICT_CLEAN && heartbeatParentId !== undefined) {
+      const attested = writeMergePathCleanAttestation(
+        projectRoot,
+        prNumber,
+        result.probe.headSha ?? null,
+      );
+      if (!attested.ok) {
+        process.stderr.write(`pr_watch: ${attested.reason}\n`);
+      }
+    }
     return result.exitCode;
   } finally {
     // Clear liveness so a sticky lease cannot outlive the wait process (#5020).
@@ -799,6 +881,7 @@ export function runWatch(argv: readonly string[], options: RunWatchOptions = {})
       writePrWatchWaitHeartbeat(projectRoot, prNumber, {
         phase: "terminal",
         terminalState: "exited",
+        parentId: heartbeatParentId,
       }),
     );
     if (restoreCwd !== null) {
@@ -806,7 +889,6 @@ export function runWatch(argv: readonly string[], options: RunWatchOptions = {})
     }
   }
 }
-
 export function cmdPrWatch(argv: readonly string[], options: RunWatchOptions = {}): number {
   return runWatch(argv, options);
 }

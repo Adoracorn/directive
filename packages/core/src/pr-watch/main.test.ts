@@ -28,6 +28,7 @@ import {
   parseWatchArgs,
   printWatchHuman,
   prWatchHeartbeatAgentId,
+  resolveMergePathHeartbeatParentId,
   runWatch,
   startWaitHeartbeatRefresher,
   watchResultToJson,
@@ -99,6 +100,8 @@ describe("parseWatchArgs", () => {
       "--repo",
       "deftai/directive",
       "--project-root=/tmp/x",
+      "--monitor-agent-id",
+      "rm-42",
     ]);
     expect(a.error).toBeUndefined();
     expect(a.oneShot).toBe(true);
@@ -109,6 +112,39 @@ describe("parseWatchArgs", () => {
     expect(a.pollSeconds).toBe(15);
     expect(a.repo).toBe("deftai/directive");
     expect(a.projectRoot).toBe("/tmp/x");
+    expect(a.monitorAgentId).toBe("rm-42");
+  });
+
+  it("parses --monitor-agent-id= form (#5219)", () => {
+    const a = parseWatchArgs(["7", "--monitor-agent-id=child-7"]);
+    expect(a.error).toBeUndefined();
+    expect(a.monitorAgentId).toBe("child-7");
+  });
+
+  it("resolveMergePathHeartbeatParentId refuses CLI-only parent impersonation (#5219)", () => {
+    expect(resolveMergePathHeartbeatParentId("babysitter-5219", {})).toBeUndefined();
+    expect(
+      resolveMergePathHeartbeatParentId("babysitter-5219", {
+        DEFT_MONITOR_AGENT_ID: "babysitter-5219",
+      }),
+    ).toBe("babysitter-5219");
+    expect(
+      resolveMergePathHeartbeatParentId("babysitter-5219", {
+        GROK_SESSION_ID: "babysitter-5219",
+      }),
+    ).toBe("babysitter-5219");
+    // Env handle may differ from GROK_SESSION_ID — still stamp the registered id.
+    expect(
+      resolveMergePathHeartbeatParentId("babysitter-5219", {
+        DEFT_MONITOR_AGENT_ID: "babysitter-5219",
+        GROK_SESSION_ID: "host-session-uuid",
+      }),
+    ).toBe("babysitter-5219");
+    expect(
+      resolveMergePathHeartbeatParentId("other-id", {
+        DEFT_MONITOR_AGENT_ID: "babysitter-5219",
+      }),
+    ).toBeUndefined();
   });
 
   it("honors DEFT_PR_WATCH_MAX_WAIT_MINUTES when CLI omits max-wait (#3984)", () => {
@@ -185,6 +221,7 @@ describe("parseWatchArgs", () => {
 describe("formatWatchHelp (#2652)", () => {
   it("names task pr:watch as canonical and documents exits 0/1/2", () => {
     const help = formatWatchHelp();
+    expect(help).toContain("--monitor-agent-id");
     expect(help).toBe(WATCH_HELP);
     expect(help).toContain("task pr:watch -- <pr_number>");
     expect(help).toContain("--one-shot");
