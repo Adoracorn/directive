@@ -162,7 +162,7 @@ Note: root-relative paths (this repo IS deft/); run `task agents:refresh` after 
 
 <!-- placeholder -->
 
-<!-- deft:managed-section v3 sha=240d0c871c73 refreshed=2026-09-30T21:03:13Z session=577a6ee147e2 -->
+<!-- deft:managed-section v3 sha=ca1b02e7af7b refreshed=2026-10-01T04:02:22Z session=2d9c27fa746d -->
 # Deft — AI Development Framework
 
 Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
@@ -269,6 +269,7 @@ Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
 ! After stop-at:pr-open (#4882), merge-path owner MUST keep a still-running phase-correct wait (pre-CLEAN: blocking `pr:watch` / Approach 1; post-CLEAN: `pr:wait-mergeable-and-merge`) until CLEAN or explicit option-C finish; under human-merge also remain for post-merge `scope:complete`. Sticky lease alone or Path B promise without a live wait is unarmed; CLEAN alone is not lifecycle complete. Probe: `deft verify:review-monitor -- --pr <N> --merge-path-arm` (`--live-wait` / `--explicit-finish`). `pr:watch --json` wrappers MUST parse full stdout JSON (pretty multi-line valid); line-split misses CLEAN (#5015). Prefer native `pr:watch`.
 ⊗ Silent PR-open handback for a worker already scoped `drive-to: merge-ready`. ⊗ `stop-at: pr-open` without a named babysit / merge-path owner, or dual review-monitor leases on recovery (#3044 / #2261). ⊗ Stand down unarmed, or treat lease-only / line-parsed `pr-watch --json` as armed (#4882).
 ! After merge of issue `#N`, `deft verify:orphan-active -- --issue N` MUST exit 0 before `DONE` (#3429). After `scope:complete` (cancel≠ship exit #5126), `deft verify:completed-tracked -- --issue N` MUST exit 0 on `origin/<deliveryBranch>` before `DONE` (#3476). Exit 1 shipped → printed `scope:complete`; missing tracked land → `swarm:finalize-cohort` or a lifecycle PR; unresolved lookup → retry / `BLOCKED` (⊗ complete unfinished scope). **Grok leftover (#4529):** Phase 6 `swarm:finalize-cohort`, not the implement dest.
+! **Fresh-clone completed land (#4714):** Before `swarm:launch`, each selected active brief MUST exist on fetched `origin/<deliveryBranch>` (human-reviewed activation PR). After product merge, Phase 6 `swarm:finalize-cohort` lands terminal briefs via a lifecycle PR; if the isolated delivery checkout lacks the active brief, it may materialize only exact bytes that match a reachable reviewed product/evidence blob from a retained dest — otherwise fail closed with source-recovery. Expected scoped closing refs without active/terminal records are not #2247 incidental skips. `verify:completed-tracked -- --issue N` on the fetched delivery tip is the close proof. ⊗ Treat GitHub-closed alone as DONE. ⊗ Copy a whole `xbrief/` tree into the lifecycle checkout.
 ⊗ Emit `ISSUE: closed` while that brief is still in `active/`.
 
 ## Nuclear-family A2A topology (#3155)
