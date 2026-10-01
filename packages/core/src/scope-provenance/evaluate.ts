@@ -1,21 +1,23 @@
 /**
- * verify:scope-provenance evaluation (#3145 / #4956 / #4774).
+ * verify:scope-provenance evaluation (#3145 / #4956 / #4774 / #5192).
  *
  * Path fence (#4956): the active brief's `file_scope` on the merge base is the
  * precommitment. Changed production files are checked against that base list
  * plus a concrete-file allowance (floor 2, cap 5). Test-root paths spend
- * nothing. Head brief edits do not widen the fence. Proceed writes no
- * `.deft/approved-scope` digest for that fence and must not demand
- * `scope:record-approved-scope` as remint remediation.
+ * nothing on the production fence. Head brief edits do not widen the fence.
+ * Proceed writes no `.deft/approved-scope` digest for that fence and must not
+ * demand `scope:record-approved-scope` as remint remediation.
  *
- * Membership (#4774): when an active xBRIEF is in the change set, the allowlist
- * is the merge-base approved-scope record only (including an authoritative empty
- * fileScope). Missing mint fails closed — PR-authored or merge-base brief
- * file_scope must not self-authorize. Peer path exemptions and allowlist unions
- * apply only to peers still present in active/ and successfully parsed, with a
- * non-empty mint for scope union; deleted or malformed peers are not exempt.
- * Peer coverage never clears a missing own allowlist. Same-PR approval rewrite
- * stays fail-closed.
+ * Membership (#4774 / #5192): when the bound story is in the change set, the
+ * allowlist is a human-stamped merge-base mint for the continuity-resolved
+ * story when present (planId match ignores stale xbriefRelPath; no-plan.id is
+ * path-first + basename-keyed mint). Missing mint falls to the merge-base
+ * brief's **concrete** file_scope as agent precommitment. Glob matches do not
+ * admit without a mint. Source-root extras spend production allowance; test /
+ * fixture and other undeclared paths must match. xBRIEF-only change sets may
+ * omit a mint. Peer coverage never clears a missing own allowlist. Same-PR
+ * approval rewrite stays fail-closed. Missing-mint remediation is split or
+ * land a widened concrete brief — never renew mint.
  *
  * Intent-pin checks (#3385) remain for existing base-committed records.
  *
@@ -24,17 +26,31 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { GitCommandError, GitNotFoundError } from "../encoding/git.js";
 import { loadTestBoundaryPolicy } from "../test-boundary/policy.js";
 import {
   evaluateApprovedScopeMembership,
   evaluateProductionScopeFence,
+  isConcreteFileScopeEntry,
+  type MembershipAllowlistAuthority,
   pathMatchesFileScope,
 } from "./base-fence.js";
 import {
+  type CensusBrief,
+  type ContinuityResolution,
+  censusFromBaseMap,
+  continuityExemptPaths,
+  isLifecycleXbriefPath,
+  LIFECYCLE_FOLDERS,
+  preMoveSameBasenameLifecyclePaths,
+  resolveStoryContinuity,
+  sameBasenameLifecyclePaths,
+} from "./continuity.js";
+import {
   type ApprovedScopeRecord,
   approvedScopeIntentRel,
+  approvedScopeSafePlanId,
   computeFileScopeDigest,
   extractFileScope,
   extractPlanId,
@@ -333,6 +349,152 @@ function listActiveXbriefPaths(projectRoot: string): string[] {
     .map((n) => `xbrief/active/${n}`);
 }
 
+type BaseBriefReadLocal =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "missing" }
+  | { readonly kind: "error"; readonly message: string };
+
+type LifecycleCensusResult =
+  | { readonly kind: "ok"; readonly briefs: CensusBrief[] }
+  | { readonly kind: "error"; readonly detail: string };
+
+/**
+ * Merge-base lifecycle census via git ls-tree + readAtBase (#5192).
+ * Fail closed on ls-tree / read / parse errors so duplicate plan.id identities
+ * cannot hide behind a partial census.
+ */
+function listLifecycleBriefsAtRef(
+  projectRoot: string,
+  baseRef: string,
+  readAtBase: (rel: string) => BaseBriefReadLocal,
+): LifecycleCensusResult {
+  const out: CensusBrief[] = [];
+  for (const folder of LIFECYCLE_FOLDERS) {
+    const listed = git(["ls-tree", "-r", "--name-only", baseRef, `xbrief/${folder}`], projectRoot);
+    if (listed.status !== 0) {
+      return {
+        kind: "error",
+        detail:
+          `merge-base lifecycle census ls-tree failed for xbrief/${folder} at ${baseRef} ` +
+          `(exit ${String(listed.status)}); refuse rather than hide duplicate identities (#5192)`,
+      };
+    }
+    for (const line of listed.stdout.split("\n")) {
+      const rel = normalizeRepoRelPath(unquoteGitPath(line));
+      if (!isLifecycleXbriefPath(rel)) continue;
+      const read = readAtBase(rel);
+      if (read.kind === "missing") {
+        return {
+          kind: "error",
+          detail:
+            `merge-base lifecycle census missing ${rel} after ls-tree listed it; ` +
+            "refuse rather than hide duplicate identities (#5192)",
+        };
+      }
+      if (read.kind === "error") {
+        return {
+          kind: "error",
+          detail:
+            `merge-base lifecycle census read failed for ${rel}: ${read.message}; ` +
+            "refuse rather than hide duplicate identities (#5192)",
+        };
+      }
+      try {
+        const payload = JSON.parse(read.text) as unknown;
+        out.push({
+          rel,
+          planId: extractPlanId(payload),
+          raw: read.text,
+          payload,
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        return {
+          kind: "error",
+          detail:
+            `merge-base lifecycle census unreadable JSON at ${rel}: ${detail}; ` +
+            "refuse rather than hide duplicate identities (#5192)",
+        };
+      }
+    }
+  }
+  return { kind: "ok", briefs: out };
+}
+
+/**
+ * Resolve the merge-base brief used by the production fence and Path B
+ * membership precommitment (#5192). Continuity wins; otherwise probe
+ * same-basename pre-move paths (active before pending) when the head
+ * completed/cancelled path is absent on base. A same-basename candidate
+ * may supply scope only when it is absent from HEAD — otherwise an
+ * unrelated live brief would authorize the completed story.
+ */
+function resolveMergeBaseBriefRead(
+  rel: string,
+  continuity: ContinuityResolution,
+  readAtBase: (baseRel: string) => BaseBriefReadLocal,
+  headLifecycleRels: ReadonlySet<string> | readonly string[],
+): { readonly baseRel: string; readonly read: BaseBriefReadLocal } {
+  if (continuity.kind === "resolved") {
+    return { baseRel: continuity.baseRel, read: readAtBase(continuity.baseRel) };
+  }
+  const headN = normalizeRepoRelPath(rel);
+  const headRead = readAtBase(headN);
+  if (headRead.kind !== "missing") {
+    return { baseRel: headN, read: headRead };
+  }
+  if (!(headN.startsWith("xbrief/completed/") || headN.startsWith("xbrief/cancelled/"))) {
+    return { baseRel: headN, read: headRead };
+  }
+  const headSet =
+    headLifecycleRels instanceof Set
+      ? headLifecycleRels
+      : new Set([...headLifecycleRels].map((p) => normalizeRepoRelPath(p)));
+  for (const candidate of preMoveSameBasenameLifecyclePaths(headN)) {
+    // Still on HEAD → different story sharing the leaf name, not a move.
+    if (headSet.has(candidate)) continue;
+    const alt = readAtBase(candidate);
+    if (alt.kind === "text") {
+      return { baseRel: candidate, read: alt };
+    }
+    if (alt.kind === "error") {
+      return { baseRel: candidate, read: alt };
+    }
+  }
+  return { baseRel: headN, read: headRead };
+}
+
+/** Head lifecycle paths for continuity move exclusivity (#5192). */
+function listHeadLifecycleRels(input: {
+  readonly projectRoot: string;
+  readonly activeEntries: readonly { readonly rel: string }[];
+  readonly changedSet: ReadonlySet<string>;
+  readonly baseXbriefs?: ReadonlyMap<string, string>;
+  readonly injected: boolean;
+}): string[] {
+  const out = new Set(input.activeEntries.map((e) => normalizeRepoRelPath(e.rel)));
+  if (input.injected) {
+    // Unchanged base lifecycle paths remain on HEAD when absent from the change set.
+    if (input.baseXbriefs !== undefined) {
+      for (const relRaw of input.baseXbriefs.keys()) {
+        const rel = normalizeRepoRelPath(relRaw);
+        if (!isLifecycleXbriefPath(rel)) continue;
+        if (!changedSetHasPath(input.changedSet, rel)) out.add(rel);
+      }
+    }
+    return [...out];
+  }
+  for (const folder of LIFECYCLE_FOLDERS) {
+    const dir = join(input.projectRoot, "xbrief", folder);
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".xbrief.json") && !name.endsWith(".vbrief.json")) continue;
+      out.add(`xbrief/${folder}/${name}`);
+    }
+  }
+  return [...out];
+}
+
 /**
  * Parse + lightly validate an approved-scope JSON blob (base-ref `git show` or disk).
  * Returns null when schema fields required for authorization are missing/malformed.
@@ -551,6 +713,44 @@ export function evaluateScopeProvenance(
     }
   }
 
+  // #5192 item 6: also evaluate lifecycle briefs in the change set that left
+  // active/ (moved/completed) so completing in the same PR cannot drop fences.
+  // When an injected map omits a changed completed/cancelled path, fall through
+  // to HEAD disk. Do not re-add pending/ (or other omitted folders) — that would
+  // bind a new pending brief over an unrelated active story's product paths.
+  const seenEvalRels = new Set(activeEntries.map((e) => e.rel));
+  for (const changedRel of changed) {
+    const n = normalizeRepoRelPath(changedRel);
+    if (!isLifecycleXbriefPath(n) || seenEvalRels.has(n)) continue;
+    if (options.activeXbriefs !== undefined) {
+      const injected = options.activeXbriefs.get(n);
+      if (injected !== undefined) {
+        activeEntries.push({ rel: n, raw: injected });
+        seenEvalRels.add(n);
+        continue;
+      }
+      const isCompletedOrCancelled =
+        n.startsWith("xbrief/completed/") || n.startsWith("xbrief/cancelled/");
+      if (!isCompletedOrCancelled) continue;
+    }
+    const full = join(root, n);
+    if (!existsSync(full)) continue;
+    try {
+      activeEntries.push({ rel: n, raw: readFileSync(full, "utf8") });
+      seenEvalRels.add(n);
+    } catch {
+      // skip unreadable
+    }
+  }
+
+  const headLifecycleRels = listHeadLifecycleRels({
+    projectRoot: root,
+    activeEntries,
+    changedSet,
+    baseXbriefs: options.baseXbriefs,
+    injected: options.activeXbriefs !== undefined || options.changedFiles !== undefined,
+  });
+
   const boundary =
     options.testRoots !== undefined ||
     options.fixtureRoots !== undefined ||
@@ -572,6 +772,15 @@ export function evaluateScopeProvenance(
             return {};
           }
         })();
+
+  const headPlanIds = new Map<string, string | null>();
+  for (const e of activeEntries) {
+    try {
+      headPlanIds.set(e.rel, extractPlanId(JSON.parse(e.raw) as unknown));
+    } catch {
+      headPlanIds.set(e.rel, null);
+    }
+  }
 
   let reportedPeerFailure = false;
   for (const { rel, raw } of activeEntries) {
@@ -724,57 +933,293 @@ export function evaluateScopeProvenance(
       continue;
     }
 
-    // Membership (#4774): allowlist is merge-base approved-scope only.
-    // Present mint (including empty fileScope) is authoritative — no brief fallback.
-    let mintFileScope: readonly string[] | null = null;
-    let baseApprovedReadError: string | null = null;
-    if (planId !== null && approvalRecordRel !== null) {
-      if (options.baseApprovedRecords !== undefined) {
-        const injected = options.baseApprovedRecords.get(planId);
-        mintFileScope = injected !== undefined ? normalizeFileScope(injected.fileScope) : null;
-      } else {
-        const approvalBaseRead = readAtBase(approvalRecordRel);
-        if (approvalBaseRead.kind === "error") {
-          baseApprovedReadError = approvalBaseRead.message;
-        } else if (approvalBaseRead.kind === "text") {
-          const parsed = parseApprovedScopeRecordRaw(approvalBaseRead.text);
-          if (
-            parsed !== null &&
-            isHumanApprovalStamp(parsed.humanApproval) &&
-            parsed.planId === planId &&
-            normalizeRepoRelPath(parsed.xbriefRelPath) === normalizeRepoRelPath(rel)
-          ) {
-            mintFileScope = normalizeFileScope(parsed.fileScope);
-          } else {
-            mintFileScope = null;
-          }
-        } else {
-          mintFileScope = null;
-        }
-      }
-    } else if (modified) {
-      // Modified active xBRIEF without resolvable planId / approval path → no mint.
-      mintFileScope = null;
-    }
+    // Membership (#4774 / #5192): continuity-resolved mint, else concrete
+    // merge-base precommitment. Path A (no xBRIEF in change set) no-ops.
+    const membershipTrigger =
+      modified || [...changedSet].some((p) => isLifecycleXbriefPath(normalizeRepoRelPath(p)));
 
-    if (baseApprovedReadError !== null && modified) {
+    // Merge-base census for continuity (injected map preferred). Skip live git
+    // ls-tree on pure injected seams (changedFiles / readAtBase without map).
+    let census: CensusBrief[] = [];
+    let censusError: string | null = null;
+    if (options.baseXbriefs !== undefined) {
+      census = censusFromBaseMap(options.baseXbriefs);
+    } else if (
+      discoveryBaseRef !== null &&
+      discoveryBaseRef !== "" &&
+      options.changedFiles === undefined
+    ) {
+      try {
+        const listed = listLifecycleBriefsAtRef(root, discoveryBaseRef, readAtBase);
+        if (listed.kind === "error") {
+          censusError = listed.detail;
+          census = [];
+        } else {
+          census = listed.briefs;
+        }
+      } catch (err) {
+        censusError = err instanceof Error ? err.message : String(err);
+        census = [];
+      }
+    }
+    if (censusError !== null && membershipTrigger) {
       findings.push({
         xbriefRelPath: rel,
         planId: planId ?? rel,
         kind: "active-xbrief-modified-without-digest",
         expandedPaths: [],
-        detail:
-          `merge-base approved-scope read failed for ${approvalRecordRel ?? "(unknown)"}: ` +
-          `${baseApprovedReadError}; fail closed (#4774)`,
+        detail: censusError,
         remediation:
-          "Fix the merge-base git read for `.deft/approved-scope/<plan-id>.json` before landing " +
-          "a PR that carries the active xBRIEF (#4774).",
+          "Fix the merge-base lifecycle census read (fetch base ref / repair objects) before " +
+          "membership can resolve identities (#5192).",
       });
       continue;
     }
 
-    // Mint present (incl. empty) wins; missing mint → null (Bound fail-closed).
-    const membershipAllowlist = modified ? mintFileScope : null;
+    const continuity = resolveStoryContinuity({
+      headRel: rel,
+      headPlanId: planId,
+      headLifecycleRels,
+      census,
+      headPlanIds,
+    });
+
+    if (continuity.kind === "relabel-refuse" && membershipTrigger) {
+      findings.push({
+        xbriefRelPath: rel,
+        planId: planId ?? rel,
+        kind: "active-xbrief-modified-without-digest",
+        expandedPaths: [],
+        detail: continuity.detail,
+        remediation:
+          "Restore the continuity-resolved plan.id on the same path, or land the rewrite as a " +
+          "new story with its own merge-base brief. Do not borrow another story's mint (#5192).",
+      });
+      continue;
+    }
+    if (
+      (continuity.kind === "duplicate-refuse" || continuity.kind === "ambiguous-refuse") &&
+      membershipTrigger
+    ) {
+      findings.push({
+        xbriefRelPath: rel,
+        planId: planId ?? rel,
+        kind: "active-xbrief-modified-without-digest",
+        expandedPaths: [],
+        detail: continuity.detail,
+        remediation:
+          "Make the merge-base plan.id census unique and complete the lifecycle move " +
+          "(base path absent from head) before membership can resolve (#5192).",
+      });
+      continue;
+    }
+
+    type MintLookup =
+      | { readonly kind: "mint"; readonly fileScope: readonly string[] }
+      | { readonly kind: "invalid"; readonly detail: string }
+      | { readonly kind: "missing" };
+
+    const lookupMintByPlanId = (resolvedPlanId: string): MintLookup => {
+      if (options.baseApprovedRecords !== undefined) {
+        const injected = options.baseApprovedRecords.get(resolvedPlanId);
+        if (injected === undefined) return { kind: "missing" };
+        if (!isHumanApprovalStamp(injected.humanApproval)) {
+          return { kind: "invalid", detail: `mint for ${resolvedPlanId} lacks human stamp` };
+        }
+        if (injected.planId !== resolvedPlanId) {
+          return { kind: "invalid", detail: `mint planId mismatch for ${resolvedPlanId}` };
+        }
+        // Continuity-resolved planId mint wins whatever xbriefRelPath says (#5192).
+        return { kind: "mint", fileScope: normalizeFileScope(injected.fileScope) };
+      }
+      const approvalRel = `.deft/approved-scope/${approvedScopeSafePlanId(resolvedPlanId)}.json`;
+      const approvalBaseRead = readAtBase(approvalRel);
+      if (approvalBaseRead.kind === "error") {
+        return {
+          kind: "invalid",
+          detail: `merge-base approved-scope read failed for ${approvalRel}: ${approvalBaseRead.message}`,
+        };
+      }
+      if (approvalBaseRead.kind === "missing") return { kind: "missing" };
+      const parsed = parseApprovedScopeRecordRaw(approvalBaseRead.text);
+      if (parsed === null) {
+        return { kind: "invalid", detail: `unreadable approved-scope at ${approvalRel}` };
+      }
+      if (!isHumanApprovalStamp(parsed.humanApproval)) {
+        return { kind: "invalid", detail: `mint at ${approvalRel} lacks human stamp` };
+      }
+      if (parsed.planId !== resolvedPlanId) {
+        return { kind: "invalid", detail: `mint planId mismatch at ${approvalRel}` };
+      }
+      return { kind: "mint", fileScope: normalizeFileScope(parsed.fileScope) };
+    };
+
+    const basenameMintPathOk = (mintRel: string, headPath: string): boolean => {
+      const mintN = normalizeRepoRelPath(mintRel);
+      const headN = normalizeRepoRelPath(headPath);
+      if (mintN === headN) return true;
+      // Lifecycle moves keep the leaf name; mint xbriefRelPath may still be the
+      // pre-move folder (active/pending) while head is completed/cancelled.
+      return sameBasenameLifecyclePaths(headN).includes(mintN);
+    };
+
+    const lookupBasenameMint = (headPath: string): MintLookup => {
+      const key = basename(headPath)
+        .replace(/\.xbrief\.json$/i, "")
+        .replace(/\.vbrief\.json$/i, "");
+      if (key.length === 0) return { kind: "missing" };
+      if (options.baseApprovedRecords !== undefined) {
+        const injected = options.baseApprovedRecords.get(key);
+        if (injected === undefined) return { kind: "missing" };
+        if (!isHumanApprovalStamp(injected.humanApproval)) {
+          return { kind: "invalid", detail: `basename mint for ${key} lacks human stamp` };
+        }
+        if (!basenameMintPathOk(injected.xbriefRelPath, headPath)) {
+          return { kind: "missing" };
+        }
+        // Basename key is the only planId that may authorize this lookup.
+        // A record stored under the basename key with a different planId is
+        // invalid — never treat it as a present mint (#5192 Greptile).
+        if (injected.planId !== key) {
+          return {
+            kind: "invalid",
+            detail: `basename mint for ${key} has mismatched planId=${injected.planId}`,
+          };
+        }
+        return { kind: "mint", fileScope: normalizeFileScope(injected.fileScope) };
+      }
+      const approvalRel = `.deft/approved-scope/${approvedScopeSafePlanId(key)}.json`;
+      const approvalBaseRead = readAtBase(approvalRel);
+      if (approvalBaseRead.kind === "error") {
+        return {
+          kind: "invalid",
+          detail: `merge-base approved-scope read failed for ${approvalRel}: ${approvalBaseRead.message}`,
+        };
+      }
+      if (approvalBaseRead.kind === "missing") return { kind: "missing" };
+      const parsed = parseApprovedScopeRecordRaw(approvalBaseRead.text);
+      if (parsed === null) {
+        return { kind: "invalid", detail: `unreadable approved-scope at ${approvalRel}` };
+      }
+      if (!isHumanApprovalStamp(parsed.humanApproval)) {
+        return { kind: "invalid", detail: `mint at ${approvalRel} lacks human stamp` };
+      }
+      // Basename key is the only planId that may authorize this lookup.
+      // Check before path-ok so a mismatched planId cannot become a mint
+      // merely because xbriefRelPath happens to share the leaf name.
+      if (parsed.planId !== key) {
+        return {
+          kind: "invalid",
+          detail: `basename mint for ${key} has mismatched planId=${parsed.planId}`,
+        };
+      }
+      if (!basenameMintPathOk(parsed.xbriefRelPath, headPath)) {
+        return { kind: "missing" };
+      }
+      return { kind: "mint", fileScope: normalizeFileScope(parsed.fileScope) };
+    };
+
+    let mintLookup: MintLookup = { kind: "missing" };
+    if (continuity.kind === "resolved" && continuity.basePlanId !== null) {
+      mintLookup = lookupMintByPlanId(continuity.basePlanId);
+    } else if (continuity.kind === "resolved" && planId === null) {
+      // no-plan.id path-first: basename-keyed mint whose xbriefRelPath equals head.
+      mintLookup = lookupBasenameMint(rel);
+    } else if (
+      planId === null &&
+      continuity.kind === "missing" &&
+      (rel.startsWith("xbrief/completed/") || rel.startsWith("xbrief/cancelled/"))
+    ) {
+      // no-plan.id completed/cancelled move: still resolve basename mint (path may
+      // be the pre-move folder); production fence probes same-basename on base.
+      mintLookup = lookupBasenameMint(rel);
+    } else if (planId !== null && continuity.kind === "missing") {
+      // No continuity identity: do not look up mint by head plan.id alone when
+      // the head path is absent on base (fall to item 4/5).
+      mintLookup = { kind: "missing" };
+    }
+
+    if (mintLookup.kind === "invalid" && modified) {
+      findings.push({
+        xbriefRelPath: rel,
+        planId: planId ?? rel,
+        kind: "active-xbrief-modified-without-digest",
+        expandedPaths: [],
+        detail: `${mintLookup.detail}; fail closed (#4774 / #5192)`,
+        remediation:
+          "Fix or remove the invalid merge-base approved-scope record before landing " +
+          "product paths with the active xBRIEF (#4774 / #5192).",
+      });
+      continue;
+    }
+
+    let membershipAllowlist: readonly string[] | null = null;
+    let allowlistAuthority: MembershipAllowlistAuthority = "missing";
+
+    if (mintLookup.kind === "mint") {
+      membershipAllowlist = mintLookup.fileScope;
+      allowlistAuthority = "mint";
+    } else if (modified) {
+      // Path B missing-mint: concrete merge-base brief file_scope precommitment.
+      // Use the same move-aware base resolution as the production fence so a
+      // completed/ head does not lose the old active brief's concrete scope.
+      let basePayloadForPrecommit: unknown | null = null;
+      if (continuity.kind === "resolved") {
+        basePayloadForPrecommit = continuity.basePayload;
+      } else {
+        const precommit = resolveMergeBaseBriefRead(rel, continuity, readAtBase, headLifecycleRels);
+        if (precommit.read.kind === "error") {
+          findings.push({
+            xbriefRelPath: rel,
+            planId: planId ?? rel,
+            kind: "active-xbrief-modified-without-digest",
+            expandedPaths: [],
+            detail: `merge-base brief read failed for ${precommit.baseRel}: ${precommit.read.message}; fail closed (#5192)`,
+            remediation:
+              "Fix the merge-base git read before Path B membership can use concrete precommitment (#5192).",
+          });
+          continue;
+        }
+        if (precommit.read.kind === "text") {
+          try {
+            basePayloadForPrecommit = JSON.parse(precommit.read.text) as unknown;
+          } catch {
+            findings.push({
+              xbriefRelPath: rel,
+              planId: planId ?? rel,
+              kind: "active-xbrief-modified-without-digest",
+              expandedPaths: [],
+              detail: `merge-base brief at ${precommit.baseRel} is unreadable JSON; fail closed (#5192)`,
+              remediation:
+                "Restore a readable brief on the merge base before Path B membership (#5192).",
+            });
+            continue;
+          }
+        }
+      }
+      if (basePayloadForPrecommit !== null) {
+        const concrete = normalizeFileScope(extractFileScope(basePayloadForPrecommit)).filter((e) =>
+          isConcreteFileScopeEntry(e),
+        );
+        membershipAllowlist = concrete;
+        allowlistAuthority = "precommitment";
+      } else {
+        membershipAllowlist = null;
+        allowlistAuthority = "missing";
+      }
+    }
+
+    // Membership no-ops when the bound path is outside the change set (Path A).
+    const membershipAllowlistForEval = modified ? membershipAllowlist : null;
+    const authorityForEval: MembershipAllowlistAuthority = modified
+      ? allowlistAuthority
+      : "missing";
+
+    const exemptRelPaths = continuityExemptPaths({
+      headRel: rel,
+      headPlanId: planId,
+      continuity,
+    });
 
     const peerXbriefRelPaths: string[] = [];
     const peerApprovedFileScopes: string[][] = [];
@@ -797,25 +1242,9 @@ export function evaluateScopeProvenance(
         const otherPlanId = extractPlanId(otherPayload);
         let otherMint: readonly string[] | null = null;
         if (otherPlanId !== null) {
-          const otherApprovalRel = `.deft/approved-scope/${otherPlanId.replace(/[^a-zA-Z0-9._-]/g, "_")}.json`;
-          if (options.baseApprovedRecords !== undefined) {
-            const injected = options.baseApprovedRecords.get(otherPlanId);
-            if (injected !== undefined) {
-              otherMint = normalizeFileScope(injected.fileScope);
-            }
-          } else {
-            const otherBaseRead = readAtBase(otherApprovalRel);
-            if (otherBaseRead.kind === "text") {
-              const parsed = parseApprovedScopeRecordRaw(otherBaseRead.text);
-              if (
-                parsed !== null &&
-                isHumanApprovalStamp(parsed.humanApproval) &&
-                parsed.planId === otherPlanId &&
-                normalizeRepoRelPath(parsed.xbriefRelPath) === normalizeRepoRelPath(other.rel)
-              ) {
-                otherMint = normalizeFileScope(parsed.fileScope);
-              }
-            }
+          const otherLookup = lookupMintByPlanId(otherPlanId);
+          if (otherLookup.kind === "mint") {
+            otherMint = otherLookup.fileScope;
           }
         }
         // Peer PR-authored / brief file_scope must not expand this allowlist.
@@ -829,10 +1258,15 @@ export function evaluateScopeProvenance(
       xbriefRelPath: rel,
       planId: planId ?? rel,
       xbriefModifiedInChangeSet: modified,
-      baseApprovedFileScope: membershipAllowlist,
+      baseApprovedFileScope: membershipAllowlistForEval,
+      allowlistAuthority: authorityForEval,
       changedFiles: changed,
       peerXbriefRelPaths,
       peerApprovedFileScopes,
+      exemptRelPaths,
+      testRoots: boundary.testRoots,
+      fixtureRoots: boundary.fixtureRoots,
+      sourceRoots: boundary.sourceRoots,
     });
     // Only emit membership when the xBRIEF is in the change set (helper no-ops otherwise).
     if (membershipHit !== null) {
@@ -852,14 +1286,18 @@ export function evaluateScopeProvenance(
 
     // Path fence (#4956): compare changed production files to the merge-base
     // brief file_scope. Never read the head brief for the fence list.
-    const baseBriefRead = readAtBase(rel);
+    // On lifecycle moves, the head path is absent on base — use continuity.baseRel
+    // or same-basename pre-move probes (active before pending).
+    const fenceResolved = resolveMergeBaseBriefRead(rel, continuity, readAtBase, headLifecycleRels);
+    const fenceBaseRel = fenceResolved.baseRel;
+    const baseBriefRead = fenceResolved.read;
     if (baseBriefRead.kind === "error") {
       findings.push({
         xbriefRelPath: rel,
         planId: planId ?? rel,
         kind: "production-scope-over-budget",
         expandedPaths: [],
-        detail: `merge-base brief read failed for ${rel}: ${baseBriefRead.message}; fail closed (#4956)`,
+        detail: `merge-base brief read failed for ${fenceBaseRel}: ${baseBriefRead.message}; fail closed (#4956)`,
         remediation:
           "Fix the merge-base git read (fetch the base ref / repair the object) before changing " +
           "production paths. There is no scope ceremony for proceed (#4956).",
@@ -877,7 +1315,7 @@ export function evaluateScopeProvenance(
           planId: planId ?? rel,
           kind: "production-scope-over-budget",
           expandedPaths: [],
-          detail: `merge-base brief at ${rel} is unreadable JSON; write fence / check fail closed (#4956)`,
+          detail: `merge-base brief at ${fenceBaseRel} is unreadable JSON; write fence / check fail closed (#4956)`,
           remediation:
             "Restore a readable active brief on the merge base before changing production paths. " +
             "There is no scope ceremony for proceed (#4956).",
@@ -896,7 +1334,26 @@ export function evaluateScopeProvenance(
         let peerBaseFailure: { readonly peerRel: string; readonly detail: string } | null = null;
         for (const other of activeEntries) {
           if (other.rel === rel) continue;
-          const otherBaseRead = readAtBase(other.rel);
+          let otherPlanId: string | null = null;
+          try {
+            otherPlanId = extractPlanId(JSON.parse(other.raw) as unknown);
+          } catch {
+            otherPlanId = null;
+          }
+          const otherContinuity = resolveStoryContinuity({
+            headRel: other.rel,
+            headPlanId: otherPlanId,
+            headLifecycleRels,
+            census,
+            headPlanIds,
+          });
+          const otherFence = resolveMergeBaseBriefRead(
+            other.rel,
+            otherContinuity,
+            readAtBase,
+            headLifecycleRels,
+          );
+          const otherBaseRead = otherFence.read;
           if (otherBaseRead.kind === "error") {
             peerBaseFailure = {
               peerRel: other.rel,
