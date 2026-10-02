@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Wire `verify:changelog-unreleased` into `check:framework-source` (#633).** Reuses `changelog-check` (no second Unreleased language). Records operator-owned repo-scoped ruleset enrollment for required context `Merge gate (task check)` with admin-enforcement and artifact-only skip-path validation before flipping. Shrinks the PR template checklist to items with named detectors and moves Post-Merge out of `- [ ]` syntax. Does not implement Tiers 1-3. Does not claim to close P1 (parked on #4912). Tracking #633.
+
 - **Discover shipped-closed issues with no tip-tree origin (#3495).** `verify:completed-tracked` can list in-window shipped-closed issues missing tip-tree origins and classify close-evidence (warn-first; `--enforce` before cohort-close / release complete). Tracking #3495.
 - **Detect when workspace requirement files change under an in-flight plan (#3920).** Acceptance and completion notice edited or missing requirement sources, restamp when safe, and refuse when a completed item would be contradicted or the change arrives after completion. Tracking #3920.
 - **Merge-time closeout covers every prescribed route, not only the cascade (#3875).** pr:merge-ready invokes the same closeout evaluator after a Greptile-clean verdict, and both that path and pr:wait-mergeable-and-merge assert the working tree is the PR head before reading briefs (exit 2 on mismatch). Docs stop prescribing ungated pr:merge-ready && gh pr merge. Human non-admin UI/CLI is named accident-only for first-ship; local/push with no PR number stays an explicit skip for orphan-active. Supersedes #3781 single-cascade-call-site. Tracking #3875.
@@ -26,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`verify:changelog-unreleased` fails when the Unreleased `- ` set is unchanged versus merge-base (#633).** Shares `changelog-check --against-merge-base` (default off for `task change:changelog:check`). Restores N/A-with-reason on detector-named PR checklist items. Tracking #633.
 - **Release Step 5 coverage-final diagnostic + skip-ci unpaid ledger (#5239).** Step 5 coverage decline messaging no longer depends on parent `DEFT_RELEASE_PREFLIGHT`. Production `--allow-skip-ci=#N` refuses unpaid citations (open/unknown issue or prior CHANGELOG spend) unless `--allow-unpaid-skip-ci=#N` matches. Hang named-cause treats last-file as cursor only. Spend record for the v0.119.13 cut: `--allow-skip-ci=5239`. Tracking #5239.
 - **Closeout no-xbrief probe fails closed on missing repo, PR-head lookup, or HEAD verify errors (#3875).** A missing linked worktree still skips cleanly; an unverified slug/forge/HEAD read no longer returns success. Hermetic review suites opt out of closeout explicitly. Tracking #3875.
 - **Completed-write guard validates disposition provenance; item-status default-open inverted (#3819).** Completed xBRIEF writes require typed human-origin dispositions; malformed or missing status no longer skips provenance checks. Tracking #3819.
