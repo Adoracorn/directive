@@ -864,9 +864,14 @@ export function evaluateClassChecks(
   const protectedHits = changed
     .map((p) => normalizeRepoRelPath(p))
     .filter((p) => !isExempt(p, baseTb.testRoots) && isProtected(p, classPolicy.protectedGlobs));
-  const storyMix = changed.some((p) =>
-    isStoryProductPath(normalizeRepoRelPath(p), baseTb, classPolicy.protectedGlobs),
-  );
+  // CLI authz is a composition companion only when paired with core authz
+  // protected paths (#4233 / #4980) — not a blanket story-product exemption.
+  const authzProtectedHit = protectedHits.some((p) => p.startsWith("packages/core/src/authz/"));
+  const storyMix = changed.some((p) => {
+    const posix = normalizeRepoRelPath(p);
+    if (posix === "packages/cli/src/authz.ts" && authzProtectedHit) return false;
+    return isStoryProductPath(posix, baseTb, classPolicy.protectedGlobs);
+  });
   if (protectedHits.length > 0 && storyMix) {
     for (const path of protectedHits) {
       findings.push({

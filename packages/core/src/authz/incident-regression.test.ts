@@ -11,7 +11,18 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { decideHook, type HookPolicySeams } from "../hooks/dispatcher.js";
 import type { VerifyResult } from "../session/verify-session-ritual.js";
-import { startUatLease } from "./actions.js";
+import { startUatLease as startUatLeaseResult } from "./actions.js";
+
+/** Test unwraps for #4233 Result-returning actions (throws free in *.test.ts). */
+function startUatLease(...args: Parameters<typeof startUatLeaseResult>): {
+  state: import("./types.js").AuthzState;
+  lease: import("./types.js").UatLease;
+} {
+  const r = startUatLeaseResult(...args);
+  if (!r.ok) throw new Error(r.reason);
+  return { state: r.state, lease: r.lease };
+}
+
 import {
   classifyHookAuthzOps,
   harvestDestsOfWriteForRealpath,
@@ -2088,7 +2099,6 @@ describe("UAT protected dest-of-write fail-closed (#4188)", () => {
     const root = mkdtempSync(join(tmpdir(), "deft-4709-spend-"));
     temps.push(root);
     mkdirSync(join(root, ".deft", "authz", "grants"), { recursive: true });
-    startUatLease({ projectRoot: root, campaignId: "uat-4709-spend", actor: "operator" });
     const grant: HumanOriginGrant = {
       schemaVersion: 1,
       id: "settings-single-use-4709",
@@ -2112,7 +2122,9 @@ describe("UAT protected dest-of-write fail-closed (#4188)", () => {
       },
       semantics: { expiresAt: null, singleUse: true, usedAt: null, revokedAt: null },
     };
+    // #4233: plant grant before UAT — store refuses grant-create under active lease.
     saveGrant(root, grant);
+    startUatLease({ projectRoot: root, campaignId: "uat-4709-spend", actor: "operator" });
     const decision = decideHook(
       {
         host: "claude",

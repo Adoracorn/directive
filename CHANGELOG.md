@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Authz CLI exits cleanly when grant or UAT writes are refused (#4233).** Tracking #4233.
+- **Authz refuses grant and pin changes while UAT is active (#4233).** Ending UAT without the human-presence suspend path is refused; spending a single-use grant still works. Empty pins activate no grants under UAT. Tracking #4233.
+- **Authz store writes stay consistent when interrupted or a lock holder dies (#4233).** Failed writes return a clear refusal; publishing a release reports when a single-use approval could not be spent after the release went public. Tracking #4233.
+- **Host capability stamp freshness checks stay stable across clock skew (#5229).** Tracking #5229.
 - **Repeat panel dispatch no longer trusts a bad handback claim (#3979).** A wrong or missing comment id does not reuse an earlier matching post; failed panel checks also block path-1 auto-stamp. Tracking #3979.
 - **`verify:consumer-check-contract` reachability: do not let `- env:`/`- with:` nested maps steal step-field indent (#4015).** Gate step `if:` / `run:` / `continue-on-error` after a leading env/with block stay visible so skippable or soft-fail gates cannot read clean. Tracking #4015.
 - `pr:watch` and merge-readiness treat unresolved Greptile inline P0/P1 on the current head as blocking, including when the rolling summary still names an older commit; a thin REST fallback without resolution state does not force that match when the summary is stale (#3944).

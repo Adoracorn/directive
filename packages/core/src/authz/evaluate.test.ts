@@ -2,7 +2,28 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { mintHumanOriginGrant, startUatLease } from "./actions.js";
+import {
+  mintHumanOriginGrant as mintHumanOriginGrantResult,
+  startUatLease as startUatLeaseResult,
+} from "./actions.js";
+
+/** Test unwraps for #4233 Result-returning actions (throws free in *.test.ts). */
+function mintHumanOriginGrant(
+  ...args: Parameters<typeof mintHumanOriginGrantResult>
+): import("./types.js").HumanOriginGrant {
+  const r = mintHumanOriginGrantResult(...args);
+  if (!r.ok) throw new Error(r.reason);
+  return r.grant;
+}
+function startUatLease(...args: Parameters<typeof startUatLeaseResult>): {
+  state: import("./types.js").AuthzState;
+  lease: import("./types.js").UatLease;
+} {
+  const r = startUatLeaseResult(...args);
+  if (!r.ok) throw new Error(r.reason);
+  return { state: r.state, lease: r.lease };
+}
+
 import { evaluateAuthzMutation } from "./evaluate.js";
 import { listActiveHumanGrants, loadAuthzState, saveGrant } from "./store.js";
 import type { AuthzState, HumanOriginGrant } from "./types.js";
@@ -160,8 +181,9 @@ describe("evaluateAuthzMutation UAT lease (#2944)", () => {
 
   it("self-authored grant does not authorize product edit under UAT", () => {
     const root = tempRoot();
-    startUatLease({ projectRoot: root, campaignId: "uat-1", actor: "operator" });
+    // #4233: store refuses grant-create under UAT; plant via saveGrant before lease.
     saveGrant(root, selfAuthoredGrant());
+    startUatLease({ projectRoot: root, campaignId: "uat-1", actor: "operator" });
     const state = loadAuthzState(root);
     // listActiveHumanGrants filters non-human; pass the self-authored grant explicitly
     // to prove evaluate still rejects origin.
@@ -178,7 +200,7 @@ describe("evaluateAuthzMutation UAT lease (#2944)", () => {
 
   it("named fix cohort human-origin grant allows covered edit only", () => {
     const root = tempRoot();
-    startUatLease({ projectRoot: root, campaignId: "uat-1", actor: "operator" });
+    // #4233: mint+pin before UAT; empty pin under UAT activates none.
     mintHumanOriginGrant({
       projectRoot: root,
       actor: "operator",
@@ -186,7 +208,9 @@ describe("evaluateAuthzMutation UAT lease (#2944)", () => {
       surfaces: ["packages/app/src/fix/**"],
       cohortId: "fix-defect-42",
       storyIds: ["2944"],
+      pinActive: true,
     });
+    startUatLease({ projectRoot: root, campaignId: "uat-1", actor: "operator" });
     const state = loadAuthzState(root);
     const grants = listActiveHumanGrants(root, state);
 
@@ -232,13 +256,14 @@ describe("evaluateAuthzMutation UAT lease (#2944)", () => {
 
   it("one cohort grant does not clear UAT lock", () => {
     const root = tempRoot();
-    startUatLease({ projectRoot: root, campaignId: "uat-campaign", actor: "operator" });
     mintHumanOriginGrant({
       projectRoot: root,
       operations: ["edit"],
       surfaces: ["src/a.ts"],
       cohortId: "cohort-a",
+      pinActive: true,
     });
+    startUatLease({ projectRoot: root, campaignId: "uat-campaign", actor: "operator" });
     const state = loadAuthzState(root);
     expect(state.uat?.active).toBe(true);
     const grants = listActiveHumanGrants(root, state);

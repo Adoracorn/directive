@@ -1,8 +1,47 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { mintHumanOriginGrant, startUatLease, suspendUatLease } from "./actions.js";
+import {
+  mintHumanOriginGrant as mintHumanOriginGrantResult,
+  startUatLease as startUatLeaseResult,
+  suspendUatLease as suspendUatLeaseResult,
+} from "./actions.js";
+import { uatCampaignEndSeal } from "./campaign-end-seal.js";
+import { authzGrantPath } from "./paths.js";
+
+/** Test unwraps for #4233 Result-returning actions (throws free in *.test.ts). */
+function mintHumanOriginGrant(
+  ...args: Parameters<typeof mintHumanOriginGrantResult>
+): import("./types.js").HumanOriginGrant {
+  const r = mintHumanOriginGrantResult(...args);
+  if (!r.ok) throw new Error(r.reason);
+  return r.grant;
+}
+function startUatLease(...args: Parameters<typeof startUatLeaseResult>): {
+  state: import("./types.js").AuthzState;
+  lease: import("./types.js").UatLease;
+} {
+  const r = startUatLeaseResult(...args);
+  if (!r.ok) throw new Error(r.reason);
+  return { state: r.state, lease: r.lease };
+}
+function suspendUatLease(
+  ...args: Parameters<typeof suspendUatLeaseResult>
+): import("./types.js").AuthzState {
+  const r = suspendUatLeaseResult(...args);
+  if (!r.ok) throw new Error(r.reason);
+  return r.state;
+}
+
 import { authzStatePath } from "./paths.js";
 import {
   appendAuthzAudit,
@@ -59,7 +98,7 @@ describe("authz store (#2944)", () => {
     const root = tempRoot();
     startUatLease({ projectRoot: root, campaignId: "c1", actor: "op" });
     expect(loadAuthzState(root).uat?.active).toBe(true);
-    suspendUatLease({ projectRoot: root });
+    suspendUatLease({ projectRoot: root, campaignEndSeal: uatCampaignEndSeal() });
     expect(loadAuthzState(root).uat?.active).toBe(false);
   });
 
@@ -241,8 +280,10 @@ describe("authz store (#2944)", () => {
       },
       semantics: { expiresAt: null, singleUse: false, usedAt: null, revokedAt: null },
     };
-    // Leaf symlink refused by assertWriteTargetSafe (ProjectionContainmentError) before publish.
-    expect(() => saveGrant(root, grant)).toThrow();
+    // Leaf symlink refused by assertWriteTargetSafe before publish → store-write-io Result.
+    const wrote = saveGrant(root, grant);
+    expect(wrote.ok).toBe(false);
+    if (!wrote.ok) expect(wrote.code).toBe("store-write-io");
     expect(readFileSync(victim, "utf8")).toBe('{"stolen":true}\n');
   });
 
@@ -253,6 +294,65 @@ describe("authz store (#2944)", () => {
     // Replace path exercises atomic temp+rename publish twice.
     saveAuthzState(root, { schemaVersion: 1, uat: null, activeGrantIds: ["g1", "g2"] });
     expect(loadAuthzState(root).activeGrantIds).toEqual(["g1", "g2"]);
+  });
+
+  it("dead store-write.lock is reclaimed so authz writes are not permanently blocked (#4233)", () => {
+    const root = tempRoot();
+    const lockDir = join(root, ".deft", "authz", "locks");
+    mkdirSync(lockDir, { recursive: true });
+    writeFileSync(
+      join(lockDir, "store-write.lock"),
+      `${JSON.stringify({
+        pid: 2_147_483_647,
+        startedAt: "2020-01-01T00:00:00Z",
+        token: "crashed-store-holder",
+      })}\n`,
+      "utf8",
+    );
+    const wrote = saveAuthzState(root, {
+      schemaVersion: 1,
+      uat: null,
+      activeGrantIds: ["after-reclaim"],
+    });
+    expect(wrote.ok).toBe(true);
+    expect(loadAuthzState(root).activeGrantIds).toEqual(["after-reclaim"]);
+  });
+
+  it("failed pinActive remint restores pin and keeps prior same-ID grant (#4233)", () => {
+    const root = tempRoot();
+    const outside = tempRoot();
+    mintHumanOriginGrant({
+      projectRoot: root,
+      operations: ["edit"],
+      grantId: "grant-keep",
+      pinActive: false,
+    });
+    const prior = loadGrant(root, "grant-keep");
+    expect(prior).not.toBeNull();
+    expect(loadAuthzState(root).activeGrantIds).toEqual([]);
+
+    const grantPath = authzGrantPath(root, "grant-keep");
+    const victim = join(outside, "grant-keep.json");
+    writeFileSync(victim, readFileSync(grantPath, "utf8"), "utf8");
+    rmSync(grantPath, { force: true });
+    try {
+      symlinkSync(victim, grantPath);
+    } catch {
+      // Platform may forbid symlink without elevation — skip.
+      return;
+    }
+
+    const reminted = mintHumanOriginGrantResult({
+      projectRoot: root,
+      operations: ["push"],
+      grantId: "grant-keep",
+      pinActive: true,
+    });
+    expect(reminted.ok).toBe(false);
+    // Rollback must not unlink the prior same-ID path; pin returns to empty.
+    expect(existsSync(grantPath)).toBe(true);
+    expect(loadGrant(root, "grant-keep")?.id).toBe("grant-keep");
+    expect(loadAuthzState(root).activeGrantIds).toEqual([]);
   });
 
   it("refuses grant write when grants dir parent is a symlink escape (#2980)", () => {
@@ -288,7 +388,10 @@ describe("authz store (#2944)", () => {
       },
       semantics: { expiresAt: null, singleUse: false, usedAt: null, revokedAt: null },
     };
-    expect(() => saveGrant(root, grant)).toThrow();
+    // Parent authz symlink fails closed on lock create (store-write-io), not throw.
+    const wrote = saveGrant(root, grant);
+    expect(wrote.ok).toBe(false);
+    if (!wrote.ok) expect(wrote.code).toBe("store-write-io");
   });
 });
 
