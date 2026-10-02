@@ -319,6 +319,10 @@ export function runTransition(
   const previousAcceptance = planObj.acceptance;
   let derivationNotice = "";
   if (act === "activate" || act === "promote") {
+    // Do not stamp the brief path itself (#3920): promote/activate moves the
+    // file, so a pre-move path becomes a false missing-source residual. External
+    // workspaceSources the caller already read may be passed via a future
+    // TransitionOptions seam; derivation here still runs on the in-memory plan.
     const derivation = applyClauseDerivationToPlan(planObj, {
       projectRoot,
       emitStamp: false,
