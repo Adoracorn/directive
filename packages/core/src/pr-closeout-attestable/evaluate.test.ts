@@ -86,8 +86,16 @@ const NEVER_CALLED: RunGhFn = () => {
   throw new Error("runGh must not be called");
 };
 
+const MATCHING_HEAD = "a".repeat(40);
+
 function opts(fetchClosingIssues: FetchClosingIssuesFn, proxied = false) {
-  return { repo: REPO, runner: { runGh: NEVER_CALLED, proxied }, fetchClosingIssues };
+  return {
+    repo: REPO,
+    runner: { runGh: NEVER_CALLED, proxied },
+    fetchClosingIssues,
+    // Hermetic suites pin matching SHAs so the #3875 assert does not hit git/gh.
+    prHeadAssert: { localHeadSha: MATCHING_HEAD, prHeadSha: MATCHING_HEAD },
+  };
 }
 
 describe("pr-closeout-attestable evaluate", () => {
@@ -277,6 +285,108 @@ describe("pr-closeout-attestable evaluate", () => {
     const result = evaluate(root, 1, opts(closing(1)));
     expect(result.code).toBe(0);
     expect(result.message).toContain("nothing to check");
+  });
+
+  it("no-xbrief fails closed when OWNER/REPO cannot be resolved (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-norepo-"));
+    temps.push(root);
+    execFileSync("git", ["init", "-q", "-b", "master"], { cwd: root, stdio: "ignore" });
+    const prevRepo = process.env[ENV_TRIAGE_REPO];
+    delete process.env[ENV_TRIAGE_REPO];
+    try {
+      const result = evaluate(root, 1, {
+        repo: null,
+        runner: { runGh: NEVER_CALLED, proxied: false },
+        fetchClosingIssues: closing(1),
+      });
+      expect(result.code).toBe(2);
+      expect(result.message).toContain("cannot resolve OWNER/REPO");
+    } finally {
+      if (prevRepo === undefined) {
+        delete process.env[ENV_TRIAGE_REPO];
+      } else {
+        process.env[ENV_TRIAGE_REPO] = prevRepo;
+      }
+    }
+  });
+
+  it("no-xbrief skip wins over a PR-head mismatch when no linked worktree (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-mismatch-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        localHeadSha: "a".repeat(40),
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => null,
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.message).toContain("nothing to check");
+  });
+
+  it("no-xbrief fails closed when PR-head SHA lookup fails (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-fetchfail-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        prHeadSha: null,
+        resolveWorktreeAtSha: () => {
+          throw new Error("must not probe worktree after failed PR-head lookup");
+        },
+      },
+    });
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("cannot read PR #1 head SHA");
+  });
+
+  it("no-xbrief fails closed when a found worktree HEAD mismatches (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-headfail-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => root,
+        resolveLocalHeadSha: () => "a".repeat(40),
+      },
+    });
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("is not PR #1 head");
+  });
+
+  it("no-xbrief caller still reads a linked PR-head worktree with xbrief (#3875)", () => {
+    const primary = mkdtempSync(join(tmpdir(), "deft-closeout-primary-"));
+    const dest = makeRepo();
+    temps.push(primary);
+    writeBrief(dest, "2026-08-26-3609-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3609)],
+      items: bareItems(2),
+    });
+    const prHead = "b".repeat(40);
+    const result = evaluate(primary, 3786, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(3609),
+      prHeadAssert: {
+        prHeadSha: prHead,
+        resolveWorktreeAtSha: () => dest,
+        resolveLocalHeadSha: (root) => (root === dest ? prHead : "a".repeat(40)),
+        resolveLifecycleDirty: () => null,
+      },
+    });
+    expect(result.code).toBe(1);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.issue).toBe(3609);
   });
 
   it("walks nested subItems and items", () => {
@@ -611,5 +721,71 @@ describe("one-PR-unit at forge closing references (#4494)", () => {
     });
     expect(result.code).toBe(1);
     expect(result.message).not.toMatch(/OK:/);
+  });
+});
+
+describe("pr-closeout-attestable PR-head assert (#3875)", () => {
+  it("fails exit 2 when local HEAD is not the PR head", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3875-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3875)],
+      items: [attestedItem("ok")],
+    });
+
+    const result = evaluate(root, 99, {
+      ...opts(closing(3875)),
+      prHeadAssert: {
+        localHeadSha: "b".repeat(40),
+        prHeadSha: "c".repeat(40),
+      },
+    });
+
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("is not PR #99 head");
+    expect(result.message).toContain("tree that merges");
+  });
+
+  it("fails exit 2 when the PR head SHA cannot be read", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3875-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3875)],
+      items: [attestedItem("ok")],
+    });
+
+    const result = evaluate(root, 99, {
+      ...opts(closing(3875)),
+      prHeadAssert: {
+        localHeadSha: MATCHING_HEAD,
+        prHeadSha: null,
+      },
+    });
+
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("cannot read PR #99 head SHA");
+  });
+
+  it("passes the assert when abbreviated and full SHAs name the same commit", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3875-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3875)],
+      items: [attestedItem("ok")],
+    });
+
+    const full = "abcdef0123456789abcdef0123456789abcdef01";
+    const result = evaluate(root, 99, {
+      ...opts(closing(3875)),
+      prHeadAssert: {
+        localHeadSha: full.slice(0, 12),
+        prHeadSha: full,
+      },
+    });
+
+    expect(result.code).toBe(0);
   });
 });
