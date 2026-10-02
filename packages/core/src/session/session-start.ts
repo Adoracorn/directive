@@ -71,6 +71,7 @@ import { resolvePolicy } from "../policy/resolve.js";
 import { maybeFormatProductSignalConsentPrompt } from "../product-signal/consent-prompt.js";
 import { formatFrameworkCommand } from "../render/framework-commands.js";
 import { RunSummaryEmitter } from "../run-summary/emit.js";
+import type { SessionStartTrigger } from "../run-summary/types.js";
 import {
   formatScmReadinessLines,
   type ProbeScmReadinessOptions,
@@ -1242,6 +1243,47 @@ function occupancyReport(occupancy: OccupancyDecision): {
     session_id: occupancy.sessionId,
     occupant_id: occupancy.record?.sessionId ?? occupancy.sessionId,
   };
+}
+
+function priorRitualSessionId(prior: RitualState | null | undefined): string | null {
+  if (prior == null) return null;
+  if (typeof prior.sessionId === "string" && prior.sessionId.length > 0) {
+    return prior.sessionId;
+  }
+  const rawId = prior.raw?.session_id;
+  return typeof rawId === "string" && rawId.length > 0 ? rawId : null;
+}
+
+function priorRitualBelongsToAdmittedSession(
+  prior: RitualState | null | undefined,
+  sessionId: string | undefined,
+): boolean {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return false;
+  const priorId = priorRitualSessionId(prior);
+  return priorId !== null && priorId === sessionId;
+}
+
+/**
+ * Closed `trigger` for a cold `session_start` JSONL line (#3921).
+ * Resolve from occupancy + the ritual that existed *before* writeRitualState
+ * (the write clears compact_resume_at). Orthogonal to ceremony_tier.
+ * Compact / re-arm markers apply only when that prior ritual belongs to the
+ * admitted sessionId; a leftover marker after lease expiry is `cold`.
+ */
+export function resolveSessionStartTrigger(input: {
+  readonly occupancyAction?: OccupancyDecision["action"];
+  readonly priorRitual?: RitualState | null;
+  readonly sessionId?: string;
+}): SessionStartTrigger {
+  if (input.occupancyAction === "stolen") return "steal-recover";
+  const raw = input.priorRitual?.raw;
+  const sameSession = priorRitualBelongsToAdmittedSession(input.priorRitual, input.sessionId);
+  if (sameSession && typeof raw?.compact_resume_at === "string") return "post-compact";
+  if (input.occupancyAction === "heartbeat" && input.priorRitual != null) {
+    return "mutation-intent";
+  }
+  if (sameSession && raw?.rearm_needed === true) return "rearm-forced-cold";
+  return "cold";
 }
 
 function occupancyDeniedResult(
@@ -2489,6 +2531,8 @@ export function runSessionStart(
         }
       : {}),
   };
+  // Capture prior ritual before writeRitualState clears compact_resume_at (#3921).
+  const [priorRitual] = readRitualState(projectRoot);
   let statePath: string;
   try {
     statePath = (options.writeRitualState ?? writeRitualState)(projectRoot, payload);
@@ -2539,6 +2583,11 @@ export function runSessionStart(
         env: options.env,
       });
       emitter.emitSessionStart({
+        trigger: resolveSessionStartTrigger({
+          occupancyAction: persistedOccupancy.action,
+          priorRitual,
+          sessionId: coldSessionId,
+        }),
         ceremony_dial: dialDict,
         preflight: preflightDict ?? undefined,
         ceremony_tier: COLD_CEREMONY_TIER,
