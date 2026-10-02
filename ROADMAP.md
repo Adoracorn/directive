@@ -35,31 +35,31 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 
 ## Completed
 
-_Showing 25 of 1687 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1710 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- **#5192** -- [framework-gap] bug(scope): hard membership mint contradicts the shipped no-mint proceed contract -- `[completed]`
+- **#5229** -- recurrence(#5219): host monitor/shell watch still bypasses Approach 1 after merge-path-arm ship -- `[completed]`
+- **#4709** -- bug(authz): inactive-path grant-store Write plants operator-cli and reopens first-write -- `[completed]`
+- **#4244** -- bug(coverage): coverage-final.json is never produced — hatch, hotspots, and forward-coverage diff half have no producer -- `[completed]`
+- **#3884** -- bug(session,hooks): rebasing onto a moved master revokes a worker's edit authority, and the printed recovery requires a lease it must not take -- `[completed]`
+- **#5219** -- recurrence(#4821): Grok parent shell pr:watch is not Approach 1 babysit when spawn_subagent is available -- `[completed]`
+- **#3984** -- rfc(swarm,process): the parent-must-not-own-a-multi-hour-babysit rule did not bind, and another prose restatement will not bind either -- `[completed]`
+- **#1617** -- Add WSL root-runtime ownership guard -- `[completed]`
+- **#3749** -- bug(worktree): removing a worktree can break the primary checkout's node_modules, surfacing later as an opaque MODULE_NOT_FOUND -- `[completed]`
+- **#4288** -- bug(pr:watch): merged or closed PR is not a terminal verdict; workers wait out SHA-match after squash-merge -- `[completed]`
+- **#1883** -- feat(coding,tooling): agent-legible gate failures — lint/error messages must inject remediation into agent context -- `[completed]`
+- **#4714** -- Merged scoped stories do not land in xbrief/completed/ on a fresh clone — pack-render --check drift after skill/commands edits — Greptile P1 recovery uses delivery branch + agents-entry mirror -- `[completed]`
+- **#4756** -- roadmap: Result-only buffer API — no throw vs master (#4756) -- `[completed]`
+- **#4879** -- Already-terminal plan items skip the evidence gate and still reach completed/ — Greptile P1 requirePointerShape uat-only -- `[completed]`
+- **#5188** -- bug(design-critique): N=3 + pain needs post-lean critic seat; provision process-only dest before panel (leftover from #4233) -- `[completed]`
+- **#5177** -- Residual re-ingest verb for needs-re-scope reopeneds (Prefer-A / #5177) -- `[completed]`
+- **#4544** -- Fail-closed AGENTS header placeholder gate at first-ship (DCR residual #4544) -- `[completed]`
+- **#5106** -- [framework-gap] scope:complete records provenance but does not move an evidenced active xBRIEF to completed -- `[completed]`
+- **#5013** -- deft update renders AGENTS.md from stale content while depositing newer templates, and stamps it with the new sha -- `[completed]`
+- **#4575** -- Grok implement spawn dest-place then cwd (remainder #4575 after #5184) -- `[completed]`
+- **#5184** -- bug(grok-build,swarm): dest-missing deny copy must lead with tool_input.cwd (leftover from #4575) -- `[completed]`
+- **#5176** -- Fail-closed non-empty PROJECT-DEFINITION narratives at first-ship (DCR R.4668 / #5176) -- `[completed]`
+- **#5140** -- bug(release): v0.119.11 Windows Step 5 hang at 1314/1334 under 60m — recover sub-15m suite wall-clock -- `[completed]`
 - **#5171** -- bug(session): finalize-owed tip inventory does O(n) git show of every completed xBRIEF; --defer-owed still scans (~10min) -- `[completed]`
 - **#5145** -- perf(session): --defer-owed still runs full finalize-owed tip scan; dest leaves cold-start stampede -- `[completed]`
-- **#4285** -- bug(check): verify:ac --soft-missing-xbrief runs every active brief so leftover master WIP poisons worktree task check -- `[completed]`
-- **#5162** -- process(review-cycle): sha_match stall must escalate to @greptileai review -- `[completed]`
-- **#3630** -- bug(review-cycle): named zero-reviewer terminal before poll -- `[completed]`
-- **#4667** -- [UAT Tester 1] Abandoned Codex session holds occupancy lease; session:end from CLI cannot release it -- `[completed]`
-- **#4877** -- scope:complete provenance refusal invites a self-asserted human-origin string -- `[completed]`
-- **#5154** -- docs(readme): link deftai/directive-training from Getting Started -- `[completed]`
-- **#5143** -- bug(swarm): finalize-owed false-positive on proposed briefs that cite a merged trim PR -- `[completed]`
-- **#4876** -- verify:vbrief-conformance reports a clean zero while PROJECT-DEFINITION is on disk -- `[completed]`
-- **#635** -- Rule Ownership Map: data file + lint enforcement (replaces REFERENCES.md prose section) -- `[completed]`
-- **#635** -- Events: detection-bound wiring (5 events with existing detectors) -- `[completed]`
-- **#635** -- Events: behavioral wiring (3 items: session interrupt/resume pair, plan:approved, legacy:detected) -- `[completed]`
-- **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[completed]`
-- **#5080** -- design(scope): in-class durable-effect acquisition gate under a presentation ceiling (supersedes deferred #5059 P1) -- `[completed]`
-- **#5079** -- design(gates): under a recorded ceiling, no gate converts "cannot evaluate" into "pass" -- `[completed]`
-- **#5056** -- [framework-gap] Presentation-only work can include SQL and backend mutations without a semantic scope refusal -- `[completed]`
-- **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[completed]`
-- **#1517** -- Gate project start on merge-gate readiness (CI + branch protection) or an explicit opt-out, before strategies run -- `[completed]`
-- **#3669** -- swarm: #3032 mandates a 'solo-worker launch path' that no verb implements -- the supported interactive path is discoverable only from references/ -- `[completed]`
-- **#5126** -- bug(scope,swarm): scope:cancel after Tracking merge is not leftover-complete -- `[completed]`
-- **#5111** -- process(design-critique): default arc to yolo no-ingest + recommended Dual-stop; add ingest and noyolo -- `[completed]`
-- **#5110** -- bug(hooks,verify): readiness recovery must not concatenate UNUSED_HOST_HOOKS_RECOVERY on matcher drift (leftover from #4574) -- `[completed]`
-- **#4574** -- bug(hooks,update): engine 0.119 expects EditNotebook matcher but update leaves 0.116 grok hooks drifted/missing -- `[completed]`
-- **#4664** -- [UAT Tester 1] Codex sandbox EPERM on git for session:start, doctor ritual, ingest, and promote -- `[completed]`
 

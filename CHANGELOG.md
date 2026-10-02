@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.119.13] - 2026-10-02
+
+> Residual re-ingest (#5177), first-ship PD/AGENTS gates (#5176/#4544), Windows Step 5 cheapen (#5140), and Fresh-clone completed-land (#4714).
+
+### Added
 - **WSL root-runtime ownership guard (#1617).** session:start soft-warns with the resolved filesystem project-owner (uid:gid + account); mutating check/update/preflight fail closed on harm-capable WSL root mismatch unless DEFT_ALLOW_ROOT_WSL_RUNTIME=1. Mount-pinned DrvFs/9p without metadata and native Windows/macOS are exempt. Ships ownership:doctor / ownership:fix / verify:ownership (CLI + task / deft: aliases). Tracking #1617.
 - **Residual re-ingest for reopened shipped issues (#5177).** Reopened shipped issues can be ingested again as a residual brief with lineage to the prior ship; Stage A clears sticky `needs-re-scope` when that residual is live. Tracking #5177.
 
@@ -6747,7 +6759,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.119.12...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.119.13...HEAD
+[0.119.13]: https://github.com/deftai/directive/compare/v0.119.12...v0.119.13
 [0.119.12]: https://github.com/deftai/directive/compare/v0.119.11...v0.119.12
 [0.119.11]: https://github.com/deftai/directive/compare/v0.119.10...v0.119.11
 [0.119.10]: https://github.com/deftai/directive/compare/v0.119.9...v0.119.10
