@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Named Source/Confidence vocabulary and a verified TrustLevel (#479).** Plan narratives use named source-class and confidence terms plus claim provenance; confidence cannot replace evidence. TrustLevel gains verified without changing existing promotion rules. Failed plan items need an invalidates edge (or complete ruled-out proof); whole-story fail/cancel does not. Tracking #479.
 - **Wire `verify:changelog-unreleased` into `check:framework-source` (#633).** Reuses `changelog-check` (no second Unreleased language). Records operator-owned repo-scoped ruleset enrollment for required context `Merge gate (task check)` with admin-enforcement and artifact-only skip-path validation before flipping. Shrinks the PR template checklist to items with named detectors and moves Post-Merge out of `- [ ]` syntax. Does not implement Tiers 1-3. Does not claim to close P1 (parked on #4912). Tracking #633.
 
 - **Discover shipped-closed issues with no tip-tree origin (#3495).** `verify:completed-tracked` can list in-window shipped-closed issues missing tip-tree origins and classify close-evidence (warn-first; `--enforce` before cohort-close / release complete). Tracking #3495.
@@ -28,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Incomplete failed x-claims still need `invalidates`; empty Verifier/VerifiedAt keys require Source (#479).** Skip the invalidates edge only when both `ruledOutReason` and `evidenceRefs` are non-empty. Evidence-only narratives stay a mission-style exception. Tracking #479.
 - **`verify:changelog-unreleased` fails when the Unreleased `- ` set is unchanged versus merge-base (#633).** Shares `changelog-check --against-merge-base` (default off for `task change:changelog:check`). Restores N/A-with-reason on detector-named PR checklist items. Tracking #633.
 - **Release Step 5 coverage-final diagnostic + skip-ci unpaid ledger (#5239).** Step 5 coverage decline messaging no longer depends on parent `DEFT_RELEASE_PREFLIGHT`. Production `--allow-skip-ci=#N` refuses unpaid citations (open/unknown issue or prior CHANGELOG spend) unless `--allow-unpaid-skip-ci=#N` matches. Hang named-cause treats last-file as cursor only. Spend record for the v0.119.13 cut: `--allow-skip-ci=5239`. Tracking #5239.
 - **Closeout no-xbrief probe fails closed on missing repo, PR-head lookup, or HEAD verify errors (#3875).** A missing linked worktree still skips cleanly; an unverified slug/forge/HEAD read no longer returns success. Hermetic review suites opt out of closeout explicitly. Tracking #3875.
