@@ -16,6 +16,10 @@
  * `verify:completed-tracked`, orphan-active triage, and a human reading the PR
  * (#5120). It does not mint evidence and does not `git fetch`.
  * complete-cohort dry-run vs live provenance timing is follow-up, not P1 relief.
+ *
+ * #3819 item-status allowlist inversion is inherited here via that shared gate
+ * (no carve-out): missing/unrecognized item.status no longer skips typed
+ * provenance at closeout either.
  */
 
 import { existsSync } from "node:fs";
@@ -387,11 +391,20 @@ export function evaluate(
         runner.proxied,
       );
     }
-    const alt = resolveWorktree(root, prHead.trim());
-    if (alt === null || alt.trim().length === 0) {
-      // Searched: no linked worktree at the PR head — nothing to attest.
+    const lookup = resolveWorktree(root, prHead.trim());
+    if (lookup.status === "error") {
+      return configError(
+        prNumber,
+        `${lookup.message}. Refusing to certify briefs when the PR-head worktree lookup ` +
+          "is unverified — fix git and retry.",
+        runner.proxied,
+      );
+    }
+    if (lookup.status === "absent" || lookup.path.trim().length === 0) {
+      // Verified list: no linked worktree at the PR head — nothing to attest.
       return nothingToCheck();
     }
+    const alt = lookup.path;
     const altHead = resolveLocal(alt);
     if (altHead === null || altHead.trim().length === 0) {
       return configError(

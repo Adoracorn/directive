@@ -1257,3 +1257,169 @@ describe("evaluateCompletedWriteGuard (#3766 active deletion)", () => {
     expect(result.findings.some((f) => f.relPath === active)).toBe(true);
   });
 });
+
+describe("evaluateCompletedWriteGuard disposition provenance (#3819)", () => {
+  const completedRel = "xbrief/completed/2026-08-27-3610-forged.xbrief.json";
+
+  function stampedWithItems(items: unknown[]): string {
+    return JSON.stringify({
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "stamped",
+        status: "completed",
+        metadata: {
+          lifecycleWrite: {
+            action: "complete",
+            writtenAt: "2026-08-27T22:18:46Z",
+          },
+        },
+        items,
+      },
+    });
+  }
+
+  /** #3610 pre-repair forged bare-string provenance shape. */
+  function forged3610BareStringProvenance(): string {
+    return stampedWithItems([
+      {
+        title: "forged waiver",
+        status: "completed",
+        "x-directive/disposition": {
+          disposition: "waived",
+          reason: "operator waived",
+          provenance: "human-origin/operator",
+          recorded_at: "2026-08-27T22:20:00Z",
+          recorded_by: "leaf-worker/3610",
+        },
+      },
+    ]);
+  }
+
+  it("refuses the #3610 forged bare-string human-origin/operator disposition on add", () => {
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      addedFiles: [completedRel],
+      payloads: new Map([[completedRel, forged3610BareStringProvenance()]]),
+    });
+    expect(result.code).toBe(1);
+    expect(result.findings[0]?.detail).toMatch(/provenance|#3819|human-origin/);
+    expect(result.findings[0]?.detail).toMatch(
+      /disposition\.provenance is required|must be human-origin/,
+    );
+  });
+
+  it("refuses the #3610 forged bare-string disposition on completed/ modification", () => {
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      nameStatus: `M\t${completedRel}`,
+      payloads: new Map([[completedRel, forged3610BareStringProvenance()]]),
+    });
+    expect(result.code).toBe(1);
+    expect(result.findings.some((f) => f.relPath === completedRel)).toBe(true);
+    expect(result.findings[0]?.detail).toMatch(/#3819/);
+  });
+
+  it("accepts a stamped completed/ add with operator-session disposition and eventRef", () => {
+    const ok = stampedWithItems([
+      {
+        title: "waived with eventRef",
+        status: "pending",
+        "x-directive/disposition": {
+          disposition: "waived",
+          reason: "operator waived on thread",
+          provenance: {
+            kind: "operator-session",
+            actor: "Scott",
+            eventRef: "issues/comments/5919235951",
+          },
+          recorded_at: "2026-08-27T22:20:00Z",
+        },
+      },
+    ]);
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      addedFiles: [completedRel],
+      payloads: new Map([[completedRel, ok]]),
+    });
+    expect(result.code).toBe(0);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("accepts operator-session disposition without eventRef via shared parseDisposition (#3819)", () => {
+    const missingRef = stampedWithItems([
+      {
+        title: "waived without eventRef",
+        status: "pending",
+        "x-directive/disposition": {
+          disposition: "waived",
+          reason: "operator waived",
+          provenance: { kind: "operator-session", actor: "Scott" },
+          recorded_at: "2026-08-27T22:20:00Z",
+        },
+      },
+    ]);
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      addedFiles: [completedRel],
+      payloads: new Map([[completedRel, missingRef]]),
+    });
+    expect(result.code).toBe(0);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("accepts a completed/ mod that leaves a historical operator-session disposition without eventRef", () => {
+    const historical = stampedWithItems([
+      {
+        title: "historical waiver",
+        status: "pending",
+        "x-directive/disposition": {
+          disposition: "waived",
+          reason: "grandfathered operator-session",
+          provenance: { kind: "operator-session", actor: "Scott" },
+          recorded_at: "2026-08-27T22:20:00Z",
+        },
+      },
+    ]);
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      nameStatus: `M\t${completedRel}`,
+      payloads: new Map([[completedRel, historical]]),
+    });
+    expect(result.code).toBe(0);
+    expect(result.findings).toHaveLength(0);
+  });
+
+  it("refuses a malformed completed/ modification even without an active pairing", () => {
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      nameStatus: `M\t${completedRel}`,
+      payloads: new Map([[completedRel, "{not-json"]]),
+    });
+    expect(result.code).toBe(1);
+    expect(result.findings[0]?.detail).toMatch(/unreadable plan|modified under completed/);
+  });
+
+  it("refuses missing or unrecognized plan.status on completed/ add (#3819)", () => {
+    const weird = JSON.stringify({
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "stamped",
+        status: "running",
+        metadata: {
+          lifecycleWrite: {
+            action: "complete",
+            writtenAt: "2026-08-27T22:18:46Z",
+          },
+        },
+      },
+    });
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      addedFiles: [completedRel],
+      payloads: new Map([[completedRel, weird]]),
+    });
+    expect(result.code).toBe(1);
+    expect(result.findings[0]?.detail).toMatch(/plan\.status|#3819/);
+  });
+
+  it("still accepts a stamped completed/ add with no disposition records", () => {
+    const result = evaluateCompletedWriteGuard("/tmp/proj", {
+      addedFiles: [completedRel],
+      payloads: new Map([[completedRel, stamped()]]),
+    });
+    expect(result.code).toBe(0);
+  });
+});

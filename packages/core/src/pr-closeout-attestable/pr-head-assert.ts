@@ -19,7 +19,13 @@ export type ResolveLocalHeadShaFn = (projectRoot: string) => string | null;
 
 export type FetchPrHeadShaFn = (prNumber: number, repo: string, runGh: RunGhFn) => string | null;
 
-export type ResolveWorktreeAtShaFn = (projectRoot: string, sha: string) => string | null;
+/** Linked-worktree lookup: verified found/absent, or unverified list failure. */
+export type FindWorktreeAtShaResult =
+  | { readonly status: "found"; readonly path: string }
+  | { readonly status: "absent" }
+  | { readonly status: "error"; readonly message: string };
+
+export type ResolveWorktreeAtShaFn = (projectRoot: string, sha: string) => FindWorktreeAtShaResult;
 
 export type ResolveLifecycleDirtyFn = (projectRoot: string) => string | null;
 
@@ -87,15 +93,23 @@ export function resolveLocalHeadSha(projectRoot: string): string | null {
 /**
  * First linked worktree (same common dir) whose HEAD matches `sha`.
  * Used when cascade/`pr:merge-ready` runs from primary but a dest worktree
- * already holds the PR head.
+ * already holds the PR head. Returns status=error when the list cannot be
+ * read; status=absent only when the list is verified and no match exists.
  */
-export function findWorktreeAtSha(projectRoot: string, sha: string): string | null {
+export function findWorktreeAtSha(projectRoot: string, sha: string): FindWorktreeAtShaResult {
   const result = spawnSync("git", ["-C", projectRoot, "worktree", "list", "--porcelain"], {
     encoding: "utf8",
     windowsHide: true,
   });
   if (result.error !== undefined || (result.status ?? 1) !== 0) {
-    return null;
+    const detail =
+      result.error !== undefined
+        ? result.error.message
+        : `git worktree list exited ${String(result.status ?? 1)}`;
+    return {
+      status: "error",
+      message: `cannot list linked worktrees under ${projectRoot} (${detail})`,
+    };
   }
   const text = typeof result.stdout === "string" ? result.stdout : "";
   let currentPath: string | null = null;
@@ -107,12 +121,12 @@ export function findWorktreeAtSha(projectRoot: string, sha: string): string | nu
     if (line.startsWith("HEAD ") && currentPath !== null) {
       const head = line.slice("HEAD ".length).trim();
       if (shasMatch(head, sha)) {
-        return currentPath;
+        return { status: "found", path: currentPath };
       }
       currentPath = null;
     }
   }
-  return null;
+  return { status: "absent" };
 }
 
 /**
@@ -238,8 +252,16 @@ export function assertWorkingTreeIsPrHead(
   let resolvedProjectRoot: string | undefined;
 
   if (!shasMatch(localHead, prHead)) {
-    const alt = resolveWorktree(projectRoot, prHead.trim());
-    if (alt === null || alt.trim().length === 0) {
+    const lookup = resolveWorktree(projectRoot, prHead.trim());
+    if (lookup.status === "error") {
+      return {
+        ok: false,
+        message:
+          `${lookup.message}. Refusing to certify briefs when the PR-head worktree lookup ` +
+          "is unverified — fix git and retry.",
+      };
+    }
+    if (lookup.status === "absent" || lookup.path.trim().length === 0) {
       return {
         ok: false,
         message:
@@ -248,6 +270,7 @@ export function assertWorkingTreeIsPrHead(
           "--project-root to its worktree) and retry.",
       };
     }
+    const alt = lookup.path;
     const altHead = resolveLocal(alt);
     if (altHead === null || !shasMatch(altHead, prHead)) {
       return {

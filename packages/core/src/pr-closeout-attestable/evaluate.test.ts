@@ -116,6 +116,28 @@ describe("pr-closeout-attestable evaluate", () => {
     expect(result.findings[0]?.unattested).toHaveLength(5);
   });
 
+  it("inherits #3819 missing/unrecognized item.status inversion via the shared gate", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3819-closeout.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3819)],
+      items: [
+        { title: "empty status", status: "" },
+        { title: "unrecognized status", status: "done" },
+      ],
+    });
+
+    const result = evaluate(root, 5260, opts(closing(3819)));
+
+    expect(result.code).toBe(1);
+    expect(result.findings[0]?.issue).toBe(3819);
+    expect(result.findings[0]?.unattested).toHaveLength(2);
+    expect(
+      result.findings[0]?.unattested.every((row) => !row.detail.includes("already_terminal")),
+    ).toBe(true);
+  });
+
   it("passes when every non-terminal criterion carries evidence", () => {
     const root = makeRepo();
     writeBrief(root, "2026-08-26-3609-story.xbrief.json", {
@@ -282,7 +304,14 @@ describe("pr-closeout-attestable evaluate", () => {
   it("passes cleanly when the project has no xbrief/ lifecycle root", () => {
     const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-"));
     temps.push(root);
-    const result = evaluate(root, 1, opts(closing(1)));
+    const result = evaluate(root, 1, {
+      ...opts(closing(1)),
+      prHeadAssert: {
+        localHeadSha: MATCHING_HEAD,
+        prHeadSha: MATCHING_HEAD,
+        resolveWorktreeAtSha: () => ({ status: "absent" }),
+      },
+    });
     expect(result.code).toBe(0);
     expect(result.message).toContain("nothing to check");
   });
@@ -320,11 +349,30 @@ describe("pr-closeout-attestable evaluate", () => {
       prHeadAssert: {
         localHeadSha: "a".repeat(40),
         prHeadSha: "b".repeat(40),
-        resolveWorktreeAtSha: () => null,
+        resolveWorktreeAtSha: () => ({ status: "absent" }),
       },
     });
     expect(result.code).toBe(0);
     expect(result.message).toContain("nothing to check");
+  });
+
+  it("no-xbrief fails closed when worktree list lookup errors (#3819 residual)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-wtfail-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => ({
+          status: "error",
+          message: "cannot list linked worktrees under /tmp (git worktree list exited 128)",
+        }),
+      },
+    });
+    expect(result.code).toBe(2);
+    expect(result.message).toMatch(/cannot list linked worktrees|unverified/);
   });
 
   it("no-xbrief fails closed when PR-head SHA lookup fails (#3875)", () => {
@@ -354,7 +402,7 @@ describe("pr-closeout-attestable evaluate", () => {
       fetchClosingIssues: closing(1),
       prHeadAssert: {
         prHeadSha: "b".repeat(40),
-        resolveWorktreeAtSha: () => root,
+        resolveWorktreeAtSha: () => ({ status: "found", path: root }),
         resolveLocalHeadSha: () => "a".repeat(40),
       },
     });
@@ -379,7 +427,7 @@ describe("pr-closeout-attestable evaluate", () => {
       fetchClosingIssues: closing(3609),
       prHeadAssert: {
         prHeadSha: prHead,
-        resolveWorktreeAtSha: () => dest,
+        resolveWorktreeAtSha: () => ({ status: "found", path: dest }),
         resolveLocalHeadSha: (root) => (root === dest ? prHead : "a".repeat(40)),
         resolveLifecycleDirty: () => null,
       },
@@ -739,6 +787,7 @@ describe("pr-closeout-attestable PR-head assert (#3875)", () => {
       prHeadAssert: {
         localHeadSha: "b".repeat(40),
         prHeadSha: "c".repeat(40),
+        resolveWorktreeAtSha: () => ({ status: "absent" }),
       },
     });
 

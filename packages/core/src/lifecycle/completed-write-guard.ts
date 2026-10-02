@@ -16,6 +16,11 @@
  * alone does not. A committed edit the worktree restores to the merge-base
  * blob does not. A D or R of that completed path does not.
  *
+ * Present typed dispositions on new completed/ adds and mods are parsed with
+ * acceptance-evidence parseDisposition / isHumanOrigin (#3819). Bare-string
+ * provenance shapes are refused. Missing disposition records are not required.
+ * Historical corpus at the merge base is not re-audited.
+ *
  * Historical corpus is advisory (doctor). New work in the change set is hard
  * (verify:completed-write-guard). Does not read completionProvenance and does
  * not change verify:completed-tracked.
@@ -34,6 +39,7 @@ import {
   LEGACY_ARTIFACT_DIR,
   MIGRATED_ARTIFACT_DIR,
 } from "../layout/resolve.js";
+import { parseDisposition, readNamespacedAcceptanceFields } from "../scope/acceptance-evidence.js";
 import {
   hasTransitionWrite,
   LEFTOVER_LAND_PR_REMEDIATION,
@@ -358,6 +364,68 @@ function hasCompleteLifecycleWrite(plan: Record<string, unknown>): boolean {
   const rec = stamp as Record<string, unknown>;
   const writtenAt = rec.writtenAt;
   return rec.action === "complete" && typeof writtenAt === "string" && writtenAt.trim().length > 0;
+}
+
+/** plan.status values that may land under completed/ (#3819 optional additive). */
+const RECOGNIZED_COMPLETED_PLAN_STATUSES = new Set(["completed", "complete", "failed"]);
+
+/**
+ * Validate-if-present: typed dispositions on a completed/ land must parse and
+ * carry human-origin provenance via shared parseDisposition / isHumanOrigin.
+ * Does not invent a parallel parser or extra eventRef limb (#3819 Prefer-A).
+ */
+function dispositionFindingForCompletedPlan(
+  plan: Record<string, unknown>,
+  relPath: string,
+): CompletedWriteGuardFinding | null {
+  const planStatus = String(plan.status ?? "").trim();
+  if (!RECOGNIZED_COMPLETED_PLAN_STATUSES.has(planStatus)) {
+    return {
+      relPath,
+      detail: sanitizeDetail(
+        `${relPath}: completed/ land with missing or unrecognized plan.status ` +
+          `${JSON.stringify(plan.status ?? null)} (#3819)`,
+      ),
+    };
+  }
+  return walkDispositionFindings(plan.items, "items", relPath);
+}
+
+function walkDispositionFindings(
+  items: unknown,
+  pathPrefix: string,
+  relPath: string,
+): CompletedWriteGuardFinding | null {
+  if (!Array.isArray(items)) {
+    return null;
+  }
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const obj = item as Record<string, unknown>;
+    const path = `${pathPrefix}[${i}]`;
+    const fields = readNamespacedAcceptanceFields(obj);
+    if (fields.hasDisposition) {
+      const parsed = parseDisposition(fields.disposition);
+      if (!parsed.ok) {
+        return {
+          relPath,
+          detail: sanitizeDetail(`${relPath}: ${path} ${parsed.message} (#3819)`),
+        };
+      }
+    }
+    const fromSub = walkDispositionFindings(obj.subItems, `${path}.subItems`, relPath);
+    if (fromSub !== null) {
+      return fromSub;
+    }
+    const fromNested = walkDispositionFindings(obj.items, `${path}.items`, relPath);
+    if (fromNested !== null) {
+      return fromNested;
+    }
+  }
+  return null;
 }
 
 function parsePlan(raw: string): Record<string, unknown> | null {
@@ -769,6 +837,11 @@ export function evaluateCompletedWriteGuard(
       });
       continue;
     }
+    const dispositionFinding = dispositionFindingForCompletedPlan(plan, rel);
+    if (dispositionFinding !== null) {
+      findings.push(dispositionFinding);
+      continue;
+    }
     rememberDest(rel, plan);
   }
 
@@ -783,11 +856,11 @@ export function evaluateCompletedWriteGuard(
       continue;
     }
     const rel = rec.src;
-    const key = pairingKey(rel);
-    // Same capped read and completed-folder stamp check as an added dest (#4906).
-    if (key === null || !activePairKeys.has(key) || removedSrc.has(rel)) {
+    if (removedSrc.has(rel)) {
       continue;
     }
+    const key = pairingKey(rel);
+    const pairingCandidate = key !== null && activePairKeys.has(key);
     const payload = readPayload(root, rel, options.payloads);
     if (payload.kind === "missing") {
       findings.push({
@@ -809,6 +882,17 @@ export function evaluateCompletedWriteGuard(
         relPath: rel,
         detail: sanitizeDetail(`${rel}: modified under completed/ with unreadable plan`),
       });
+      continue;
+    }
+    // #3819: every completed/ mod in the change set validates present dispositions
+    // through the shared parser only (grandfather historical eventRef-less shapes).
+    const dispositionFinding = dispositionFindingForCompletedPlan(plan, rel);
+    if (dispositionFinding !== null) {
+      findings.push(dispositionFinding);
+      continue;
+    }
+    // Pairing authorization still needs the complete stamp (#4906).
+    if (!pairingCandidate) {
       continue;
     }
     if (!transitionWriteFitsFolder(plan, "completed")) {

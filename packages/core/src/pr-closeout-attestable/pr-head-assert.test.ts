@@ -38,11 +38,38 @@ describe("pr-head-assert helpers (#3875)", () => {
       () => {
         throw new Error("runGh must not be called");
       },
-      { localHeadSha: "a".repeat(40), prHeadSha: "b".repeat(40) },
+      {
+        localHeadSha: "a".repeat(40),
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => ({ status: "absent" }),
+      },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.message).toContain("is not PR #7 head");
+    }
+  });
+
+  it("assertWorkingTreeIsPrHead fails closed when worktree list errors", () => {
+    const result = assertWorkingTreeIsPrHead(
+      "/tmp/unused",
+      7,
+      "deftai/directive",
+      () => {
+        throw new Error("runGh must not be called");
+      },
+      {
+        localHeadSha: "a".repeat(40),
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => ({
+          status: "error",
+          message: "cannot list linked worktrees under /tmp/unused (git worktree list exited 128)",
+        }),
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toMatch(/cannot list linked worktrees|unverified/);
     }
   });
 
@@ -92,7 +119,7 @@ describe("pr-head-assert helpers (#3875)", () => {
       {
         localHeadSha: "a".repeat(40),
         prHeadSha: prHead,
-        resolveWorktreeAtSha: () => "/tmp/pr-worktree",
+        resolveWorktreeAtSha: () => ({ status: "found", path: "/tmp/pr-worktree" }),
         resolveLocalHeadSha: (root) => (root === "/tmp/pr-worktree" ? prHead : "a".repeat(40)),
         resolveLifecycleDirty: () => null,
       },
