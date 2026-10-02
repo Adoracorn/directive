@@ -16,9 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Gate reachability on pull_request for `verify:consumer-check-contract` (#4015).** Parses each consumer workflow as a YAML job graph (reuses existing run/script extractors; no concatenation). Warns on skippable gate jobs (`if:` false on PR, `continue-on-error: true`, matrix exclude) and workflow `paths` / `paths-ignore` / `branches` filters (pending-required-check consequence). Accepts `if: always()` and PR-true-by-construction; `uses:` / undecidable `github.event.*`/`vars`/`secrets` report unknown (never clean). Warn by default; requiredness stays on #4012. Tracking #4015.
+
 ### Changed
 
 ### Fixed
+
+- **`verify:consumer-check-contract` reachability: do not let `- env:`/`- with:` nested maps steal step-field indent (#4015).** Gate step `if:` / `run:` / `continue-on-error` after a leading env/with block stay visible so skippable or soft-fail gates cannot read clean. Tracking #4015.
 
 ### Removed
 
