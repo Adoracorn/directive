@@ -1,6 +1,6 @@
 import { parseCoverageDebtIssueNumber } from "../vitest-runner/coverage-debt.js";
 import { DEFAULT_BASE_BRANCH, RELEASE_HELP } from "./constants.js";
-import { parseSkipCiIncidentArgv } from "./skip-ci-incident.js";
+import { parseAllowUnpaidSkipCiArgv, parseSkipCiIncidentArgv } from "./skip-ci-incident.js";
 import type { ReleaseFlags } from "./types.js";
 
 export function parseReleaseFlags(args: readonly string[]): ReleaseFlags {
@@ -14,6 +14,9 @@ export function parseReleaseFlags(args: readonly string[]): ReleaseFlags {
   const skipCiIncident = parseSkipCiIncidentArgv(args);
   const allowSkipCiIssue: number | null =
     skipCiIncident.kind === "valid" ? skipCiIncident.issue : null;
+  const unpaidSkipCi = parseAllowUnpaidSkipCiArgv(args);
+  const allowUnpaidSkipCiIssue: number | null =
+    unpaidSkipCi.kind === "valid" ? unpaidSkipCi.issue : null;
   let skipCi = false;
   let skipBuild = false;
   let draft = true;
@@ -74,6 +77,11 @@ export function parseReleaseFlags(args: readonly string[]): ReleaseFlags {
       if (value !== null) i += 1;
     } else if (token.startsWith("--allow-skip-ci=")) {
       // Value consumed by parseSkipCiIncidentArgv above.
+    } else if (token === "--allow-unpaid-skip-ci") {
+      const value = takeValue(token, i);
+      if (value !== null) i += 1;
+    } else if (token.startsWith("--allow-unpaid-skip-ci=")) {
+      // Value consumed by parseAllowUnpaidSkipCiArgv above.
     } else if (token === "--skip-build") {
       skipBuild = true;
     } else if (token === "--no-draft") {
@@ -119,6 +127,9 @@ export function parseReleaseFlags(args: readonly string[]): ReleaseFlags {
   if (skipCiIncident.kind === "invalid") {
     unknown.push(`--allow-skip-ci (${skipCiIncident.reason})`);
   }
+  if (unpaidSkipCi.kind === "invalid") {
+    unknown.push(`--allow-unpaid-skip-ci (${unpaidSkipCi.reason})`);
+  }
 
   return {
     help,
@@ -133,6 +144,7 @@ export function parseReleaseFlags(args: readonly string[]): ReleaseFlags {
     allowVbriefDrift,
     allowCoverageDebtIssue,
     allowSkipCiIssue,
+    allowUnpaidSkipCiIssue,
     skipCi,
     skipBuild,
     draft,

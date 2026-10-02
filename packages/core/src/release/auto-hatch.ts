@@ -169,6 +169,34 @@ export function extractCoverageDebtCitationsFromChangelog(
   return [...found].sort((a, b) => a - b);
 }
 
+/**
+ * Parse `--allow-skip-ci=#N` / `allow-skip-ci=#N` spend markers from CHANGELOG
+ * Unreleased + all version sections by default (#5239 S1). Unlike coverage-debt
+ * (recent-window), skip-ci unpaid reuse must see the full spend history so an
+ * older closed citation (e.g. #5107 in 0.119.10) stays unpaid after close.
+ * Pass a finite `maxVersionSections` only in tests that assert a narrow window.
+ */
+export function extractSkipCiIncidentCitationsFromChangelog(
+  changelog: string,
+  maxVersionSections: number = Number.POSITIVE_INFINITY,
+): number[] {
+  const versionHeader = /^## \[(?!Unreleased)/m;
+  const parts = changelog.split(versionHeader);
+  const versionEnd = Number.isFinite(maxVersionSections) ? maxVersionSections + 1 : undefined;
+  const windows = [parts[0] ?? "", ...parts.slice(1, versionEnd)];
+  const found = new Set<number>();
+  const re = /allow-skip-ci=#?(\d+)/gi;
+  for (const section of windows) {
+    let m: RegExpExecArray | null = re.exec(section);
+    while (m) {
+      const n = Number.parseInt(m[1] ?? "", 10);
+      if (Number.isFinite(n) && n > 0) found.add(n);
+      m = re.exec(section);
+    }
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
 /** Union marker-search hits with CHANGELOG-cited open issues. */
 export function mergeOpenDebtLedger(
   markerHits: readonly number[],

@@ -31,7 +31,11 @@ import {
   VERIFY_DRAFT_MAX_ATTEMPTS,
 } from "./constants.js";
 import { formatConsumerReadinessDisclosure } from "./consumer-readiness-disclosure.js";
-import { createCoverageDebtIssue, probeOpenCoverageDebtLedger } from "./coverage-debt-ledger.js";
+import {
+  createCoverageDebtIssue,
+  probeOpenCoverageDebtLedger,
+  probeSkipCiIncidentLedger,
+} from "./coverage-debt-ledger.js";
 import { checkTagAvailable, createGithubRelease, readTextFile, verifyReleaseDraft } from "./gh.js";
 import {
   checkGitClean,
@@ -63,7 +67,7 @@ import {
   writeReleaseInputDetails,
 } from "./release-input.js";
 import { evaluateReleaseConsumerReadiness, issuesFromInventory } from "./run-consumer-readiness.js";
-import { formatSkipCiIncidentWarning } from "./skip-ci-incident.js";
+import { formatSkipCiIncidentWarning, validateSkipCiUnpaidLedger } from "./skip-ci-incident.js";
 import { evaluateSuiteStamp, writeSuiteStamp } from "./suite-stamp.js";
 import type { ReleaseConfig, ReleaseSeams } from "./types.js";
 import { isPrereleaseTag } from "./version.js";
@@ -96,24 +100,40 @@ function resolveCoverageReportMtimeMs(
   }
 }
 
+/** Options for suite-bound coverage-final expectation (#5026 / #5239 F1). */
+export interface SuiteBoundCoverageDeclineOptions {
+  /**
+   * When false, the child lane was the #5026 no-coverage host path.
+   * When omitted, derive from `env` via `DEFT_RELEASE_PREFLIGHT` (tests only —
+   * production Step 5 must pass an explicit value so parent ambient env cannot
+   * mask the child lane).
+   */
+  readonly hostCoverage?: boolean;
+  /** Env used only when `hostCoverage` is omitted. */
+  readonly env?: NodeJS.ProcessEnv;
+}
+
 /** True only when this Step 5 invocation was expected to write coverage-final.json. */
-function suiteExpectedToWriteLocalCoverage(
+export function suiteExpectedToWriteLocalCoverage(
   reason: string,
-  env: NodeJS.ProcessEnv = process.env,
+  options: SuiteBoundCoverageDeclineOptions = {},
 ): boolean {
-  if (isStep5HostNoCoverage(env)) return false;
+  const env = options.env ?? process.env;
+  const hostCoverage = options.hostCoverage ?? !isStep5HostNoCoverage(env);
+  if (!hostCoverage) return false;
   if (countFailedTestsFromSanitizedOutput(reason) !== null) return true;
   return /\bts:check-lane\b/i.test(reason);
 }
 
-function formatSuiteBoundCoverageDecline(
+export function formatSuiteBoundCoverageDecline(
   coverageReportMtimeMs: number | null,
   reason: string,
+  options: SuiteBoundCoverageDeclineOptions = {},
 ): string {
   if (coverageReportMtimeMs != null) {
     return "coverage-final.json mtime not strictly after suite start";
   }
-  if (!suiteExpectedToWriteLocalCoverage(reason)) {
+  if (!suiteExpectedToWriteLocalCoverage(reason, options)) {
     return "coverage-final.json not produced (suite was not expected to write a local report)";
   }
   return "coverage-final.json missing after suite";
@@ -291,6 +311,30 @@ export function runPipeline(config: ReleaseConfig, seams: ReleaseSeams = {}): nu
     return changelogSafety.exitCode;
   }
   if (config.skipCi) {
+    // Mirror cmdRelease unpaid-ledger gate so programmatic runPipeline callers
+    // cannot bypass production unpaid citation refusal (SLizard P1 / #5239).
+    // Dry-run skips the GitHub/CHANGELOG probe (same as cmdRelease).
+    if (!config.dryRun && config.allowSkipCiIssue !== null && config.allowSkipCiIssue > 0) {
+      const ledger =
+        seams.probeSkipCiIncidentLedger?.(config.repo, projectRoot, config.allowSkipCiIssue) ??
+        probeSkipCiIncidentLedger(config.repo, projectRoot, config.allowSkipCiIssue, {
+          spawnText: seams.spawnText,
+          whichGh: seams.whichGh,
+          readFile: seams.readFile,
+          fileExists: seams.fileExists,
+        });
+      const unpaidGate = validateSkipCiUnpaidLedger({
+        skipCi: config.skipCi,
+        allowSkipCiIssue: config.allowSkipCiIssue,
+        allowUnpaidSkipCiIssue: config.allowUnpaidSkipCiIssue ?? null,
+        unpaidIssues: ledger.unpaid,
+      });
+      if (unpaidGate.kind === "invalid") {
+        emit(5, label, `FAIL (${unpaidGate.reason})`);
+        process.stderr.write(`release: error: ${unpaidGate.reason}\n`);
+        return EXIT_CONFIG_ERROR;
+      }
+    }
     if (config.allowSkipCiIssue !== null && config.allowSkipCiIssue > 0) {
       process.stderr.write(formatSkipCiIncidentWarning(config.allowSkipCiIssue));
     }
@@ -368,7 +412,13 @@ export function runPipeline(config: ReleaseConfig, seams: ReleaseSeams = {}): nu
               ? coverageReportMtimeMs
               : null;
         if (coverageReportMtimeMs !== undefined && suiteBoundMtime === null) {
-          const declined = formatSuiteBoundCoverageDecline(coverageReportMtimeMs, reason);
+          // Step 5 always runs releaseCheckEnv (#5026 no-coverage). Tests may
+          // inject seams.step5HostCoverage to exercise the coverage-expecting
+          // diagnostic without mutating parent process.env (#5239 F1).
+          const hostCoverage = seams.step5HostCoverage ?? false;
+          const declined = formatSuiteBoundCoverageDecline(coverageReportMtimeMs, reason, {
+            hostCoverage,
+          });
           process.stderr.write(`auto-hatch: suite-bound coverage mtime declined (${declined})\n`);
         }
         const exitCode = parseExitCodeFromReason(reason);

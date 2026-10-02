@@ -41,6 +41,9 @@ export function cmdRelease(args: readonly string[], seams: ReleaseSeams = {}): n
     return EXIT_CONFIG_ERROR;
   }
 
+  // Unpaid-ledger refusal lives solely in runPipeline Step 5 so programmatic
+  // callers and cmdRelease share one probe (Greptile P2 / SLizard P1 / #5239).
+
   const config: ReleaseConfig = {
     version: flags.version,
     repo,
@@ -57,6 +60,7 @@ export function cmdRelease(args: readonly string[], seams: ReleaseSeams = {}): n
     allowVbriefDrift: flags.allowVbriefDrift,
     allowCoverageDebtIssue: flags.allowCoverageDebtIssue,
     allowSkipCiIssue: flags.allowSkipCiIssue,
+    allowUnpaidSkipCiIssue: flags.allowUnpaidSkipCiIssue,
   };
 
   return runPipeline(config, seams);
