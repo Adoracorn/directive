@@ -79,6 +79,7 @@ export * as prMergeReadiness from "./pr-merge-readiness/index.js";
 export * as prMonitor from "./pr-monitor/index.js";
 export * as prProtectedIssues from "./pr-protected-issues/index.js";
 export * as prWaitMergeable from "./pr-wait-mergeable/index.js";
+export * as prePrController from "./pre-pr-controller/index.js";
 export * as preflight from "./preflight/index.js";
 export * as presentationCeiling from "./presentation-ceiling/index.js";
 export * as presentationCoverage from "./presentation-coverage/index.js";
