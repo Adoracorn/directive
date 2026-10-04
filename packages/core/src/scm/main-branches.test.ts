@@ -21,6 +21,18 @@ describe("main non-rest branches", () => {
   it("dispatches issue design-critique-chip without forwarding to gh (#3642)", () => {
     const apply = vi.fn();
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    // Advisory may resolve git toplevel; only allow that spawn shape.
+    spawnSyncMock.mockImplementation((cmd: unknown, args: unknown) => {
+      if (
+        cmd === "git" &&
+        Array.isArray(args) &&
+        args[0] === "rev-parse" &&
+        args.includes("--show-toplevel")
+      ) {
+        return { status: 0, stdout: `${process.cwd()}\n`, stderr: "" };
+      }
+      return { status: 1, stdout: "", stderr: "unexpected spawn" };
+    });
     expect(
       main(
         [
@@ -35,6 +47,8 @@ describe("main non-rest branches", () => {
         ],
         {
           skipReadiness: true,
+          // Seam stub — module spy does not rebind chip's import (#5326).
+          ensureCatalogChip: () => ({ ok: true, created: false, skippedExisting: true }),
           labelClient: {
             fetchLabels: () => ["bug", "design-critique:mechanism-shaped"],
             apply,
@@ -42,7 +56,10 @@ describe("main non-rest branches", () => {
         },
       ),
     ).toBe(0);
-    expect(spawnSyncMock).not.toHaveBeenCalled();
+    for (const call of spawnSyncMock.mock.calls) {
+      expect(call[0]).toBe("git");
+      expect(call[1]).toEqual(["rev-parse", "--show-toplevel"]);
+    }
     expect(apply).toHaveBeenCalledTimes(1);
     expect(apply.mock.calls[0]?.slice(2)).toEqual([
       ["design-critique:in-progress"],
