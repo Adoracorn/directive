@@ -174,7 +174,7 @@
       },
       {
         "uri": "https://github.com/deftai/directive/pull/5280",
-        "type": "x-xbrief/github-pull-request",
+        "type": "x-xbrief/github-pr",
         "title": "PR #5280: feat(pre-pr): controller-issued completion records (#4912)"
       },
       {
