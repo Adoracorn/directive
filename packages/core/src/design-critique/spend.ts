@@ -191,3 +191,105 @@ export function evaluateSpendRecord(input: {
   }
   return { ok: true, spend: input.parse.spend };
 }
+
+/**
+ * Host agent-memory preference provenance (#5321).
+ * Tags are write-consent / audit only. They do not mint Personal authority —
+ * USER.md Personal remains the sole Personal SoT after explicit promote.
+ */
+export type HostMemoryProvenance =
+  | "operator-asked"
+  | "agent-inferred"
+  | "unsigned"
+  | null
+  | undefined;
+
+/** External-context family named in agents-entry Session routing (#5321). */
+export const HOST_MEMORY_EXTERNAL_CONTEXT_FAMILY =
+  "Warp Drive / MCP / prompt-injected / host agent memory" as const;
+
+/** One-line durable conflict disclosure prefix when closed field wins (#5321). */
+export const HOST_MEMORY_CONFLICT_DISCLOSURE_PREFIX =
+  "host memory discarded for closed field:" as const;
+
+/**
+ * Read-time Personal authority for preference/process-shaped host-memory notes.
+ * Always false: host memory is external context, never a second Personal SoT.
+ * Unsigned / agent-inferred / operator-asked tags stay non-Personal until the
+ * line is promoted into USER.md (#5321 F3 / F5 / Greptile P1).
+ */
+export function hostMemoryHasPersonalAuthority(_provenance: HostMemoryProvenance): boolean {
+  return false;
+}
+
+export type HostMemorySpendConflictInput = {
+  /** Host-memory note claiming bare arc must always ask before Stop 1. */
+  readonly hostMemoryAlwaysAsk: boolean;
+  readonly hostMemoryProvenance: HostMemoryProvenance;
+  readonly utterance: string;
+  readonly spendRecommend: ArcSpend | null;
+};
+
+export type HostMemorySpendConflictVerdict = {
+  readonly follow: "contract";
+  readonly spendParse: SpendParse;
+  readonly spendAsk: SpendAskKind | null;
+  readonly hostMemoryPersonalAuthority: boolean;
+  readonly disclosure: string | null;
+  readonly spendRecord: SpendRecordVerdict | null;
+};
+
+function hostMemorySpendDisclosureSource(
+  utterance: string,
+  spendRecommend: ArcSpend | null,
+): string {
+  const viaUtterance = N1_TOKEN_RE.test(utterance) || N3_TOKEN_RE.test(utterance);
+  if (viaUtterance) {
+    return "utterance token → spend-ask: resolved";
+  }
+  if (spendRecommend !== null) {
+    return "spend-recommend → spend-ask: resolved";
+  }
+  return "spend-ask: resolved";
+}
+
+/**
+ * Closed conflict exemplar (#5321 / #5318): host-memory "always ask" loses to
+ * closed spend resolution (utterance token or spend-recommend → spend-ask:
+ * resolved). Contract wins; emit one-line disclosure whenever non-Personal
+ * host memory is discarded for that closed field. Consented USER.md Personal
+ * overrides are outside this host-memory fixture.
+ */
+export function evaluateHostMemorySpendConflict(
+  input: HostMemorySpendConflictInput,
+): HostMemorySpendConflictVerdict {
+  const personal = hostMemoryHasPersonalAuthority(input.hostMemoryProvenance);
+  const spendParse = parseOperatorSpend(input.utterance, {
+    spendRecommend: input.spendRecommend,
+  });
+  const spendAsk: SpendAskKind | null = spendParse.kind === "resolved" ? "resolved" : null;
+  const spendRecord =
+    spendParse.kind === "resolved"
+      ? evaluateSpendRecord({
+          parse: spendParse,
+          asked: false,
+          answer: null,
+          stop1Spend: spendParse.spend,
+          spendAsk: "resolved",
+        })
+      : null;
+  const discarded = input.hostMemoryAlwaysAsk && !personal && spendParse.kind === "resolved";
+  return {
+    follow: "contract",
+    spendParse,
+    spendAsk,
+    hostMemoryPersonalAuthority: personal,
+    disclosure: discarded
+      ? `${HOST_MEMORY_CONFLICT_DISCLOSURE_PREFIX} spend (${hostMemorySpendDisclosureSource(
+          input.utterance,
+          input.spendRecommend,
+        )})`
+      : null,
+    spendRecord,
+  };
+}
