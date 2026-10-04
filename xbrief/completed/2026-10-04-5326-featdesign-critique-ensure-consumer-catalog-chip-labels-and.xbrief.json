@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #5326",
-    "updated": "2026-10-04T16:06:41Z"
+    "updated": "2026-10-04T21:33:29Z"
   },
   "plan": {
     "title": "feat(design-critique): ensure consumer catalog chip labels and judgmentGates (skill soft-misses today)",
-    "status": "running",
+    "status": "completed",
     "narratives": {
       "Description": "feat(design-critique): ensure consumer catalog chip labels and judgmentGates (skill soft-misses today)",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/5326",
@@ -17,47 +17,164 @@
       {
         "id": "bound-1",
         "title": "Contract miss-class rewrite: missing-repo-label vs auth-or-permission in content/contracts/design-critique.md + design_critique_contract.test.ts; thin skill one-line pointer only",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-2",
         "title": "Closed missing-label detector: preflight GET labels/<name>; HTTP 404→missing-repo-label; 401/403/other→auth-or-permission; fixture-lock classifier",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-3",
         "title": "Ensure-on-write: on missing-repo-label for closed catalog chip, restCreateLabel with fixed color+description table for three DESIGN_CRITIQUE_CATALOG_CHIPS, then retry apply; attach in runDesignCritiqueChip/catalog path",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-4",
         "title": "Ensure-refuse posture: ensure create fail → non-blocking miss naming ensure-failed/miss class; chip exit 0; ingest unblocked",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-5",
         "title": "JudgmentGates land: doctor/setup advisory for missing labels/gates when deposit predicate true; first-arc/default ensure typed judgmentGates design-critique via existing policy write or loud advisory",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-6",
         "title": "Deposit predicate: design-critique deposited when SKILL.md or contract or ADR-005/pack slice present (consumer .deft/core equivalents included)",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-7",
         "title": "Skill pointer: one line in deft-directive-design-critique SKILL.md to contract ensure-or-doctor recovery; no second SoT",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-8",
         "title": "Non-goals hold: chips list hygiene; completed-arc remains ingest SoT; no triage-ready/recut-needed restore; ingest independent of chips",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       },
       {
         "id": "bound-9",
         "title": "Acceptance: contract+fixtures miss-class/detector/create table; virgin ensure+retry; auth miss non-blocking; doctor advisory; first-arc gate light or loud advisory; thin skill pointer; ingest independent",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5329",
+            "mintedAt": "2026-10-04T21:27:03.276Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:27:03.276Z"
+        }
       }
     ],
     "tags": [
@@ -78,47 +195,164 @@
         {
           "id": "ac-1",
           "text": "Contract miss-class rewrite: missing-repo-label vs auth-or-permission in content/contracts/design-critique.md + design_critique_contract.test.ts; thin skill one-line pointer only",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-2",
           "text": "Closed missing-label detector: preflight GET labels/<name>; HTTP 404→missing-repo-label; 401/403/other→auth-or-permission; fixture-lock classifier",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-3",
           "text": "Ensure-on-write: on missing-repo-label for closed catalog chip, restCreateLabel with fixed color+description table for three DESIGN_CRITIQUE_CATALOG_CHIPS, then retry apply; attach in runDesignCritiqueChip/catalog path",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-4",
           "text": "Ensure-refuse posture: ensure create fail → non-blocking miss naming ensure-failed/miss class; chip exit 0; ingest unblocked",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-5",
           "text": "JudgmentGates land: doctor/setup advisory for missing labels/gates when deposit predicate true; first-arc/default ensure typed judgmentGates design-critique via existing policy write or loud advisory",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-6",
           "text": "Deposit predicate: design-critique deposited when SKILL.md or contract or ADR-005/pack slice present (consumer .deft/core equivalents included)",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-7",
           "text": "Skill pointer: one line in deft-directive-design-critique SKILL.md to contract ensure-or-doctor recovery; no second SoT",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-8",
           "text": "Non-goals hold: chips list hygiene; completed-arc remains ingest SoT; no triage-ready/recut-needed restore; ingest independent of chips",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         },
         {
           "id": "ac-9",
           "text": "Acceptance: contract+fixtures miss-class/detector/create table; virgin ensure+retry; auth miss non-blocking; doctor advisory; first-arc gate light or loud advisory; thin skill pointer; ingest independent",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5329 (+ split #5344) squash-merge (Tracking #5326). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5329",
+              "mintedAt": "2026-10-04T21:27:03.276Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:27:03.276Z"
+          }
         }
       ]
     },
@@ -325,9 +559,35 @@
         "synthesis_comment_id": 5981756026,
         "target_digest": "sha256:055e1bdd6ea6b5b8123b48a3a8cefb7d6f339d31af7f173a278002468efca137"
       },
-      "productPullRequest": 5329
+      "productPullRequest": 5329,
+      "admitted_source_digest": "ae307a6aaaceedfddd328c8e7ea80e22b7f7963603012fc67dd205ebab3fdfec",
+      "ambiguity_attestation": "none_found",
+      "completionProvenance": {
+        "repository": null,
+        "implementationCommit": null,
+        "prNumber": 5329,
+        "prBase": null,
+        "mergeCommit": "7cc9a17dd39ff3eb80bd97f8ee39cb7479369b09",
+        "deliveryBranch": "master",
+        "deliveryCommit": "12506a8af9d70d43b77b0c7dc2c32ac7c317b410",
+        "verifiedAt": "2026-10-04T21:33:29Z",
+        "verifier": "scope:complete",
+        "disposition": "delivered",
+        "handoffState": "delivered",
+        "deployed": null,
+        "uatVerified": null,
+        "completedSessionId": "host:grok:v1:MDFhMTA2YzItMGE3Zi03OTgyLWJjMGItMTAzZGMxNzZiMjBj"
+      },
+      "deliveryDisposition": "delivered",
+      "handoffState": "delivered",
+      "completedAt": "2026-10-04T21:33:29Z",
+      "completedSessionId": "host:grok:v1:MDFhMTA2YzItMGE3Zi03OTgyLWJjMGItMTAzZGMxNzZiMjBj",
+      "lifecycleWrite": {
+        "action": "complete",
+        "writtenAt": "2026-10-04T21:33:29Z"
+      }
     },
     "id": "github.issue.5700722259",
-    "updated": "2026-10-04T16:06:41Z"
+    "updated": "2026-10-04T21:33:29Z"
   }
 }
