@@ -17,22 +17,22 @@
       {
         "id": "bound-1",
         "title": "Append ## Test integrity and ## Mock boundary after ## CI/CD Integration (end-placement for stable testing-069+ ids)",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "bound-2",
         "title": "Pack SoT land: author testing.md then packs:render-rules/render/verify-drift; sync testing-001/030 and append 069+",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "bound-3",
         "title": "Rewrite testing-030 Unit Tests mocks conjunct to external-only / process-boundary form referencing Mock boundary",
-        "status": "pending"
+        "status": "completed"
       },
       {
         "id": "bound-4",
         "title": "Lock headings+bodies in coding_rules.test.ts; add #1164 to TestLessonsCrossReference; acceptance red-at-pin then green",
-        "status": "pending"
+        "status": "completed"
       }
     ],
     "tags": [
@@ -102,29 +102,29 @@
         {
           "id": "ac-1",
           "text": "Append ## Test integrity and ## Mock boundary after ## CI/CD Integration (end-placement for stable testing-069+ ids)",
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "ac-2",
           "text": "Pack SoT land: author testing.md then packs:render-rules/render/verify-drift; sync testing-001/030 and append 069+",
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "ac-3",
           "text": "Rewrite testing-030 Unit Tests mocks conjunct to external-only / process-boundary form referencing Mock boundary",
-          "status": "pending"
+          "status": "completed"
         },
         {
           "id": "ac-4",
           "text": "Lock headings+bodies in coding_rules.test.ts; add #1164 to TestLessonsCrossReference; acceptance red-at-pin then green",
-          "status": "pending"
+          "status": "completed"
         }
       ],
       "ambiguity_attestation": "none_found",
       "quality_notice": "plan.items is empty after body harvest (checkbox list, Acceptance Criteria heading, or whole-line Requirements: colon-label). Add structured list items on the issue body before promote/activate; bare prose stays under #4374."
     },
     "metadata": {
-      "productPullRequest": 5324,
+      "productPullRequest": 5323,
       "intended_placement": {
         "schema": "deft.scope.intended_placement.v1",
         "files": [],
