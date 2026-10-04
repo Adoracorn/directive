@@ -21,6 +21,36 @@ export const PLAN_ITEM_EFFORTS = ["S", "M", "L", "XL"] as const;
 /** S/M/L/XL effort band for scope plan items (#1581). */
 export type PlanItemEffort = (typeof PLAN_ITEM_EFFORTS)[number];
 
+/** v1 stopConditions.kind (#1613). Assumption kind deferred. */
+export const PLAN_ITEM_STOP_CONDITION_KINDS = ["anchor"] as const;
+
+/** Closed observeAt tokens for PlanItem.stopConditions (#1613). */
+export const PLAN_ITEM_STOP_CONDITION_OBSERVE_AT = ["item-start", "item-resume"] as const;
+
+export type PlanItemStopConditionKind = (typeof PLAN_ITEM_STOP_CONDITION_KINDS)[number];
+export type PlanItemStopConditionObserveAt = (typeof PLAN_ITEM_STOP_CONDITION_OBSERVE_AT)[number];
+
+/** Shared fields for PlanItem stopConditions anchors (#1613). */
+interface PlanItemStopConditionAnchorBase {
+  readonly id: string;
+  readonly kind: PlanItemStopConditionKind;
+  /** Repo-relative path (no absolute / `..` segments). */
+  readonly path: string;
+  readonly resolvedAtSha?: string;
+  readonly rationale?: string;
+  readonly observeAt?: PlanItemStopConditionObserveAt;
+}
+
+/**
+ * Checkable mid-execution STOP anchor on a PlanItem (#1613).
+ * At least one of excerpt|digest is required at the type level.
+ */
+export type PlanItemStopConditionAnchor = PlanItemStopConditionAnchorBase &
+  (
+    | { readonly excerpt: string; readonly digest?: string }
+    | { readonly digest: string; readonly excerpt?: string }
+  );
+
 /** Nested plan item (`PlanItem` in vbrief-core.schema.json). */
 export interface PlanItem {
   readonly id?: string;
@@ -29,6 +59,8 @@ export interface PlanItem {
   readonly status: Status;
   /** Optional effort band; omit is valid. XL must not activate until broken into S/M/L (#1581). */
   readonly effort?: PlanItemEffort;
+  /** Optional mid-execution STOP anchors; omit is valid (#1613). */
+  readonly stopConditions?: readonly PlanItemStopConditionAnchor[];
   readonly narrative?: Readonly<Record<string, string>>;
   readonly items?: readonly PlanItem[];
   /** @deprecated Prefer `items`. Retained for schema compatibility. */

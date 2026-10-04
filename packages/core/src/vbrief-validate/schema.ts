@@ -13,6 +13,8 @@ import {
   VALID_PLAN_ITEM_EFFORTS,
   VALID_PLAN_ITEM_TYPES,
   VALID_PLAN_STATUSES,
+  VALID_STOP_CONDITION_KINDS,
+  VALID_STOP_CONDITION_OBSERVE_AT,
   VALID_VBRIEF_VERSIONS,
 } from "./constants.js";
 import { validatePlanNarrativesProvenance, validateReferenceTrustLevels } from "./provenance.js";
@@ -59,6 +61,84 @@ export function resolveInfoBlock(
   return null;
 }
 
+/** Closed keys for StopConditionAnchor — mirrors schema additionalProperties:false (#1613). */
+const STOP_CONDITION_ANCHOR_KEYS = new Set([
+  "id",
+  "kind",
+  "path",
+  "excerpt",
+  "digest",
+  "resolvedAtSha",
+  "rationale",
+  "observeAt",
+]);
+
+/** Repo-relative containment for stopConditions.path (no abs / drive / ..). */
+function isRepoRelativeStopPath(path: string): boolean {
+  if (path.length === 0) return false;
+  if (path.startsWith("/") || path.startsWith("\\")) return false;
+  if (/^[A-Za-z]:[\\/]/.test(path)) return false;
+  const parts = path.replace(/\\/g, "/").split("/");
+  return parts.every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+
+/** Shape refusal for PlanItem.stopConditions (#1613). Key admission lives in ITEM_CORE. */
+function validateStopConditions(value: unknown, itemPath: string, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push(`${itemPath}.stopConditions must be an array, got ${pythonTypeName(value)}`);
+    return;
+  }
+  for (let i = 0; i < value.length; i += 1) {
+    const entry = value[i];
+    const entryPath = `${itemPath}.stopConditions[${i}]`;
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      errors.push(`${entryPath} must be an object, got ${pythonTypeName(entry)}`);
+      continue;
+    }
+    const cond = entry as JsonObject;
+    for (const key of Object.keys(cond)) {
+      if (!STOP_CONDITION_ANCHOR_KEYS.has(key)) {
+        errors.push(`${entryPath} unknown field: ${pyStrRepr(key)}`);
+      }
+    }
+    if (typeof cond.id !== "string" || cond.id.length === 0) {
+      errors.push(`${entryPath} missing non-empty string 'id'`);
+    }
+    if (!("kind" in cond)) {
+      errors.push(`${entryPath} missing 'kind'`);
+    } else if (!VALID_STOP_CONDITION_KINDS.has(String(cond.kind))) {
+      errors.push(`${entryPath} invalid kind: ${pyStrRepr(String(cond.kind))}`);
+    }
+    if (typeof cond.path !== "string" || cond.path.length === 0) {
+      errors.push(`${entryPath} missing non-empty string 'path'`);
+    } else if (!isRepoRelativeStopPath(cond.path)) {
+      errors.push(`${entryPath}.path must be repo-relative (no absolute or '..' segments)`);
+    }
+    const hasExcerpt = typeof cond.excerpt === "string" && cond.excerpt.length > 0;
+    const hasDigest = typeof cond.digest === "string" && cond.digest.length > 0;
+    if (!hasExcerpt && !hasDigest) {
+      errors.push(`${entryPath} requires non-empty 'excerpt' or 'digest'`);
+    }
+    if ("excerpt" in cond && typeof cond.excerpt !== "string") {
+      errors.push(`${entryPath}.excerpt must be a string, got ${pythonTypeName(cond.excerpt)}`);
+    }
+    if ("digest" in cond && typeof cond.digest !== "string") {
+      errors.push(`${entryPath}.digest must be a string, got ${pythonTypeName(cond.digest)}`);
+    }
+    if ("resolvedAtSha" in cond && typeof cond.resolvedAtSha !== "string") {
+      errors.push(
+        `${entryPath}.resolvedAtSha must be a string, got ${pythonTypeName(cond.resolvedAtSha)}`,
+      );
+    }
+    if ("rationale" in cond && typeof cond.rationale !== "string") {
+      errors.push(`${entryPath}.rationale must be a string, got ${pythonTypeName(cond.rationale)}`);
+    }
+    if ("observeAt" in cond && !VALID_STOP_CONDITION_OBSERVE_AT.has(String(cond.observeAt))) {
+      errors.push(`${entryPath} invalid observeAt: ${pyStrRepr(String(cond.observeAt))}`);
+    }
+  }
+}
+
 function validatePlanItem(item: JsonObject, path: string, errors: string[]): void {
   const itemId = typeof item.id === "string" ? item.id : "<no-id>";
   const itemPath = `${path}[${itemId}]`;
@@ -78,6 +158,10 @@ function validatePlanItem(item: JsonObject, path: string, errors: string[]): voi
 
   if ("effort" in item && !VALID_PLAN_ITEM_EFFORTS.has(String(item.effort))) {
     errors.push(`${itemPath} invalid effort: ${pyStrRepr(String(item.effort))}`);
+  }
+
+  if ("stopConditions" in item) {
+    validateStopConditions(item.stopConditions, itemPath, errors);
   }
 
   if (typeof item.id === "string" && !PLAN_ITEM_ID_PATTERN.test(item.id)) {
