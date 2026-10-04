@@ -35,31 +35,31 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 
 ## Completed
 
-_Showing 25 of 1710 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1729 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- **#4912** -- leftover(#633): pre-PR skill skip and omitted checklist stay undetectable -- `[completed]`
+- **#479** -- feat(vbrief,resilience): prevent false memory propagation and context rot in agent sessions -- `[completed]`
+- **#633** -- Make pre-PR quality gate deterministic (CI-enforced) instead of advisory -- `[completed]`
+- **#5239** -- bug(release): v0.119.13 Windows Step 5 hang under 60m at chronology.test.ts -- `[completed]`
+- **#3495** -- feat(lifecycle): nothing detects an issue closed by a merged PR with no xBRIEF — completed-tracked is blind to unscoped work -- `[completed]`
+- **#3819** -- bug(lifecycle): the completed-artifact guard checks that a transition stamp exists, not that its disposition is valid -- `[completed]`
+- **#3875** -- Route-table closeout invokers for prescribed merge paths (#3875) -- `[completed]`
+- **#3920** -- Workspace requirement_sources staleness at intake + verify:ac/completion (#3920) -- `[completed]`
+- **#548** -- fix(spec-render): ignore bare -- in parseIncludeScopesFlag (DCR R.548 residual) -- `[completed]`
+- **#5245** -- BLOCKER: 0.119.13 consumer upgrade rejects its marker/lock and corrupts binary assets -- `[completed]`
+- **#3921** -- investigation(session): thin prompts re-invoke session ritual ~2x - more turns and context, LESS lifecycle work; the consumer-realistic shape is the worse one and no instrument reports it -- `[completed]`
+- **#3921** -- fix(session): closed session_start trigger; refuse mint-on-steal -- `[completed]`
+- **#5251** -- bug(roadmap:render): ignore bare -- as outPath (POSIX separator mis-route) -- `[completed]`
+- **#4544** -- Fail-closed AGENTS header completion chokepoint after #5178 (DCR residual #4544) -- `[completed]`
+- **#3925** -- SECURITY: the #3322 oracle-integrity detector is self-certifiable - independent_rederivation is read from the agent-writable stream and filters the flag away; field transcript shows an agent identifying the bypass -- `[completed]`
+- **#4233** -- AppSec: 1 HIGH @ 7236655e -- Incomplete #3110: node/tsx can mint/suspend UAT while authz:* CLI denies -- `[completed]`
+- **#3944** -- bug(pr-watch,review-cycle): the merge-readiness verdict reports summary-only P1 counts, so CLEAN can coexist with an open inline P1 -- `[completed]`
+- **#3979** -- bug(harness,swarm): a subagent that does no work and claims success is recorded as a successful completion -- `[completed]`
+- **#4015** -- feat(consumer-check-contract): gate reachability on pull_request is unmodelled, so a skipped gate reads as clean -- `[completed]`
 - **#5192** -- [framework-gap] bug(scope): hard membership mint contradicts the shipped no-mint proceed contract -- `[completed]`
 - **#5229** -- recurrence(#5219): host monitor/shell watch still bypasses Approach 1 after merge-path-arm ship -- `[completed]`
 - **#4709** -- bug(authz): inactive-path grant-store Write plants operator-cli and reopens first-write -- `[completed]`
 - **#4244** -- bug(coverage): coverage-final.json is never produced — hatch, hotspots, and forward-coverage diff half have no producer -- `[completed]`
 - **#3884** -- bug(session,hooks): rebasing onto a moved master revokes a worker's edit authority, and the printed recovery requires a lease it must not take -- `[completed]`
 - **#5219** -- recurrence(#4821): Grok parent shell pr:watch is not Approach 1 babysit when spawn_subagent is available -- `[completed]`
-- **#3984** -- rfc(swarm,process): the parent-must-not-own-a-multi-hour-babysit rule did not bind, and another prose restatement will not bind either -- `[completed]`
-- **#1617** -- Add WSL root-runtime ownership guard -- `[completed]`
-- **#3749** -- bug(worktree): removing a worktree can break the primary checkout's node_modules, surfacing later as an opaque MODULE_NOT_FOUND -- `[completed]`
-- **#4288** -- bug(pr:watch): merged or closed PR is not a terminal verdict; workers wait out SHA-match after squash-merge -- `[completed]`
-- **#1883** -- feat(coding,tooling): agent-legible gate failures — lint/error messages must inject remediation into agent context -- `[completed]`
-- **#4714** -- Merged scoped stories do not land in xbrief/completed/ on a fresh clone — pack-render --check drift after skill/commands edits — Greptile P1 recovery uses delivery branch + agents-entry mirror -- `[completed]`
-- **#4756** -- roadmap: Result-only buffer API — no throw vs master (#4756) -- `[completed]`
-- **#4879** -- Already-terminal plan items skip the evidence gate and still reach completed/ — Greptile P1 requirePointerShape uat-only -- `[completed]`
-- **#5188** -- bug(design-critique): N=3 + pain needs post-lean critic seat; provision process-only dest before panel (leftover from #4233) -- `[completed]`
-- **#5177** -- Residual re-ingest verb for needs-re-scope reopeneds (Prefer-A / #5177) -- `[completed]`
-- **#4544** -- Fail-closed AGENTS header placeholder gate at first-ship (DCR residual #4544) -- `[completed]`
-- **#5106** -- [framework-gap] scope:complete records provenance but does not move an evidenced active xBRIEF to completed -- `[completed]`
-- **#5013** -- deft update renders AGENTS.md from stale content while depositing newer templates, and stamps it with the new sha -- `[completed]`
-- **#4575** -- Grok implement spawn dest-place then cwd (remainder #4575 after #5184) -- `[completed]`
-- **#5184** -- bug(grok-build,swarm): dest-missing deny copy must lead with tool_input.cwd (leftover from #4575) -- `[completed]`
-- **#5176** -- Fail-closed non-empty PROJECT-DEFINITION narratives at first-ship (DCR R.4668 / #5176) -- `[completed]`
-- **#5140** -- bug(release): v0.119.11 Windows Step 5 hang at 1314/1334 under 60m — recover sub-15m suite wall-clock -- `[completed]`
-- **#5171** -- bug(session): finalize-owed tip inventory does O(n) git show of every completed xBRIEF; --defer-owed still scans (~10min) -- `[completed]`
-- **#5145** -- perf(session): --defer-owed still runs full finalize-owed tip scan; dest leaves cold-start stampede -- `[completed]`
 

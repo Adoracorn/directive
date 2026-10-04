@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.120.0] - 2026-10-04
+
+> Named Source/Confidence and verified TrustLevel (#479), shipped-closed tip discovery (#3495), merge-time closeout (#3875), requirement restamp (#3920), plus authz/occupancy and related fixes.
+
+### Added
+
 - **Controller-issued pre-PR completion records (#4912).** `deft pre-pr:run` starts a repository-controlled workflow whose private-store record is merge authority for the prescribed pre-PR loop. Opening the skill file or a generic mark-complete cannot mint a pass. Head-side xbrief/active weakening cannot produce a mergeable pass. Checkbox parsers, gitignored markers, author-supplied run ids, and one-PR-unit verdicts stay non-authority. App/ruleset enrollment stays #4976. Renews evaluator-surface disclosure for the vitest subpath alias. Tracking #4912.
 - **Named Source/Confidence vocabulary and a verified TrustLevel (#479).** Plan narratives use named source-class and confidence terms plus claim provenance; confidence cannot replace evidence. TrustLevel gains verified without changing existing promotion rules. Failed plan items need an invalidates edge (or complete ruled-out proof); whole-story fail/cancel does not. Tracking #479.
 - **Wire `verify:changelog-unreleased` into `check:framework-source` (#633).** Reuses `changelog-check` (no second Unreleased language). Records operator-owned repo-scoped ruleset enrollment for required context `Merge gate (task check)` with admin-enforcement and artifact-only skip-path validation before flipping. Shrinks the PR template checklist to items with named detectors and moves Post-Merge out of `- [ ]` syntax. Does not implement Tiers 1-3. Does not claim to close P1 (parked on #4912). Tracking #633.
@@ -6793,7 +6805,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.119.13...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.120.0...HEAD
+[0.120.0]: https://github.com/deftai/directive/compare/v0.119.13...v0.120.0
 [0.119.13]: https://github.com/deftai/directive/compare/v0.119.12...v0.119.13
 [0.119.12]: https://github.com/deftai/directive/compare/v0.119.11...v0.119.12
 [0.119.11]: https://github.com/deftai/directive/compare/v0.119.10...v0.119.11
