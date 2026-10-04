@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Accept valid leftover item status on #3715.** Correct four leftover plan items that still used a retired status word so validation accepts the completed brief. Tracking #3715.
+
 ### Removed
 
 ## [0.120.0] - 2026-10-04
