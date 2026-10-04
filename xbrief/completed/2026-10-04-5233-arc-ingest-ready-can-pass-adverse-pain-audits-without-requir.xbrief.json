@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #5233",
-    "updated": "2026-10-04T14:42:51Z"
+    "updated": "2026-10-04T21:34:10Z"
   },
   "plan": {
     "title": "ARC ingest-ready can pass adverse pain audits without required follow-through",
-    "status": "running",
+    "status": "completed",
     "narratives": {
       "Description": "ARC ingest-ready can pass adverse pain audits without required follow-through",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/5233",
@@ -17,47 +17,164 @@
       {
         "id": "bound-1",
         "title": "Carrier (critic-authored): pain-audit critic posts MUST carry closed operative line-start fields declaring finding class set (incl. explicit empty) + closed harvest-changed boolean; operative-position filtering; reconcile L667 by closed grammar + one shared completed-arc consumer (not parallel stamp gate)",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-2",
         "title": "Shared consumer: compose evaluatePainAuditFollowThrough from closed fields + disposition; consume from completed-arc pain-coverage so evaluateAutoStampPath1Write, applyIngestReadyRemainingSet, and intake refuse together",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-3",
         "title": "Accumulated denominator: readiness refuses while any post-lean targeting audit against asserted coverage lacks disposed follow-through; later footnote-only/non-harvest does not erase prior undisposed adverse on that harvest",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-4",
         "title": "Blocking retires harvest: retraction map then Handoff; recording retraction/Handoff never makes rejected harvest ingest-ready; resumed bind needs new lean + later independent audit; negative fixtures for Handoff-as-clearance",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-5",
         "title": "Harvest-changing continuation: refuse until changed lean AND later independent audit; harvest identity = sha256 of Bound-remedy bytes; byte-identical re-post does not discharge; semantic disposition still required",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-6",
         "title": "Absence/malformed default: missing/malformed/conflicting/parent-understated finding declarations after targeting audit refuse path-1/chip/completed-record/intake; parent must not overwrite critic classes; independence clearance (#4442) unchanged",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-7",
         "title": "Refuse reason + gate-evolution: dedicated completed-arc block reason (or fold into unresolved-pain-audit with distinguishing detail) + reason-specific recovery; fixtures for both shapes",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-8",
         "title": "Legacy/fixture policy: raw #5192 adverse snapshots MUST refuse; successful original/final pass only when augmented with valid closure grammar (or documented compatibility that does not reopen hole); no silent Target-digest restamp; no auto label revocation",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       },
       {
         "id": "bound-9",
         "title": "Regression fixtures: ceilings 5919579871 blocking + 5938850553 harvest-changing; positive controls; Handoff-not-clearance; byte-identical lean rotation; footnote-no-launder; missing carrier refuse; authorized continuation after genuine change + later audit",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/notes": "Prefer-A leftover-complete disposition.",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5325",
+            "mintedAt": "2026-10-04T21:20:31.882Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-04T21:20:31.882Z"
+        }
       }
     ],
     "tags": [
@@ -104,47 +221,164 @@
         {
           "id": "ac-1",
           "text": "Carrier (critic-authored): pain-audit critic posts MUST carry closed operative line-start fields declaring finding class set (incl. explicit empty) + closed harvest-changed boolean; operative-position filtering; reconcile L667 by closed grammar + one shared completed-arc consumer (not parallel stamp gate)",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-2",
           "text": "Shared consumer: compose evaluatePainAuditFollowThrough from closed fields + disposition; consume from completed-arc pain-coverage so evaluateAutoStampPath1Write, applyIngestReadyRemainingSet, and intake refuse together",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-3",
           "text": "Accumulated denominator: readiness refuses while any post-lean targeting audit against asserted coverage lacks disposed follow-through; later footnote-only/non-harvest does not erase prior undisposed adverse on that harvest",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-4",
           "text": "Blocking retires harvest: retraction map then Handoff; recording retraction/Handoff never makes rejected harvest ingest-ready; resumed bind needs new lean + later independent audit; negative fixtures for Handoff-as-clearance",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-5",
           "text": "Harvest-changing continuation: refuse until changed lean AND later independent audit; harvest identity = sha256 of Bound-remedy bytes; byte-identical re-post does not discharge; semantic disposition still required",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-6",
           "text": "Absence/malformed default: missing/malformed/conflicting/parent-understated finding declarations after targeting audit refuse path-1/chip/completed-record/intake; parent must not overwrite critic classes; independence clearance (#4442) unchanged",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-7",
           "text": "Refuse reason + gate-evolution: dedicated completed-arc block reason (or fold into unresolved-pain-audit with distinguishing detail) + reason-specific recovery; fixtures for both shapes",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-8",
           "text": "Legacy/fixture policy: raw #5192 adverse snapshots MUST refuse; successful original/final pass only when augmented with valid closure grammar (or documented compatibility that does not reopen hole); no silent Target-digest restamp; no auto label revocation",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         },
         {
           "id": "ac-9",
           "text": "Regression fixtures: ceilings 5919579871 blocking + 5938850553 harvest-changing; positive controls; Handoff-not-clearance; byte-identical lean rotation; footnote-no-launder; missing carrier refuse; authorized continuation after genuine change + later audit",
-          "status": "pending"
+          "status": "pending",
+          "artifact_path": null,
+          "x-directive/disposition": {
+            "disposition": "not_applicable",
+            "reason": "Prefer-A leftover-complete after product PR #5325 (+ split #5345) squash-merge (Tracking #5233). Bound limbs shipped; Greptile CLEAN then MERGED.",
+            "provenance": {
+              "kind": "operator-session",
+              "actor": "Scott",
+              "eventRef": "leftover-complete-after-5325",
+              "mintedAt": "2026-10-04T21:20:31.882Z",
+              "mintedVia": "parent-retained-closer"
+            },
+            "recorded_at": "2026-10-04T21:20:31.882Z"
+          }
         }
       ]
     },
@@ -472,9 +706,34 @@
           "leftover-role-auth"
         ]
       },
-      "productPullRequest": 5325
+      "productPullRequest": 5325,
+      "admitted_source_digest": "9234b16def420c34c2d4e14975724cfc5eb95ca842003da5b020d5d6cf0dc572",
+      "ambiguity_attestation": "none_found",
+      "completionProvenance": {
+        "repository": null,
+        "implementationCommit": null,
+        "prNumber": 5325,
+        "prBase": null,
+        "mergeCommit": "e7471ea52b2f768caf9a301079b53ff5ea69fc76",
+        "deliveryBranch": "master",
+        "deliveryCommit": "12506a8af9d70d43b77b0c7dc2c32ac7c317b410",
+        "verifiedAt": "2026-10-04T21:34:10Z",
+        "verifier": "scope:complete",
+        "disposition": "delivered",
+        "handoffState": "delivered",
+        "deployed": null,
+        "uatVerified": null
+      },
+      "deliveryDisposition": "delivered",
+      "handoffState": "delivered",
+      "completedAt": "2026-10-04T21:34:10Z",
+      "capacityBucket": "technical-debt",
+      "lifecycleWrite": {
+        "action": "complete",
+        "writtenAt": "2026-10-04T21:34:10Z"
+      }
     },
     "id": "github.issue.5668365121",
-    "updated": "2026-10-04T14:42:51Z"
+    "updated": "2026-10-04T21:34:10Z"
   }
 }
