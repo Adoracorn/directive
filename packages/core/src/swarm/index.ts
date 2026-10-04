@@ -1,5 +1,10 @@
 export * from "./approach1-babysitter.js";
 export * from "./brief-transport.js";
+export * from "./cohort-review-monitors.js";
+export {
+  parseCohortReviewMonitorsArgv,
+  verifyCohortReviewMonitorsMain,
+} from "./cohort-review-monitors-cli.js";
 export * from "./complete-cohort.js";
 export { completeCohortMain } from "./complete-cohort-cli.js";
 export * from "./constants.js";
