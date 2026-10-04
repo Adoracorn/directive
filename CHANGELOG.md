@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Cohort inventory resolver and attestation hardening (#5318).** Omitted `--prs` uses the default resolver; discovery and attestation failures fail closed instead of hiding siblings or arming on error. Tracking #5318.
 
+- **chore(xbrief): leftover-complete #5318 after #5328.** Lands Prefer-A completed brief with productPullRequest 5328. Tracking #5318.
 - **chore(xbrief): leftover-complete #3739 after #5331.** Lands Prefer-A completed brief with productPullRequest 5331. Tracking #3739.
 - **design-critique chip ensure Greptile P1s (#5326).** Classify real `gh api` missing-label as exit 1 + HTTP 404 stderr (not exit 404); prove ingest-ready completed-arc + Target-digest before ensure; match judgmentGates on labels.any-of/all-of only (not body-text); resolve deposit/gate advisory via git toplevel when CLI omits projectRoot. Tracking #5326.
 - **Nested host tool.before timeout is 30s; health rejects stale 5s deposits (#3739).**
