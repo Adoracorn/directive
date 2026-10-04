@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **chore(xbrief): leftover-complete #3739 after #5331.** Lands Prefer-A completed brief with productPullRequest 5331. Tracking #3739.
 - **design-critique chip ensure Greptile P1s (#5326).** Classify real `gh api` missing-label as exit 1 + HTTP 404 stderr (not exit 404); prove ingest-ready completed-arc + Target-digest before ensure; match judgmentGates on labels.any-of/all-of only (not body-text); resolve deposit/gate advisory via git toplevel when CLI omits projectRoot. Tracking #5326.
 - **Nested host tool.before timeout is 30s; health rejects stale 5s deposits (#3739).**
 - **fix(sor): drop LOW_RISK slash-form test-tree prefix that tripped class-checks (#1492).** Segment match keeps diff-scanner exemption without a production `tests/` literal. Tracking #1492.
