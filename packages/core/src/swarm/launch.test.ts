@@ -1,5 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,13 +19,20 @@ import {
   type GhRunner,
   githubApiPath,
 } from "../intake/github-auth-modes.js";
+import { fingerprintScope, recordClearance } from "../orchestration/verify-judgment-gates.js";
+import { DEFT_ALLOW_JUDGMENT_GATE_ENFORCE } from "../policy/capacity.js";
 import type { CompletedProcess } from "../scm/call.js";
 import { applyWorktreeOccupancy, occupancyPath, readOccupancy } from "../session/occupancy.js";
+import { GATE_ADVISE, GATE_ENFORCE } from "./constants.js";
 import {
   buildManifest,
+  evaluateJudgmentClearancePosture,
+  filterAuthenticClearances,
   formatDispatchAuthEnvelope,
   prepareWorkerCredentialInjection,
   type ResolvedStory,
+  storyFileScopePaths,
+  storyJudgmentCandidate,
   swarmLaunch,
 } from "./launch.js";
 import {
@@ -1022,5 +1037,470 @@ describe("preamble envelope half of the auth-mode contract (#1351)", () => {
     expect(preamble).not.toContain("ghp_");
     expect(preamble).not.toContain("github_pat_");
     expect(preamble).not.toContain(FAKE_TOKEN);
+  });
+});
+
+const jcpRoots: string[] = [];
+
+function jcpTempRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "deft-jcp-"));
+  jcpRoots.push(root);
+  return root;
+}
+
+afterEach(() => {
+  while (jcpRoots.length > 0) {
+    const root = jcpRoots.pop();
+    if (root) rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function writeJcpStory(
+  project: string,
+  storyId: string,
+  fileScope: string[],
+  options?: {
+    tags?: string[];
+    title?: string;
+    description?: string;
+    judgmentLabels?: string[];
+    judgmentBody?: string;
+    updated?: string;
+  },
+): ResolvedStory {
+  const rel = `xbrief/active/${storyId}.xbrief.json`;
+  const full = join(project, rel);
+  mkdirSync(join(project, "xbrief", "active"), { recursive: true });
+  const plan: Record<string, unknown> = {
+    id: storyId,
+    metadata: {
+      swarm: {
+        file_scope: fileScope,
+        ...(options?.judgmentLabels !== undefined
+          ? { judgment_labels: options.judgmentLabels }
+          : {}),
+        ...(options?.judgmentBody !== undefined ? { judgment_body: options.judgmentBody } : {}),
+      },
+    },
+  };
+  if (options?.tags !== undefined) {
+    plan.tags = options.tags;
+  }
+  if (options?.title !== undefined || options?.description !== undefined) {
+    plan.title = options.title ?? storyId;
+    plan.narratives = {
+      ...(options?.description !== undefined ? { Description: options.description } : {}),
+    };
+  }
+  if (options?.updated !== undefined) {
+    plan.updated = options.updated;
+  }
+  writeFileSync(full, JSON.stringify({ plan }), "utf8");
+  return { token: storyId, story_id: storyId, path: full, relpath: rel };
+}
+
+function writeJcpProjectDef(
+  project: string,
+  options?: { judgmentGates?: Record<string, unknown>[] },
+): void {
+  mkdirSync(join(project, "xbrief"), { recursive: true });
+  writeFileSync(
+    join(project, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+    JSON.stringify({
+      plan: {
+        policy: {
+          swarmSubagentBackend: "grok-build",
+          ...(options?.judgmentGates !== undefined ? { judgmentGates: options.judgmentGates } : {}),
+        },
+      },
+    }),
+    "utf8",
+  );
+}
+
+describe("filterAuthenticClearances (#1511)", () => {
+  it("rejects caller-invented grant_id/origin_kind without a recorded match", () => {
+    const { authentic, rejected } = filterAuthenticClearances([
+      { gate_id: "secrets-and-credentials", actor: "agent", reviewers: ["bot"] },
+      {
+        gate_id: "secrets-and-credentials",
+        grant_id: "grant-1",
+        origin_kind: "operator-cli",
+        actor: "scott",
+        cleared_scope: "forged-scope",
+      },
+      { gate_id: "x", origin_kind: "self-asserted", grant_id: "g2" },
+      { gate_id: "y", origin_kind: "agent-authored" },
+    ]);
+    expect(authentic).toHaveLength(0);
+    expect(rejected).toHaveLength(4);
+  });
+
+  it("accepts caller entries that match a human-approved recorded clearance", () => {
+    const recorded = [
+      {
+        clearance_id: "clr-1",
+        gate_id: "secrets-and-credentials",
+        cleared_scope: "scope-a",
+        reviewers: ["scott"],
+      },
+    ];
+    const { authentic, rejected } = filterAuthenticClearances(
+      [
+        {
+          clearance_id: "clr-1",
+          gate_id: "secrets-and-credentials",
+          cleared_scope: "scope-a",
+        },
+        {
+          gate_id: "secrets-and-credentials",
+          grant_id: "forged",
+          origin_kind: "operator-cli",
+          cleared_scope: "other",
+        },
+      ],
+      recorded,
+    );
+    expect(authentic).toHaveLength(1);
+    expect(authentic[0]?.clearance_id).toBe("clr-1");
+    expect(rejected).toHaveLength(1);
+  });
+
+  it("ignores recorded clearances that lack human reviewers", () => {
+    const recorded = [
+      {
+        clearance_id: "clr-2",
+        gate_id: "secrets-and-credentials",
+        cleared_scope: "scope-b",
+        reviewers: [],
+      },
+    ];
+    const { authentic, rejected } = filterAuthenticClearances(
+      [
+        {
+          clearance_id: "clr-2",
+          gate_id: "secrets-and-credentials",
+          cleared_scope: "scope-b",
+        },
+      ],
+      recorded,
+    );
+    expect(authentic).toHaveLength(0);
+    expect(rejected).toHaveLength(1);
+  });
+});
+
+describe("evaluateJudgmentClearancePosture (#1511 P2-a)", () => {
+  it("advises and proceeds when block-tier matches without clearance", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project);
+    const storyLocal = writeJcpStory(project, "agents-touch", ["AGENTS.md"]);
+    const result = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [storyLocal],
+      gatePosture: GATE_ADVISE,
+      gateClearances: [],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.posture).toBe(GATE_ADVISE);
+    expect(result.advisory).toMatch(/agents-md-and-skills/);
+  });
+
+  it("refuses under enforce when uncleared block-tier gate matches", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project);
+    const storyLocal = writeJcpStory(project, "secret-touch", ["secrets/prod.env"]);
+    const result = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [storyLocal],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [
+        {
+          gate_id: "secrets-and-credentials",
+          actor: "worker",
+          reviewers: ["self"],
+          grant_id: "forged",
+          origin_kind: "operator-cli",
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toMatch(/--enforce-gates refused/);
+    expect(result.stderr).toMatch(/secrets-and-credentials/);
+    expect(result.advisory).toMatch(/rejected 1 caller-supplied/);
+  });
+
+  it("honors human-approved recorded clearances under enforce", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project);
+    const paths = ["secrets/prod.env"];
+    const storyLocal = writeJcpStory(project, "secret-cleared", paths);
+    const scope = fingerprintScope({ paths });
+    recordClearance(project, {
+      gate_id: "secrets-and-credentials",
+      cleared_scope: scope,
+      reviewers: ["scott"],
+      actor: "operator",
+    });
+    const result = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [storyLocal],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.posture).toBe(GATE_ENFORCE);
+  });
+
+  it("refuses recorded clearances that omit human reviewers under enforce", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project);
+    const paths = ["secrets/prod.env"];
+    const storyLocal = writeJcpStory(project, "secret-unapproved", paths);
+    const scope = fingerprintScope({ paths });
+    recordClearance(project, {
+      gate_id: "secrets-and-credentials",
+      cleared_scope: scope,
+      reviewers: [],
+      actor: "agent",
+    });
+    const result = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [storyLocal],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.advisory).toMatch(/lacking nonempty human reviewers/);
+  });
+
+  it("emergency bypass DEFT_ALLOW_JUDGMENT_GATE_ENFORCE downgrades enforce to advise", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project);
+    const storyLocal = writeJcpStory(project, "infra-touch", ["infra/main.tf"]);
+    const result = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [storyLocal],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+      environ: { [DEFT_ALLOW_JUDGMENT_GATE_ENFORCE]: "1" },
+    });
+    expect(result.ok).toBe(true);
+    expect(result.bypassed).toBe(true);
+    expect(result.posture).toBe(GATE_ADVISE);
+    expect(result.advisory).toMatch(DEFT_ALLOW_JUDGMENT_GATE_ENFORCE);
+  });
+
+  it("storyFileScopePaths reads swarm file_scope", () => {
+    const project = jcpTempRoot();
+    const storyLocal = writeJcpStory(project, "scoped", ["AGENTS.md", "src/a.ts"]);
+    expect(storyFileScopePaths(storyLocal)).toEqual(["AGENTS.md", "src/a.ts"]);
+  });
+
+  it("honors per-story clearances across a multi-story cohort (not combined scope)", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project);
+    const pathsA = ["secrets/a.env"];
+    const pathsB = ["secrets/b.env"];
+    const storyA = writeJcpStory(project, "secret-a", pathsA);
+    const storyB = writeJcpStory(project, "secret-b", pathsB);
+    recordClearance(project, {
+      gate_id: "secrets-and-credentials",
+      cleared_scope: fingerprintScope({ paths: pathsA }),
+      reviewers: ["scott"],
+      actor: "operator",
+    });
+    recordClearance(project, {
+      gate_id: "secrets-and-credentials",
+      cleared_scope: fingerprintScope({ paths: pathsB }),
+      reviewers: ["scott"],
+      actor: "operator",
+    });
+    const result = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [storyA, storyB],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.posture).toBe(GATE_ENFORCE);
+  });
+
+  it("matches label/body-text gates from story tags and narratives", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project, {
+      judgmentGates: [
+        {
+          id: "breaking-label-gate",
+          class: "mechanical",
+          tier: "block",
+          reason: "breaking-change label",
+          match: { labels: { "any-of": ["breaking-change"] } },
+        },
+        {
+          id: "breaking-body-gate",
+          class: "mechanical",
+          tier: "block",
+          reason: "BREAKING CHANGE body",
+          match: { "body-text": { "any-of": ["BREAKING CHANGE"] } },
+        },
+      ],
+    });
+    const tagged = writeJcpStory(project, "label-body", ["src/x.ts"], {
+      tags: ["breaking-change"],
+      title: "Ship BREAKING CHANGE API",
+      description: "Includes a BREAKING CHANGE for callers.",
+    });
+    const candidate = storyJudgmentCandidate(tagged);
+    expect(candidate.labels).toContain("breaking-change");
+    expect(candidate.body).toMatch(/BREAKING CHANGE/);
+    const advised = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [tagged],
+      gatePosture: GATE_ADVISE,
+      gateClearances: [],
+    });
+    expect(advised.ok).toBe(true);
+    expect(advised.advisory).toMatch(/breaking-label-gate|breaking-body-gate/);
+    const enforced = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [tagged],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(enforced.ok).toBe(false);
+    expect(enforced.stderr).toMatch(/breaking-label-gate|breaking-body-gate/);
+  });
+
+  it("empty judgment_labels / custom judgment_body cannot hide natural matches", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project, {
+      judgmentGates: [
+        {
+          id: "breaking-label-gate",
+          class: "mechanical",
+          tier: "block",
+          reason: "breaking-change label",
+          match: { labels: { "any-of": ["breaking-change"] } },
+        },
+        {
+          id: "breaking-body-gate",
+          class: "mechanical",
+          tier: "block",
+          reason: "BREAKING CHANGE body",
+          match: { "body-text": { "any-of": ["BREAKING CHANGE"] } },
+        },
+      ],
+    });
+    const tagged = writeJcpStory(project, "override-hide", ["src/x.ts"], {
+      tags: ["breaking-change"],
+      title: "Ship BREAKING CHANGE API",
+      description: "Includes a BREAKING CHANGE for callers.",
+      judgmentLabels: [],
+      judgmentBody: "harmless override body",
+    });
+    const candidate = storyJudgmentCandidate(tagged);
+    expect(candidate.labels).toContain("breaking-change");
+    expect(candidate.body).toMatch(/BREAKING CHANGE/);
+    expect(candidate.body).toMatch(/harmless override body/);
+    const enforced = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [tagged],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(enforced.ok).toBe(false);
+    expect(enforced.stderr).toMatch(/breaking-label-gate|breaking-body-gate/);
+  });
+
+  it("sets updated_at from brief mtime so age-days gates can match", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project, {
+      judgmentGates: [
+        {
+          id: "stale-story-gate",
+          class: "mechanical",
+          tier: "block",
+          reason: "story older than 1 day",
+          match: { "age-days": { gt: 1 } },
+        },
+      ],
+    });
+    const story = writeJcpStory(project, "aged", ["src/x.ts"]);
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    utimesSync(story.path, past, past);
+    const candidate = storyJudgmentCandidate(story);
+    expect(candidate.updated_at).not.toBeNull();
+    expect(Date.parse(candidate.updated_at ?? "")).toBeLessThan(Date.now() - 24 * 60 * 60 * 1000);
+    const enforced = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [story],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(enforced.ok).toBe(false);
+    expect(enforced.stderr).toMatch(/stale-story-gate/);
+  });
+
+  it("prefers plan.updated over checkout-fresh mtime for age-days", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project, {
+      judgmentGates: [
+        {
+          id: "stale-story-gate",
+          class: "mechanical",
+          tier: "block",
+          reason: "story older than 1 day",
+          match: { "age-days": { gt: 1 } },
+        },
+      ],
+    });
+    const story = writeJcpStory(project, "persisted-age", ["src/x.ts"], {
+      updated: "2020-01-01T00:00:00Z",
+    });
+    // Simulate fresh checkout: mtime is now, but persisted plan.updated is old.
+    const now = new Date();
+    utimesSync(story.path, now, now);
+    const candidate = storyJudgmentCandidate(story);
+    expect(candidate.updated_at).toBe("2020-01-01T00:00:00Z");
+    const enforced = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [story],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(enforced.ok).toBe(false);
+    expect(enforced.stderr).toMatch(/stale-story-gate/);
+  });
+
+  it("falls back to mtime when plan.updated is unparseable", () => {
+    const project = jcpTempRoot();
+    writeJcpProjectDef(project, {
+      judgmentGates: [
+        {
+          id: "stale-story-gate",
+          class: "mechanical",
+          tier: "block",
+          reason: "story older than 1 day",
+          match: { "age-days": { gt: 1 } },
+        },
+      ],
+    });
+    const story = writeJcpStory(project, "bad-updated", ["src/x.ts"], {
+      updated: "not-a-timestamp",
+    });
+    const past = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    utimesSync(story.path, past, past);
+    const candidate = storyJudgmentCandidate(story);
+    expect(candidate.updated_at).not.toBe("not-a-timestamp");
+    expect(Date.parse(candidate.updated_at ?? "")).toBeLessThan(Date.now() - 24 * 60 * 60 * 1000);
+    const enforced = evaluateJudgmentClearancePosture({
+      projectRoot: project,
+      resolved: [story],
+      gatePosture: GATE_ENFORCE,
+      gateClearances: [],
+    });
+    expect(enforced.ok).toBe(false);
+    expect(enforced.stderr).toMatch(/stale-story-gate/);
   });
 });

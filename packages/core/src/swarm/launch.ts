@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { isHumanOriginKind, isRejectedOriginKind } from "../authz/origin.js";
 import { containedRemove, containedWrite } from "../fs/contained-write.js";
 import {
   ENV_EXPECTED_GITHUB_LOGIN,
@@ -22,8 +23,16 @@ import {
   stripArtifactSuffix,
 } from "../layout/resolve.js";
 import { evaluateWorkerInstallationPermissions } from "../one-pr-unit/dest-token.js";
+import {
+  buildReport,
+  type Candidate,
+  readClearances,
+  renderReport,
+  reportBlocking,
+} from "../orchestration/verify-judgment-gates.js";
 import { readPlanSequence, verifyPlanTarget } from "../plan-sequence/index.js";
 import type { PlanSequenceVerifyResult } from "../plan-sequence/types.js";
+import { DEFT_ALLOW_JUDGMENT_GATE_ENFORCE } from "../policy/capacity.js";
 import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
 import { evaluate as preflightEvaluate } from "../preflight/evaluate.js";
 import { applyWorktreeOccupancy, liveOccupant, releaseOccupancy } from "../session/occupancy.js";
@@ -77,6 +86,357 @@ export type ReadinessGateFn = (
   projectRoot: string,
   options?: { soloHeadless?: boolean },
 ) => { exitCode: number; report: string };
+
+/** Collect plan.metadata.swarm.file_scope paths from a resolved story. */
+export function storyFileScopePaths(story: ResolvedStory): string[] {
+  try {
+    const raw = JSON.parse(readFileSync(story.path, "utf8")) as {
+      plan?: { metadata?: { swarm?: { file_scope?: unknown } } };
+    };
+    const scope = raw.plan?.metadata?.swarm?.file_scope;
+    if (!Array.isArray(scope)) {
+      return [];
+    }
+    return scope.filter((p): p is string => typeof p === "string" && p.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Per-story judgment-gate candidate (#1511 review residual).
+ * Paths come from swarm.file_scope; labels/body always include plan tags +
+ * narratives so label/body-text gates cannot be hidden. Optional
+ * swarm.judgment_labels / judgment_body are additive supplements only
+ * (empty judgment_labels must not wipe tags). updated_at prefers persisted
+ * plan.updated / xBRIEFInfo.updated (survives checkout) then brief mtime
+ * so age-days gates cannot be reset by a fresh worktree checkout. Cohort
+ * launch evaluates each story separately so per-story cleared_scope
+ * fingerprints stay valid.
+ */
+/** Prefer parseable ISO timestamps; reject garbage that would miss age-days. */
+function parseableUpdatedAt(value: unknown): string | null {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  const trimmed = value.trim();
+  const parsed = new Date(trimmed.endsWith("Z") ? trimmed : trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return trimmed;
+}
+
+export function storyJudgmentCandidate(story: ResolvedStory): Candidate {
+  const paths = storyFileScopePaths(story);
+  let mtimeAt: string | null = null;
+  try {
+    mtimeAt = statSync(story.path).mtime.toISOString();
+  } catch {
+    mtimeAt = null;
+  }
+  let labels: string[] = [];
+  const bodyParts: string[] = [];
+  let persistedUpdated: string | null = null;
+  try {
+    const raw = JSON.parse(readFileSync(story.path, "utf8")) as {
+      xBRIEFInfo?: { updated?: unknown };
+      plan?: {
+        title?: unknown;
+        tags?: unknown;
+        updated?: unknown;
+        narratives?: Record<string, unknown>;
+        metadata?: {
+          swarm?: {
+            judgment_labels?: unknown;
+            judgment_body?: unknown;
+          };
+        };
+      };
+    };
+    persistedUpdated = parseableUpdatedAt(raw.xBRIEFInfo?.updated);
+    const plan = raw.plan;
+    const planUpdated = parseableUpdatedAt(plan?.updated);
+    if (planUpdated !== null) {
+      persistedUpdated = planUpdated;
+    }
+    if (plan === undefined) {
+      return {
+        paths,
+        labels,
+        body: "",
+        state: "open",
+        updated_at: persistedUpdated ?? mtimeAt,
+      };
+    }
+    const swarm = plan.metadata?.swarm;
+    // Natural labels first — empty judgment_labels must not wipe them.
+    if (Array.isArray(plan.tags)) {
+      labels = plan.tags.filter((t): t is string => typeof t === "string" && t.length > 0);
+    } else {
+      const narrLabels = plan.narratives?.Labels;
+      if (typeof narrLabels === "string" && narrLabels.trim().length > 0) {
+        labels = narrLabels
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
+      }
+    }
+    const overrideLabels = swarm?.judgment_labels;
+    if (Array.isArray(overrideLabels)) {
+      for (const t of overrideLabels) {
+        if (typeof t === "string" && t.length > 0 && !labels.includes(t)) {
+          labels.push(t);
+        }
+      }
+    }
+    // Natural title/narratives always included; judgment_body is additive.
+    if (typeof plan.title === "string" && plan.title.length > 0) {
+      bodyParts.push(plan.title);
+    }
+    for (const key of ["Description", "Overview", "Origin"] as const) {
+      const value = plan.narratives?.[key];
+      if (typeof value === "string" && value.length > 0) {
+        bodyParts.push(value);
+      }
+    }
+    const overrideBody = swarm?.judgment_body;
+    if (typeof overrideBody === "string" && overrideBody.length > 0) {
+      bodyParts.push(overrideBody);
+    }
+  } catch {
+    // unreadable brief → path-only candidate (mtime retained when readable)
+  }
+  return {
+    paths,
+    labels,
+    body: bodyParts.join("\n\n"),
+    state: "open",
+    updated_at: persistedUpdated ?? mtimeAt,
+  };
+}
+
+function clearanceFingerprint(entry: Record<string, unknown>): string | null {
+  const gateId = typeof entry.gate_id === "string" ? entry.gate_id.trim() : "";
+  const scope = typeof entry.cleared_scope === "string" ? entry.cleared_scope.trim() : "";
+  if (gateId.length === 0 || scope.length === 0) {
+    return null;
+  }
+  return `${gateId}\0${scope}`;
+}
+
+/** Recorded clearances need a nonempty human reviewer list (not just log presence). */
+export function recordedClearanceHasHumanApproval(entry: Record<string, unknown>): boolean {
+  const reviewers = entry.reviewers;
+  if (!Array.isArray(reviewers)) {
+    return false;
+  }
+  return reviewers.some((r) => typeof r === "string" && r.trim().length > 0);
+}
+
+/**
+ * Clearance authenticity (#1511 Prefer-A §4): caller-supplied actor/reviewer
+ * strings, invented grant_id, or claimed origin_kind alone are not authority.
+ * A caller entry is authentic only when it matches an independent recorded
+ * clearance (clearance_id or gate_id+cleared_scope) that itself carries a
+ * nonempty human reviewer list from the project audit log.
+ */
+export function filterAuthenticClearances(
+  entries: readonly Record<string, unknown>[],
+  recorded: readonly Record<string, unknown>[] = [],
+): {
+  authentic: Record<string, unknown>[];
+  rejected: Record<string, unknown>[];
+} {
+  const recordedIds = new Set<string>();
+  const recordedFingerprints = new Set<string>();
+  for (const rec of recorded) {
+    if (!recordedClearanceHasHumanApproval(rec)) {
+      continue;
+    }
+    if (typeof rec.clearance_id === "string" && rec.clearance_id.trim().length > 0) {
+      recordedIds.add(rec.clearance_id.trim());
+    }
+    const fp = clearanceFingerprint(rec);
+    if (fp !== null) {
+      recordedFingerprints.add(fp);
+    }
+  }
+
+  const authentic: Record<string, unknown>[] = [];
+  const rejected: Record<string, unknown>[] = [];
+  for (const entry of entries) {
+    const clearanceId =
+      typeof entry.clearance_id === "string" && entry.clearance_id.trim().length > 0
+        ? entry.clearance_id.trim()
+        : null;
+    const fp = clearanceFingerprint(entry);
+    const matchedRecorded =
+      (clearanceId !== null && recordedIds.has(clearanceId)) ||
+      (fp !== null && recordedFingerprints.has(fp));
+    if (!matchedRecorded) {
+      rejected.push(entry);
+      continue;
+    }
+
+    const originKindRaw =
+      (typeof entry.origin_kind === "string" && entry.origin_kind) ||
+      (typeof entry.approval_origin === "string" && entry.approval_origin) ||
+      (typeof entry.grant_origin_kind === "string" && entry.grant_origin_kind) ||
+      null;
+    const originKind = originKindRaw !== null ? originKindRaw.trim() : null;
+    if (originKind !== null && isRejectedOriginKind(originKind)) {
+      rejected.push(entry);
+      continue;
+    }
+    if (originKind !== null && !isHumanOriginKind(originKind)) {
+      rejected.push(entry);
+      continue;
+    }
+    authentic.push(entry);
+  }
+  return { authentic, rejected };
+}
+
+export interface JudgmentClearancePostureResult {
+  readonly ok: boolean;
+  readonly exitCode: number;
+  readonly stderr: string;
+  readonly advisory: string;
+  readonly posture: string;
+  readonly bypassed: boolean;
+}
+
+/**
+ * Wire swarm:launch judgment-clearance posture into the judgment-gate engine
+ * (#1511 Prefer-A §2 / P2-a). Enforce refuses uncleared block-tier matches;
+ * advise surfaces and proceeds. Clearance ≠ emergency bypass.
+ */
+export function evaluateJudgmentClearancePosture(options: {
+  projectRoot: string;
+  resolved: readonly ResolvedStory[];
+  gatePosture: string;
+  gateClearances: readonly Record<string, unknown>[];
+  environ?: NodeJS.ProcessEnv;
+}): JudgmentClearancePostureResult {
+  const envBag = options.environ ?? process.env;
+  const bypassed =
+    envBag[DEFT_ALLOW_JUDGMENT_GATE_ENFORCE] === "1" ||
+    envBag[DEFT_ALLOW_JUDGMENT_GATE_ENFORCE] === "true";
+  const posture = bypassed ? GATE_ADVISE : options.gatePosture;
+
+  const recordedRaw = readClearances(options.projectRoot);
+  const recorded = recordedRaw.filter(recordedClearanceHasHumanApproval);
+  const rejectedUnapprovedLog = recordedRaw.length - recorded.length;
+  const { authentic: matchedCaller, rejected } = filterAuthenticClearances(
+    options.gateClearances,
+    recorded,
+  );
+  const seenKeys = new Set<string>();
+  const authentic: Record<string, unknown>[] = [];
+  for (const entry of [...recorded, ...matchedCaller]) {
+    const id =
+      typeof entry.clearance_id === "string" && entry.clearance_id.trim().length > 0
+        ? `id:${entry.clearance_id.trim()}`
+        : clearanceFingerprint(entry);
+    const key = id ?? `anon:${authentic.length}`;
+    if (seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    authentic.push(entry);
+  }
+
+  const advisoryParts: string[] = [];
+  if (rejectedUnapprovedLog > 0) {
+    advisoryParts.push(
+      `judgment-clearance: ignored ${rejectedUnapprovedLog} recorded clearance(s) lacking nonempty ` +
+        "human reviewers (Prefer-A clearance authenticity)",
+    );
+  }
+  if (rejected.length > 0) {
+    advisoryParts.push(
+      `judgment-clearance: rejected ${rejected.length} caller-supplied clearance(s) lacking an ` +
+        "independent recorded human-approved match (Prefer-A clearance authenticity)",
+    );
+  }
+  if (bypassed) {
+    advisoryParts.push(
+      `judgment-clearance: ${DEFT_ALLOW_JUDGMENT_GATE_ENFORCE} set -- enforce downgraded to advise ` +
+        "(named emergency bypass; clearance ≠ emergency exception)",
+    );
+  }
+
+  // Per-story candidates keep cleared_scope aligned with recorded clearances and
+  // carry tags/narratives so label and body-text gates can match (Greptile P1s).
+  type StoryCandidate = { storyId: string; candidate: Candidate };
+  const storyCandidates: StoryCandidate[] =
+    options.resolved.length > 0
+      ? options.resolved.map((story) => ({
+          storyId: story.story_id,
+          candidate: storyJudgmentCandidate(story),
+        }))
+      : [
+          {
+            storyId: "(none)",
+            candidate: {
+              paths: [],
+              labels: [],
+              body: "",
+              state: "open",
+              updated_at: null,
+            },
+          },
+        ];
+
+  const blocking: ReturnType<typeof reportBlocking> = [];
+  const seenBlocking = new Set<string>();
+  for (const { storyId, candidate } of storyCandidates) {
+    const report = buildReport(options.projectRoot, candidate, {
+      posture,
+      clearances: authentic,
+    });
+    if (report.outcomes.length > 0 || report.policy_error !== null) {
+      advisoryParts.push(`judgment-clearance story ${storyId}:\n${renderReport(report)}`);
+    } else if (storyCandidates.length === 1) {
+      advisoryParts.push(renderReport(report));
+    }
+    for (const outcome of reportBlocking(report)) {
+      const key = `${outcome.gate_id}:${outcome.cleared_scope}`;
+      if (seenBlocking.has(key)) {
+        continue;
+      }
+      seenBlocking.add(key);
+      blocking.push(outcome);
+    }
+  }
+
+  if (posture === GATE_ENFORCE && blocking.length > 0) {
+    const ids = blocking.map((o) => o.gate_id).join(", ");
+    return {
+      ok: false,
+      exitCode: EXIT_GATE_FAILED,
+      stderr:
+        `Error: swarm:launch --enforce-gates refused -- ${blocking.length} uncleared ` +
+        `block-tier judgment gate(s): ${ids}. Record a clearance via the judgment-gate audit ` +
+        `log (task verify:judgment-gates --record), drop the matching file_scope path, or set ` +
+        `${DEFT_ALLOW_JUDGMENT_GATE_ENFORCE}=1 for emergency advise recovery.\n` +
+        `${advisoryParts.join("\n")}\n`,
+      advisory: advisoryParts.join("\n"),
+      posture,
+      bypassed,
+    };
+  }
+
+  return {
+    ok: true,
+    exitCode: EXIT_OK,
+    stderr: "",
+    advisory: advisoryParts.join("\n"),
+    posture,
+    bypassed,
+  };
+}
 export type WorktreeResolverFn = (
   mapping: readonly Record<string, unknown>[],
   baseBranch: string,
@@ -1388,7 +1748,21 @@ export function swarmLaunch(args: LaunchArgs): {
 
   const ordered = orderCohort(resolved, projectRoot);
   const gatePosture = args.enforceGatesFlag ? GATE_ENFORCE : GATE_ADVISE;
-  void gatePosture;
+  // Prefer-A §2 / P2-a: consume gatePosture via the judgment-gate engine.
+  const judgmentPosture = evaluateJudgmentClearancePosture({
+    projectRoot,
+    resolved: ordered,
+    gatePosture,
+    gateClearances,
+    environ: launchEnviron,
+  });
+  if (!judgmentPosture.ok) {
+    return {
+      exitCode: judgmentPosture.exitCode,
+      stdout: "",
+      stderr: judgmentPosture.stderr,
+    };
+  }
 
   const dispatchKind =
     ordered.length > 1 || (args.group !== undefined && args.group !== null && args.group.length > 0)
@@ -1699,7 +2073,15 @@ export function swarmLaunch(args: LaunchArgs): {
   }
 
   void args.noAudit;
-  return { exitCode: EXIT_OK, stdout: rendered, stderr: skipRoutingNote, spawnEnvByStory };
+  const advisoryNote =
+    judgmentPosture.advisory.trim().length > 0 ? `${judgmentPosture.advisory.trim()}\n` : "";
+  // Prefer-A: surface judgment advisory on stderr (stdout stays JSON manifest).
+  return {
+    exitCode: EXIT_OK,
+    stdout: rendered,
+    stderr: `${advisoryNote}${skipRoutingNote}`,
+    spawnEnvByStory,
+  };
 }
 
 export function assertDestWorkerInstallationPermissions(requested: unknown): void {
