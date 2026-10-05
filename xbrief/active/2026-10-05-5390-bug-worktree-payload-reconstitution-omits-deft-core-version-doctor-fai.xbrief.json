@@ -1,0 +1,120 @@
+{
+  "xBRIEFInfo": {
+    "version": "0.8",
+    "description": "bug(worktree): payload reconstitution omits .deft/core/VERSION; doctor fails manifest-agreement and gates writes, remediation is deft update",
+    "updated": "2026-10-05T22:06:26Z"
+  },
+  "plan": {
+    "id": "github.issue.5717551052",
+    "title": "bug(worktree): payload reconstitution omits .deft/core/VERSION; doctor fails manifest-agreement and gates writes, remediation is deft update",
+    "status": "running",
+    "items": [
+      {
+        "id": "1",
+        "title": "VERSION-complete reconstitution in reconstituteLinkedWorktreeDeposit: After successful payload copy, unconditionally ensure .deft/core/VERSION via buildInstallManifestText; source-version authority; disagree gate refuses bare-only synthesize; already-present repair behind containment/symlink guards; ensure-failure returns refused.",
+        "status": "pending"
+      },
+      {
+        "id": "2",
+        "title": "Narrow doctor missing-YAML remediation to one executable route: When linked worktree + payload + missing VERSION + agreeing bare, emit narrow detail + suggested_fix to session:start reconstitution; keep deft update for true skew branches.",
+        "status": "pending"
+      },
+      {
+        "id": "3",
+        "title": "Recovery honesty without #3738 violation: Do not make session:ready run doctor as repair; write-gate/hook recovery names session:start --rearm for this class.",
+        "status": "pending"
+      },
+      {
+        "id": "4",
+        "title": "Tests + docs + CHANGELOG: Fixtures for VERSION-less reconstitute, already-present repair, disagree refuse, doctor narrow route; CHANGELOG Unreleased; conflict_group worktree-reconstitute-version-manifest.",
+        "status": "pending"
+      }
+    ],
+    "acceptance": {
+      "none_stated": true,
+      "source_rung": "derived",
+      "derived_reason": "Prefer-A Bound lean 6002731638; cohort-add hand-stamp; clause AC only (no shell commands)",
+      "commands": [],
+      "clauses": [
+        {
+          "id": 1,
+          "text": "After successful payload copy, unconditionally ensure .deft/core/VERSION via buildInstallManifestText; source-version authority; disagree gate refuses bare-only synthesize; already-present repair behind containment/symlink guards; ensure-failure returns refused.",
+          "artifact_path": "packages/core/src/init-deposit/gitignore.ts",
+          "ambiguous": false,
+          "provenance": "bound-prefer-a"
+        },
+        {
+          "id": 2,
+          "text": "When linked worktree + payload + missing VERSION + agreeing bare, emit narrow detail + suggested_fix to session:start reconstitution; keep deft update for true skew branches.",
+          "artifact_path": "packages/core/src/doctor/checks.ts",
+          "ambiguous": false,
+          "provenance": "bound-prefer-a"
+        },
+        {
+          "id": 3,
+          "text": "Do not make session:ready run doctor as repair; write-gate/hook recovery names session:start --rearm for this class.",
+          "artifact_path": "packages/core/src/session/verify-session-ritual.ts",
+          "ambiguous": false,
+          "provenance": "bound-prefer-a"
+        },
+        {
+          "id": 4,
+          "text": "Fixtures for VERSION-less reconstitute, already-present repair, disagree refuse, doctor narrow route; CHANGELOG Unreleased; conflict_group worktree-reconstitute-version-manifest.",
+          "artifact_path": "CHANGELOG.md",
+          "ambiguous": false,
+          "provenance": "bound-prefer-a"
+        }
+      ],
+      "ambiguity_attestation": "none_found"
+    },
+    "metadata": {
+      "x-directive/plan-id": {
+        "version": 1,
+        "source": "github-rest-id",
+        "github_issue_id": 5717551052,
+        "origin": "deftai/directive#5390",
+        "id": "github.issue.5717551052"
+      },
+      "preferABound": {
+        "lean": 6002731638,
+        "conflict_group": "worktree-reconstitute-version-manifest"
+      },
+      "swarm": {
+        "conflict_group": "worktree-reconstitute-version-manifest",
+        "size": "M",
+        "file_scope": [
+          "packages/core/src/init-deposit/gitignore.ts",
+          "packages/core/src/init-deposit/gitignore.test.ts",
+          "packages/core/src/doctor/checks.ts",
+          "packages/core/src/doctor/checks.test.ts",
+          "packages/core/src/session/verify-session-ritual.ts",
+          "packages/core/src/session/verify-session-ritual-messages.test.ts",
+          "CHANGELOG.md"
+        ],
+        "verify_commands": [],
+        "expected_outputs": [
+          "Prefer-A Bound land"
+        ],
+        "depends_on": [],
+        "file_scope_confidence": "high",
+        "model_tier": "default"
+      },
+      "activationPullRequest": 5394
+    },
+    "references": [
+      {
+        "uri": "https://github.com/deftai/directive/issues/5390",
+        "type": "x-xbrief/github-issue",
+        "title": "Issue #5390: bug(worktree): payload reconstitution omits .deft/core/VERSION; doctor fails manifest-agreement and gates writes, remediation is deft update"
+      }
+    ],
+    "tags": [
+      "prefer-a",
+      "cohort"
+    ],
+    "narratives": {
+      "overview": "bug(worktree): payload reconstitution omits .deft/core/VERSION; doctor fails manifest-agreement and gates writes, remediation is deft update"
+    },
+    "updated": "2026-10-05T22:06:26Z"
+  }
+}

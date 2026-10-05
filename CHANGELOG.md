@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Keep active #5390 Prefer-A Bound brief for Path B continuity.** Lands the continuity-resolved active xBRIEF with concrete file_scope on master so the product PR can pass verify:scope-provenance membership (#5192 / #4774). Leaves metadata.productPullRequest unset on this activation land. Tracking #5390.
+
 ### Changed
 
 - **Leftover-complete #5387 after product #5388.** Record completion of the Path B activation versus productPullRequest catch-22 Prefer-A Bound brief after the product land. Tracking #5387.
