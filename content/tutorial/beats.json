@@ -1,0 +1,95 @@
+{
+  "beats": [
+    {
+      "id": "choose",
+      "number": 1,
+      "name": "Welcome & choose",
+      "wired": true,
+      "where": "Welcome to the Directive Tutorial! Step 1 of 7.",
+      "about": "Pick one practice project for this sitting. Each option teaches the same path; only the toy changes.\n\n1. Signal — a tiny CLI that prints your personal status line\n2. Postcard — a one-page local site that shows a short message\n3. Echo — a mini bot that answers one question with a reply you choose\n\nYour choice runs in a disposable local sandbox. This sitting does not push to GitHub.",
+      "terms": ["Directive"],
+      "caveat": "Name and preferences stay in setup. This sitting does not ask those again.",
+      "output": "",
+      "command": null,
+      "next": "Reply with Signal, Postcard, or Echo."
+    },
+    {
+      "id": "write",
+      "number": 2,
+      "name": "Write it down",
+      "wired": true,
+      "where": "Step 2 of 7.",
+      "about": "Next, the plan for {name} goes into a work file so it is not stuck in this chat. Two sentences will be written down.\n\nPlan: {workSentence}\nDone looks like: {acceptanceSentence}\n\nYour content for this toy: {contentExample}",
+      "terms": ["work file", "work item", "acceptance"],
+      "caveat": "Writing it down is not permission to build yet.",
+      "output": "",
+      "command": null,
+      "next": "Reply with the content {name} should use (see the example), then say yes if the Plan and Done sentences look right."
+    },
+    {
+      "id": "start",
+      "number": 3,
+      "name": "Confirm & start",
+      "wired": true,
+      "where": "Step 3 of 7.",
+      "about": "You are about to approve this one work item and start it. After you say yes, the work moves from proposed to ready, then into progress on its own branch so the change stays reviewable and easy to undo. Owned files for this item: {ownedFiles}.",
+      "terms": ["branch", "proposed", "ready", "in progress"],
+      "caveat": "Saying yes starts the work. This practice project stays on this machine — no GitHub push and no pull request.",
+      "output": "",
+      "command": "{startCommand}",
+      "next": "Say yes to confirm and start."
+    },
+    {
+      "id": "change",
+      "number": 4,
+      "name": "Make the change",
+      "wired": true,
+      "where": "Step 4 of 7.",
+      "about": "Time to build. The session will change only what this work owns so {name} does its one job with your content. Nothing else.",
+      "terms": ["in-scope files"],
+      "caveat": "Do not add a second feature or a pull request. Only change {ownedFilesChange}.",
+      "output": "",
+      "command": "{testCommand}",
+      "next": "Say go. The session will write the files and run the local test."
+    },
+    {
+      "id": "result",
+      "number": 5,
+      "name": "Prove it",
+      "wired": true,
+      "where": "Step 5 of 7.",
+      "about": "Now run Directive's acceptance check. It reads the acceptance sentence on the work file and reports whether the result matches.",
+      "terms": ["check", "evidence"],
+      "caveat": "A green local test only means your own test passed. The acceptance check is separate. If it was not verified, stay on this step, fix the mismatch, and run the same check again.",
+      "output": "",
+      "command": "{verifyCommand}",
+      "next": "Say go to run the acceptance check, then say whether it verified."
+    },
+    {
+      "id": "close",
+      "number": 6,
+      "name": "Close",
+      "wired": true,
+      "where": "Step 6 of 7.",
+      "about": "Mark the work finished only after the acceptance sentence was verified. Then the work list for this practice sitting is empty.",
+      "terms": ["done"],
+      "caveat": "Do not mark the work done until the acceptance line was actually verified.",
+      "output": "",
+      "command": "{completeCommand}",
+      "next": "Say go to complete the work item."
+    },
+    {
+      "id": "leave",
+      "number": 7,
+      "name": "Leave",
+      "wired": true,
+      "where": "Step 7 of 7.",
+      "about": "You walked the same path a real project uses: write the plan down, start on a branch, build, check, and close. Real delivery also includes GitHub, review, and merge — not taught here. You can re-run this tutorial anytime. Next, continue real project setup when you are ready.",
+      "terms": [],
+      "caveat": "This sitting does not publish the project or open a pull request.",
+      "output": "",
+      "command": null,
+      "next": "You are done with this tutorial. Optional longer course: https://github.com/deftai/directive-training"
+    }
+  ]
+}

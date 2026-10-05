@@ -1,0 +1,18 @@
+{
+  "id": "signal",
+  "title": "Signal",
+  "pitch": "A tiny CLI that prints your personal status line.",
+  "fields": {
+    "name": "Signal",
+    "contentExample": "Kristen — on the bridge.",
+    "workSentence": "Signal prints this status line.",
+    "acceptanceSentence": "running it prints exactly that text.",
+    "ownedFiles": "signal.mjs, signal.test.mjs, and package.json",
+    "ownedFilesChange": "signal.mjs, signal.test.mjs, and the test script in package.json",
+    "testCommand": "npm test",
+    "branch": "feat/signal-prints-this-line",
+    "startCommand": "git switch -c feat/signal-prints-this-line",
+    "verifyCommand": "deft verify:ac <active-work-file>",
+    "completeCommand": "deft scope:complete -- <active-work-file>"
+  }
+}
