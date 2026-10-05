@@ -1,7 +1,16 @@
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prWatchHeartbeatAgentId } from "../pr-watch/main.js";
+import { hasActivePollingHeartbeat } from "../review-monitor/verify.js";
 import { EXIT_CONFIG_ERROR, EXIT_MERGED } from "./constants.js";
 import { cmdPrWaitMergeable, parseWaitMergeableArgs, runWaitMergeable } from "./main.js";
 import type { MergeFn, MonitorFn, ProtectedCheckFn } from "./types.js";
+
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 function cleanMonitorPayload(prNumber = 1370): Record<string, unknown> {
   return {
@@ -165,5 +174,121 @@ describe("runWaitMergeable", () => {
     expect(cmdPrWaitMergeable(["1370"])).toBe(EXIT_CONFIG_ERROR);
     stderr.mockRestore();
     stdout.mockRestore();
+  });
+
+  it("arms hasActivePollingHeartbeat while running and clears on exit (#5020 post-CLEAN)", () => {
+    const root = mkdtempSync(join(tmpdir(), "wait-merge-hb-"));
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let sawLive = false;
+    const code = runWaitMergeable(
+      [
+        "5020",
+        "--repo",
+        "deftai/directive",
+        "--cap-minutes",
+        "5",
+        "--json",
+        "--project-root",
+        root,
+      ],
+      {
+        protectedFn: makeProtectedFn(0),
+        monitorFn: (..._args) => {
+          sawLive = hasActivePollingHeartbeat(root, 5020);
+          return makeMonitorFn(0, cleanMonitorPayload(5020))();
+        },
+        mergeFn: makeMergeFn(0, "merged: squash"),
+        skipHumanMergeGate: true,
+        skipMergeApprovalHeadGate: true,
+        fetchPrHeadShaFn: () => "a".repeat(40),
+      },
+    );
+    expect(code).toBe(EXIT_MERGED);
+    expect(sawLive).toBe(true);
+    expect(hasActivePollingHeartbeat(root, 5020)).toBe(false);
+    stdout.mockRestore();
+    stderr.mockRestore();
+  });
+
+  it("refreshes heartbeat while the blocking monitor runs (#5020 P1)", () => {
+    const root = mkdtempSync(join(tmpdir(), "wait-merge-hb-refresh-"));
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const hbPath = join(
+      root,
+      ".deft-scratch",
+      "subagent-status",
+      `${prWatchHeartbeatAgentId(5020)}.json`,
+    );
+    let firstAt = "";
+    let secondAt = "";
+    const code = runWaitMergeable(
+      [
+        "5020",
+        "--repo",
+        "deftai/directive",
+        "--cap-minutes",
+        "5",
+        "--json",
+        "--project-root",
+        root,
+      ],
+      {
+        protectedFn: makeProtectedFn(0),
+        heartbeatRefreshSeconds: 0.05,
+        monitorFn: (..._args) => {
+          const readHbAt = (): string => {
+            const deadline = Date.now() + 2_000;
+            while (Date.now() < deadline) {
+              try {
+                const raw = readFileSync(hbPath, "utf8");
+                if (raw.trim().length === 0) {
+                  sleepMs(20);
+                  continue;
+                }
+                const parsed = JSON.parse(raw) as { last_heartbeat_at?: string };
+                if (
+                  typeof parsed.last_heartbeat_at === "string" &&
+                  parsed.last_heartbeat_at.length > 0
+                ) {
+                  return parsed.last_heartbeat_at;
+                }
+              } catch {
+                // mid-write / empty JSON race under parallel ts:check-lane (#5020 flake)
+              }
+              sleepMs(20);
+            }
+            return "";
+          };
+          firstAt = readHbAt();
+          const advanceDeadline = Date.now() + 2_000;
+          while (Date.now() < advanceDeadline) {
+            sleepMs(50);
+            secondAt = readHbAt();
+            if (
+              firstAt.length > 0 &&
+              secondAt.length > 0 &&
+              Date.parse(secondAt) > Date.parse(firstAt)
+            ) {
+              break;
+            }
+          }
+          expect(hasActivePollingHeartbeat(root, 5020)).toBe(true);
+          return makeMonitorFn(0, cleanMonitorPayload(5020))();
+        },
+        mergeFn: makeMergeFn(0, "merged: squash"),
+        skipHumanMergeGate: true,
+        skipMergeApprovalHeadGate: true,
+        fetchPrHeadShaFn: () => "a".repeat(40),
+      },
+    );
+    expect(code).toBe(EXIT_MERGED);
+    expect(firstAt.length).toBeGreaterThan(0);
+    expect(secondAt.length).toBeGreaterThan(0);
+    expect(Date.parse(secondAt)).toBeGreaterThan(Date.parse(firstAt));
+    expect(hasActivePollingHeartbeat(root, 5020)).toBe(false);
+    stdout.mockRestore();
+    stderr.mockRestore();
   });
 });

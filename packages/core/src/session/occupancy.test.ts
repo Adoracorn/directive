@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { decideHook } from "../hooks/dispatcher.js";
+import { CONSUMER_HEADER_PLACEHOLDER_ONELINER } from "../platform/agents-consumer-header.js";
 import { completeCohort } from "../swarm/complete-cohort.js";
 import {
   persistLaunchOccupancyRecord,
@@ -45,6 +46,7 @@ import {
   OCCUPANCY_MAX_LEASE_MS,
   OCCUPANCY_REFRESH_AFTER_MS,
   OCCUPANCY_STALE_WARN_MS,
+  OCCUPANCY_STEAL_REFUSES_MINT_MESSAGE,
   OCCUPANCY_TTL_MS,
   type OccupancyRecord,
   occupancyAdmission,
@@ -71,6 +73,13 @@ import {
 import { READ_ONLY_POSTURE, REARM_CEREMONY_TIER, runSessionStart } from "./session-start.js";
 import { verifySessionRitual, writeGateRitualOptions } from "./verify-session-ritual.js";
 
+/** #4919: occupancy fixtures are not tip-inventory cases; keep owed gate off the wire. */
+const emptyFinalizeOwedProbe = () => ({
+  lines: [] as const,
+  blocks: false,
+  unknown: false,
+});
+
 const TEST_WORKER_AUTH = {
   workerGithubAuthMode: "host-gh" as const,
   expectedPrincipal: { kind: "user" as const, login: "test-worker" },
@@ -96,6 +105,8 @@ function resetLeaseFiles(root: string): void {
   rmSync(join(root, ".deft-scratch"), { recursive: true, force: true });
   rmSync(join(root, "xbrief"), { recursive: true, force: true });
   rmSync(join(root, ".deft-directive-disable"), { force: true });
+  // #4544 residual chokepoint tests may write AGENTS.md on the shared fixture.
+  rmSync(join(root, "AGENTS.md"), { force: true });
   // ownedRitualRepo rewrites PROJECT-DEFINITION after reset; keep the dir.
   mkdirSync(join(root, "xbrief"), { recursive: true });
   mkdirSync(join(root, ".deft"), { recursive: true });
@@ -184,7 +195,7 @@ beforeAll(() => {
   tempRoot();
   otherRoot();
   ownedRitualRepo("owner", new Date("2026-08-17T12:00:00Z"));
-});
+}, 60_000 /* #5084 suite-load hookTimeout */);
 
 /**
  * Beat an owner's lease every half TTL until its claim age crosses the absolute
@@ -372,6 +383,51 @@ describe("worktree occupancy lease (#3433)", () => {
     expect(readOccupancy(root)?.sessionId).toBe("new");
   });
 
+  it("refuses mint-on-steal so the caller already holds the post-steal identity (#3921)", () => {
+    const root = tempRoot();
+    const now = new Date("2026-08-17T12:00:00Z");
+    applyWorktreeOccupancy(root, { sessionId: "old", now });
+    const minted = stealOccupancy(root, {
+      occupant: "old",
+      confirm: true,
+      now: new Date("2026-08-17T12:01:00Z"),
+      newSessionId: () => "minted-stealer",
+      env: {},
+    });
+    expect(minted.code).toBe(1);
+    expect(minted.action).toBe("denied");
+    expect(minted.message).toBe(OCCUPANCY_STEAL_REFUSES_MINT_MESSAGE);
+    expect(readOccupancy(root)?.sessionId).toBe("old");
+  });
+
+  it("refuses steal when identityProvenance is minted even if sessionId is injected (#3921)", () => {
+    const root = tempRoot();
+    const now = new Date("2026-08-17T12:00:00Z");
+    applyWorktreeOccupancy(root, { sessionId: "old", now });
+    const injected = stealOccupancy(root, {
+      sessionId: "minted-uuid",
+      identityProvenance: "minted",
+      occupant: "old",
+      confirm: true,
+      now: new Date("2026-08-17T12:01:00Z"),
+    });
+    expect(injected.code).toBe(1);
+    expect(injected.action).toBe("denied");
+    expect(injected.message).toContain("refuses to mint a writer identity");
+    expect(readOccupancy(root)?.sessionId).toBe("old");
+    const viaApply = applyWorktreeOccupancy(root, {
+      steal: true,
+      occupant: "old",
+      confirm: true,
+      identityProvenance: "minted",
+      now: new Date("2026-08-17T12:02:00Z"),
+      newSessionId: () => "injected-then-explicit",
+    });
+    expect(viaApply.code).toBe(1);
+    expect(viaApply.action).toBe("denied");
+    expect(readOccupancy(root)?.sessionId).toBe("old");
+  });
+
   it("refuses steal without confirm or a matching occupant name", () => {
     const root = tempRoot();
     const now = new Date("2026-08-17T12:00:00Z");
@@ -458,6 +514,138 @@ describe("worktree occupancy lease (#3433)", () => {
     expect(skipped.allow).toBe(true);
     expect(skipped.refreshed).toBe(false);
     expect(readOccupancy(root)?.heartbeatAt.toISOString()).toBe(claimedAt.toISOString());
+  });
+
+  it("markWrite records Prefer-A product-mutation completion marker (#5176)", () => {
+    const root = tempRoot();
+    const claimedAt = new Date("2026-08-17T12:00:00Z");
+    applyWorktreeOccupancy(root, { sessionId: "owner", now: claimedAt });
+    expect(existsSync(join(root, ".deft", "cache", "product-mutation-completion.json"))).toBe(
+      false,
+    );
+
+    const writeAt = new Date(claimedAt.getTime() + 1000);
+    applyWorktreeOccupancy(root, {
+      sessionId: "owner",
+      now: writeAt,
+      markWrite: true,
+    });
+    expect(readOccupancy(root)?.lastWriteAt?.toISOString()).toBe(writeAt.toISOString());
+    expect(existsSync(join(root, ".deft", "cache", "product-mutation-completion.json"))).toBe(true);
+
+    const later = new Date(writeAt.getTime() + OCCUPANCY_REFRESH_AFTER_MS + 1);
+    const gate = evaluateOccupancyWriteGate(root, {
+      sessionId: "owner",
+      now: later,
+      refresh: true,
+    });
+    expect(gate.allow).toBe(true);
+    expect(gate.refreshed).toBe(true);
+    expect(existsSync(join(root, ".deft", "cache", "product-mutation-completion.json"))).toBe(true);
+  });
+
+  it("markWrite refuses scaffold edit-me when Overview is unavailable (#4544 residual)", () => {
+    const root = tempRoot();
+    const claimedAt = new Date("2026-08-17T12:00:00Z");
+    applyWorktreeOccupancy(root, { sessionId: "owner", now: claimedAt });
+    writeFileSync(
+      join(root, "AGENTS.md"),
+      `# Project\n\n${CONSUMER_HEADER_PLACEHOLDER_ONELINER}\n`,
+      "utf8",
+    );
+    const writeAt = new Date(claimedAt.getTime() + 1000);
+    const result = applyWorktreeOccupancy(root, {
+      sessionId: "owner",
+      now: writeAt,
+      markWrite: true,
+    });
+    expect(result.code).toBe(1);
+    expect(result.message).toMatch(/consumer-header-placeholder-completion-chokepoint/i);
+    // Prefer-A stamp must survive refuse so later verify fails closed (#4544 P1).
+    expect(existsSync(join(root, ".deft", "cache", "product-mutation-completion.json"))).toBe(true);
+    expect(readOccupancy(root)?.lastWriteAt).toBeNull();
+  });
+
+  it("write-gate product refresh fails closed when Prefer-A marker cannot be written (#5176)", () => {
+    const root = tempRoot();
+    const claimedAt = new Date("2026-08-17T12:00:00Z");
+    applyWorktreeOccupancy(root, { sessionId: "owner", now: claimedAt });
+    // Block `.deft/cache/` so containedWrite cannot persist the durable marker.
+    writeFileSync(join(root, ".deft", "cache"), "not-a-directory", "utf8");
+    const later = new Date(claimedAt.getTime() + OCCUPANCY_REFRESH_AFTER_MS + 1);
+    const gate = evaluateOccupancyWriteGate(root, {
+      sessionId: "owner",
+      now: later,
+      refresh: true,
+      persistProductMutationMarker: true,
+    });
+    expect(gate.allow).toBe(false);
+    expect(gate.refreshed).toBe(false);
+    expect(gate.message).toMatch(/product-mutation completion marker write failed/i);
+    expect(readOccupancy(root)?.lastWriteAt).toBeNull();
+  });
+
+  it("Process-only write-gate refresh renews without Prefer-A marker (#5176)", () => {
+    const root = tempRoot();
+    const claimedAt = new Date("2026-08-17T12:00:00Z");
+    applyWorktreeOccupancy(root, { sessionId: "owner", now: claimedAt });
+    writeFileSync(join(root, ".deft", "cache"), "not-a-directory", "utf8");
+    // Whole-second offset: occupancy timestampIso drops sub-second fractions.
+    const later = new Date(claimedAt.getTime() + OCCUPANCY_REFRESH_AFTER_MS + 1000);
+    const gate = evaluateOccupancyWriteGate(root, {
+      sessionId: "owner",
+      now: later,
+      refresh: true,
+      // omit persistProductMutationMarker — Process-only / proposed-lifecycle
+    });
+    expect(gate.allow).toBe(true);
+    expect(gate.refreshed).toBe(true);
+    expect(readOccupancy(root)?.lastWriteAt?.toISOString()).toBe(later.toISOString());
+    expect(existsSync(join(root, ".deft", "cache", "product-mutation-completion.json"))).toBe(
+      false,
+    );
+  });
+
+  it("heartbeat and grant still renew after lastWriteAt when marker rewrite is blocked (#5176)", () => {
+    const root = tempRoot();
+    const claimedAt = new Date("2026-08-17T12:00:00Z");
+    applyWorktreeOccupancy(root, { sessionId: "owner", now: claimedAt, markWrite: true });
+    expect(readOccupancy(root)?.lastWriteAt?.toISOString()).toBe(claimedAt.toISOString());
+    expect(existsSync(join(root, ".deft", "cache", "product-mutation-completion.json"))).toBe(true);
+    // Replace cache dir with a file so a fresh marker rewrite would fail.
+    rmSync(join(root, ".deft", "cache"), { recursive: true, force: true });
+    writeFileSync(join(root, ".deft", "cache"), "not-a-directory", "utf8");
+
+    // Whole-second offsets: occupancy timestampIso drops sub-second fractions.
+    const beatAt = new Date(claimedAt.getTime() + OCCUPANCY_REFRESH_AFTER_MS + 1000);
+    const beat = heartbeatOccupancy(root, { sessionId: "owner", now: beatAt, env: {} });
+    expect(beat.code).toBe(0);
+    expect(beat.action).toBe("heartbeat");
+    expect(beat.record?.heartbeatAt.toISOString()).toBe(beatAt.toISOString());
+    expect(readOccupancy(root)?.lastWriteAt?.toISOString()).toBe(claimedAt.toISOString());
+
+    const grantAt = new Date(beatAt.getTime() + 60_000);
+    const granted = grantOccupancyMembership(root, {
+      sessionId: "owner",
+      childSessionId: "child-1",
+      role: "leaf-implementation",
+      now: grantAt,
+      env: {},
+    });
+    expect(granted.code).toBe(0);
+    expect(granted.action).toBe("granted");
+    expect(readOccupancy(root)?.grants.length).toBe(1);
+
+    // Product-write restamp still fails closed when the marker cannot be written.
+    const writeAt = new Date(grantAt.getTime() + OCCUPANCY_REFRESH_AFTER_MS + 1000);
+    const gate = evaluateOccupancyWriteGate(root, {
+      sessionId: "owner",
+      now: writeAt,
+      refresh: true,
+      persistProductMutationMarker: true,
+    });
+    expect(gate.allow).toBe(false);
+    expect(gate.message).toMatch(/product-mutation completion marker write failed/i);
   });
 
   it("write-gate warns the holder inside its own staleness window (#3599)", () => {
@@ -1147,6 +1335,7 @@ describe("worktree occupancy lease (#3433)", () => {
         runGit: () => ({ code: 0, stdout: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", stderr: "" }),
         verifyTools: () => ({ exitCode: 0 }),
         runTriageWelcome: () => ({ exitCode: 0 }),
+        probeFinalizeOwed: emptyFinalizeOwedProbe,
       });
       expect(first.code).toBe(0);
       expect(readOccupancy(root)?.sessionId).toBe("first-sess");
@@ -1157,6 +1346,7 @@ describe("worktree occupancy lease (#3433)", () => {
         newSessionId: () => "second-sess",
         runGit: () => ({ code: 0, stdout: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", stderr: "" }),
         verifyTools: () => ({ exitCode: 0 }),
+        probeFinalizeOwed: emptyFinalizeOwedProbe,
       });
       expect(second.code).toBe(1);
       expect(second.lines.join("\n")).toContain("Worktree occupied by session first-sess");
@@ -1246,6 +1436,7 @@ describe("worktree occupancy lease (#3433)", () => {
         }),
         verifyTools: () => ({ exitCode: 0 }),
         runTriageWelcome: () => ({ exitCode: 0 }),
+        probeFinalizeOwed: emptyFinalizeOwedProbe,
       });
       expect(first.code).toBe(0);
       expect(first.lines.join("\n")).not.toContain("Worktree occupied");
@@ -1292,6 +1483,7 @@ describe("worktree occupancy lease (#3433)", () => {
         }),
         verifyTools: () => ({ exitCode: 0 }),
         runTriageWelcome: () => ({ exitCode: 0 }),
+        probeFinalizeOwed: emptyFinalizeOwedProbe,
       });
       expect(next.code).toBe(0);
       expect(next.lines.join("\n")).not.toContain("Worktree occupied");
@@ -1495,6 +1687,7 @@ describe("worktree occupancy lease (#3433)", () => {
         if (args.includes("--is-ancestor")) return { code: 0, stdout: "", stderr: "" };
         return { code: 0, stdout: "", stderr: "" };
       },
+      probeFinalizeOwed: emptyFinalizeOwedProbe,
     });
     expect(rearm.code).toBe(0);
     expect(readOccupancy(root)?.sessionId).toBe("seed-session");

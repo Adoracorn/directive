@@ -158,6 +158,21 @@ describe("evaluateClassChecks (#4980)", () => {
     expect(result.findings.some((f) => f.path === ".githooks/pre-commit")).toBe(true);
   });
 
+  it("does not fail a first PR solely because the ceiling artifact is unprotected (#5079)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".deft/presentation-ceiling.json", "src/View.tsx"],
+      baseTestBoundaryPolicy: baseTb({ sourceRoots: ["src/**"], testRoots: ["tests/**"] }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".deft/presentation-ceiling.json", '{"schema":"deft.presentation-ceiling.v1"}\n'],
+        ["src/View.tsx", "export const View = () => null;\n"],
+      ]),
+    });
+    expect(result.findings.some((f) => f.kind === "protected-glob")).toBe(false);
+    expect(result.findings.some((f) => f.path === ".deft/presentation-ceiling.json")).toBe(false);
+  });
+
   it("allows a pure protected-glob landing (own diff, no story product)", () => {
     const result = evaluateClassChecks("/tmp/proj", {
       baseRef: "origin/master",
@@ -208,6 +223,47 @@ describe("evaluateClassChecks (#4980)", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.findings.filter((f) => f.kind === "protected-glob")).toHaveLength(0);
+  });
+
+  it("allows protected authz + CLI authz companion (#4233)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [
+        "packages/core/src/authz/store.ts",
+        "packages/cli/src/authz.ts",
+        "CHANGELOG.md",
+      ],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["packages/*/src/**"],
+        testRoots: ["packages/*/src/**/*.test.*"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        ["packages/core/src/authz/store.ts", "export {}\n"],
+        ["packages/cli/src/authz.ts", "export {}\n"],
+        ["CHANGELOG.md", "## Unreleased\n"],
+      ]),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.findings.filter((f) => f.kind === "protected-glob")).toHaveLength(0);
+  });
+
+  it("fails when CLI authz mixes with non-authz protected (#4233)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".githooks/pre-commit", "packages/cli/src/authz.ts"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["packages/*/src/**"],
+        testRoots: ["packages/*/src/**/*.test.*"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".githooks/pre-commit", "#!/bin/sh\n"],
+        ["packages/cli/src/authz.ts", "export {}\n"],
+      ]),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings.some((f) => f.kind === "protected-glob")).toBe(true);
   });
 
   it("fails class 4 when protected mixes with check runtime outside registration", () => {
@@ -319,6 +375,79 @@ describe("evaluateClassChecks (#4980)", () => {
       ]),
     });
     expect(result.exitCode).toBe(1);
+    expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
+  });
+
+  it("allows GitHub Actions workflows to reference declared fixture roots (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/ci.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [
+          ".github/workflows/ci.yml",
+          "Copy-Item tests\\fixtures\\pre_cutover_customized\\* $fixtureDir -Recurse\n",
+        ],
+      ]),
+    });
+    expect(
+      result.findings.filter((f) => f.kind === "production-references-test-root"),
+    ).toHaveLength(0);
+  });
+
+  it("keeps class 2 on release/publish workflows (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/release.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".github/workflows/release.yml", "cp tests/fixtures/seed.json ./dist/\n"],
+      ]),
+    });
+    expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
+  });
+
+  it("unknown workflow names stay class-2 fail-closed (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/release-prod.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".github/workflows/release-prod.yml", "cp tests/fixtures/seed.json ./dist/\n"],
+      ]),
+    });
+    expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
+  });
+
+  it("docs-site.yml stays class-2 (Pages deploy) (#5097)", () => {
+    const result = evaluateClassChecks("/tmp/proj", {
+      baseRef: "origin/master",
+      changedFiles: [".github/workflows/docs-site.yml"],
+      baseTestBoundaryPolicy: baseTb({
+        sourceRoots: ["src/**"],
+        testRoots: ["tests/**"],
+        fixtureRoots: ["tests/fixtures/**"],
+      }),
+      classChecksPolicy: classPolicy,
+      fileContents: new Map([
+        [".github/workflows/docs-site.yml", "cp tests/fixtures/seed.json docs-site/\n"],
+      ]),
+    });
     expect(result.findings.some((f) => f.kind === "production-references-test-root")).toBe(true);
   });
 

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { enforceConsumerHeaderPlaceholderAtCompletionChokepoint } from "../check/consumer-header-placeholder.js";
 import {
   SESSION_COMPLETED_AC_REMEDIATION,
   writeSessionCompletedMarker,
@@ -17,7 +18,14 @@ import { evaluateIssuePlanIdAdmission, withPlanIdIdentityLock } from "../intake/
 import { hasArtifactSuffix } from "../layout/resolve.js";
 import { stampExistingEnvelopes } from "../lifecycle/brief-envelope.js";
 import { evaluateCompletedPlanConsistency } from "../lifecycle/completed-consistency.js";
+import {
+  type CompletedTipTwinResult,
+  evaluateCancelShippedOriginRefuse,
+  type IssueCloseKind,
+} from "../lifecycle/completed-tracked-on-delivery.js";
 import type { LiteralAcceptanceRunner } from "../literal-acceptance/index.js";
+import type { IssueRef } from "../orphan-active/refs.js";
+import type { RunGhFn } from "../pr-protected-issues/types.js";
 import type { GitRunner } from "../session/git.js";
 import { ITEM_STATUS_ALIASES } from "../vbrief-validate/constants.js";
 import { validateFilename } from "../vbrief-validate/filename.js";
@@ -29,6 +37,7 @@ import {
   evaluateScopeCompleteAcceptanceWalk,
   formatAcceptanceCompletionListing,
   persistClauseKeyedPendingItems,
+  stampMergeFromCompletionProvenance,
 } from "./acceptance-evidence.js";
 import { append, canonicalLogPath, newDecisionId } from "./audit-log.js";
 import { atomicWriteBrief, formatBriefJson, readBriefForMutation } from "./brief-io.js";
@@ -52,9 +61,12 @@ import {
   updateDecomposedParentBackReferences,
 } from "./decomposed-refs.js";
 import {
+  briefWithoutDurableCompletionProvenance,
   classifyStoredDeliveryDisposition,
   type DeliveryEvidenceInput,
   evaluateDeliveryGate,
+  type FetchClosingIssueIdsFn,
+  type FetchPrPayloadFn,
   type NonDeliveryDisposition,
   resolveCompletionSessionId,
   stampDeliveryProvenance,
@@ -74,13 +86,16 @@ export interface TransitionResult {
   readonly acceptanceReports?: readonly CriterionAcceptanceReport[];
 }
 
-/** Optional completion evidence / disposition for the delivery gate (#3041). */
+/** Optional completion evidence / disposition for the delivery gate (#3041 / #3675). */
 export interface TransitionOptions {
   readonly deliveryEvidence?: DeliveryEvidenceInput | null;
   readonly nonDeliveryDisposition?: NonDeliveryDisposition | null;
   readonly runGit?: GitRunner;
   readonly verifier?: string;
   readonly assumeEvidenceValidated?: boolean;
+  /** Prefer-A identity-join seams (#3675); forwarded to evaluateDeliveryGate. */
+  readonly fetchPrPayload?: FetchPrPayloadFn;
+  readonly fetchClosingIssueIds?: FetchClosingIssueIdsFn;
   /**
    * Test-only escape hatch: skip the #3240 per-item acceptance evidence gate.
    * Production callers MUST leave this false/undefined.
@@ -88,6 +103,20 @@ export interface TransitionOptions {
   readonly skipAcceptanceEvidenceGate?: boolean;
   /** Test-only runner for the complete acceptance walk (#4060). Production leaves this unset. */
   readonly acceptanceRunner?: LiteralAcceptanceRunner;
+  /** Optional gh runner for the #5126 cancel shipped-origin refuse. */
+  readonly runGh?: RunGhFn;
+  /** Offline / fixture: skip live gh for the #5126 cancel refuse. */
+  readonly skipGh?: boolean;
+  /** Optional delivery tip override for the #5126 cancel refuse. */
+  readonly tip?: string | null;
+  /** Optional repo override for origin collection on cancel refuse. */
+  readonly repo?: string | null;
+  /** Test seam: skip the #5126 shipped-origin cancel refuse. */
+  readonly skipCancelShippedOriginRefuse?: boolean;
+  /** Test seam: override close-kind resolution for cancel refuse. */
+  readonly resolveIssueCloseKind?: (ref: IssueRef) => IssueCloseKind;
+  /** Test seam: override completed tip-twin probe for cancel refuse. */
+  readonly hasCompletedTipTwin?: (ref: IssueRef) => CompletedTipTwinResult;
 }
 
 /** Item statuses that still represent unfinished work and should advance on terminal transitions (#2862). */
@@ -295,6 +324,10 @@ export function runTransition(
   const previousAcceptance = planObj.acceptance;
   let derivationNotice = "";
   if (act === "activate" || act === "promote") {
+    // Do not stamp the brief path itself (#3920): promote/activate moves the
+    // file, so a pre-move path becomes a false missing-source residual. External
+    // workspaceSources the caller already read may be passed via a future
+    // TransitionOptions seam; derivation here still runs on the in-memory plan.
     const derivation = applyClauseDerivationToPlan(planObj, {
       projectRoot,
       emitStamp: false,
@@ -334,6 +367,7 @@ export function runTransition(
   }
 
   // #3041: fail closed before mutating a code-bearing complete without delivery evidence.
+  let reuseValidatedDeliveryAncestry = false;
   if (act === "complete") {
     const gate = evaluateDeliveryGate({
       projectRoot,
@@ -342,8 +376,11 @@ export function runTransition(
       evidence: options.deliveryEvidence,
       nonDeliveryDisposition: options.nonDeliveryDisposition,
       runGit: options.runGit,
+      runGh: options.runGh,
       verifier: options.verifier ?? "scope:complete",
       assumeEvidenceValidated: options.assumeEvidenceValidated,
+      fetchPrPayload: options.fetchPrPayload,
+      fetchClosingIssueIds: options.fetchClosingIssueIds,
     });
     if (!gate.ok) {
       return { ok: false, message: gate.message };
@@ -356,6 +393,16 @@ export function runTransition(
           ? { ...gate.provenance, completedSessionId: sessionId }
           : gate.provenance,
       );
+      reuseValidatedDeliveryAncestry = gate.provenance.disposition === "delivered";
+    }
+    // #4544 residual after #5178: delivered / code-bearing product completion must
+    // not leave scaffold edit-me; Prefer-A evaluator runs here so refuse does not
+    // depend on the agent remembering to stamp the marker or invoke check.
+    if (gate.codeBearing && gate.provenance?.disposition === "delivered") {
+      const chokepoint = enforceConsumerHeaderPlaceholderAtCompletionChokepoint(projectRoot);
+      if (!chokepoint.ok) {
+        return { ok: false, message: chokepoint.message };
+      }
     }
   }
 
@@ -364,9 +411,30 @@ export function runTransition(
   let acceptanceListing = "";
   if (act === "complete" && options.skipAcceptanceEvidenceGate !== true) {
     const persist = persistClauseKeyedPendingItems(planObj);
-    // Rewrite-only leftover clause:N must land before the evidence gate can refuse.
-    if (persist.addedIds.length > 0 || persist.rewrittenIds.length > 0) {
-      const persistWrite = atomicWriteBrief(resolvedPath, data, vbriefRoot, { projectRoot });
+    const mergeStamp = stampMergeFromCompletionProvenance(planObj, {
+      projectRoot,
+      runGit: options.runGit,
+      recorded_by: options.verifier,
+      recorded_at: nowIso,
+      reuseValidatedAncestry: reuseValidatedDeliveryAncestry,
+    });
+    // Persist clause-keyed items and eligible merge stamps before the read-only
+    // gate, even when later acceptance refuses (#5120). Write when persist would
+    // have skipped if a merge stamp landed.
+    // #5106: defer durable completionProvenance until the completed/ move commits —
+    // mid-flight active writes keep clause/merge item stamps only so a later refuse
+    // cannot leave provenance on a still-running active source.
+    if (
+      persist.addedIds.length > 0 ||
+      persist.rewrittenIds.length > 0 ||
+      mergeStamp.stampedIds.length > 0
+    ) {
+      const persistWrite = atomicWriteBrief(
+        resolvedPath,
+        briefWithoutDurableCompletionProvenance(data),
+        vbriefRoot,
+        { projectRoot },
+      );
       if (!persistWrite.ok) {
         return { ok: false, message: persistWrite.message };
       }
@@ -384,9 +452,11 @@ export function runTransition(
 
     // #3357 / #4060: one bank-aware walk. Resolve-then-match-then-execute lives
     // inside evaluateScopeCompleteAcceptanceWalk. Do not run a standalone executor first.
+    // Pass xbriefPath so admitted-source git pin recovery cannot select a peer (#5055).
     const acWalk = evaluateScopeCompleteAcceptanceWalk(planObj, {
       projectRoot,
       runner: options.acceptanceRunner,
+      xbriefPath: resolvedPath,
     });
     if (!acWalk.ok) {
       return {
@@ -398,6 +468,23 @@ export function runTransition(
     if (acWalk.message.length > 0) {
       acceptanceListing =
         acceptanceListing.length > 0 ? `${acceptanceListing}\n${acWalk.message}` : acWalk.message;
+    }
+  }
+
+  // #5126: refuse cancel on shipped-closed origin without completed tip twin.
+  if (act === "cancel" && options.skipCancelShippedOriginRefuse !== true) {
+    const refuse = evaluateCancelShippedOriginRefuse(projectRoot, planObj, {
+      runGh: options.runGh,
+      skipGh: options.skipGh,
+      runGit: options.runGit,
+      tip: options.tip,
+      repo: options.repo,
+      briefPath: resolvedPath,
+      resolveCloseKind: options.resolveIssueCloseKind,
+      hasCompletedTwin: options.hasCompletedTipTwin,
+    });
+    if (refuse.refuse) {
+      return { ok: false, message: refuse.message };
     }
   }
 
@@ -603,8 +690,11 @@ function restampCompletedBrief(args: RestampArgs): TransitionResult {
     evidence: options.deliveryEvidence,
     nonDeliveryDisposition: options.nonDeliveryDisposition,
     runGit: options.runGit,
+    runGh: options.runGh,
     verifier: options.verifier ?? "scope:complete",
     assumeEvidenceValidated: options.assumeEvidenceValidated,
+    fetchPrPayload: options.fetchPrPayload,
+    fetchClosingIssueIds: options.fetchClosingIssueIds,
   });
   if (!gate.ok) {
     return { ok: false, message: gate.message };

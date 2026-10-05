@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as clauseDerivation from "../intake/clause-derivation.js";
 import { ENV_RUN_SUMMARY_PATH } from "../run-summary/index.js";
+import type { GitRunner } from "../session/git.js";
 import { validateVbriefSchema } from "../vbrief-validate/schema.js";
 import { atomicWriteBrief, readBriefForMutation } from "./brief-io.js";
 import { detectLifecycleFolder, runTransition } from "./transition.js";
@@ -811,6 +812,91 @@ describe("runTransition", () => {
     expect(existsSync(path)).toBe(true);
   });
 
+  it("refused complete after mid-flight persist leaves no completionProvenance on active (#5106)", () => {
+    root = makeRepo();
+    writeFileSync(
+      join(root, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          title: "P",
+          status: "running",
+          policy: { deliveryBranch: "master", wipCap: 20 },
+        },
+      }),
+      "utf8",
+    );
+    const path = join(root, "xbrief", "active", "midflight-provenance.xbrief.json");
+    writeFile(path, {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "code story",
+        status: "running",
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/5106",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+        metadata: {
+          kind: "story",
+          swarm: { file_scope: ["packages/core/src/scope/transition.ts"] },
+        },
+        // Empty items + clauses force mid-flight persist before acceptance refuse.
+        items: [],
+        acceptance: {
+          commands: [],
+          none_stated: true,
+          source_rung: "derived",
+          ambiguity_attestation: "none_found",
+          clauses: [
+            {
+              id: 1,
+              text: "Fail-closed ordering for completionProvenance",
+              artifact_path: null,
+              ambiguous: false,
+            },
+          ],
+        },
+      },
+    });
+    const gitOk: GitRunner = (_cwd, args) => {
+      const joined = args.join(" ");
+      if (joined.includes("merge-base") && joined.includes("--is-ancestor")) {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (joined.includes("rev-parse") && joined.includes("origin/")) {
+        return { code: 0, stdout: "deliverytipsha", stderr: "" };
+      }
+      if (joined.includes("symbolic-ref")) {
+        return { code: 0, stdout: "origin/master", stderr: "" };
+      }
+      if (joined.includes("show-ref")) {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+    const result = runTransition("complete", path, new Date("2026-09-30T12:00:00.000Z"), {
+      nonDeliveryDisposition: "accepted_not_delivered",
+      runGit: gitOk,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/Acceptance evidence required|#3240|clause\.1/);
+    expect(existsSync(path)).toBe(true);
+    expect(existsSync(join(root, "xbrief", "completed", "midflight-provenance.xbrief.json"))).toBe(
+      false,
+    );
+    const data = JSON.parse(readFileSync(path, "utf8")) as {
+      plan: {
+        status: string;
+        metadata?: { completionProvenance?: unknown };
+        items: Array<{ id?: string; status?: string }>;
+      };
+    };
+    expect(data.plan.status).toBe("running");
+    expect(data.plan.metadata).not.toHaveProperty("completionProvenance");
+    expect(data.plan.items.some((item) => item.id === "clause.1")).toBe(true);
+  });
+
   it("advances non-terminal own plan.items and stamps xBRIEFInfo.updated on complete (#2862)", () => {
     root = makeRepo();
     const path = join(root, "xbrief", "active", "mixed-items.xbrief.json");
@@ -822,26 +908,64 @@ describe("runTransition", () => {
         status: "running",
         updated: staleEnvelope,
         items: [
-          { title: "pending-item", status: "pending", ...aceEvidence("pending-item") },
-          { title: "proposed-item", status: "proposed", ...aceEvidence("proposed-item") },
-          { title: "running-item", status: "running", ...aceEvidence("running-item") },
-          { title: "cancelled-item", status: "cancelled" },
-          { title: "failed-item", status: "failed" },
-          { title: "already-completed", status: "completed" },
           {
+            id: "pending-item",
+            title: "pending-item",
+            status: "pending",
+            ...aceEvidence("pending-item"),
+          },
+          {
+            id: "proposed-item",
+            title: "proposed-item",
+            status: "proposed",
+            ...aceEvidence("proposed-item"),
+          },
+          {
+            id: "running-item",
+            title: "running-item",
+            status: "running",
+            ...aceEvidence("running-item"),
+          },
+          {
+            id: "cancelled-item",
+            title: "cancelled-item",
+            status: "cancelled",
+            ...aceEvidence("cancelled-item"),
+          },
+          {
+            id: "failed-item",
+            title: "failed-item",
+            status: "failed",
+            ...aceEvidence("failed-item"),
+          },
+          {
+            id: "already-completed",
+            title: "already-completed",
+            status: "completed",
+            ...aceEvidence("already-completed"),
+          },
+          {
+            id: "parent-with-sub",
             title: "parent-with-sub",
             status: "pending",
             ...aceEvidence("parent-with-sub"),
             subItems: [
               {
+                id: "sub-pending",
                 title: "sub-pending",
                 status: "pending",
                 ...aceEvidence("sub-pending"),
               },
-              { title: "sub-cancelled", status: "cancelled" },
+              {
+                id: "sub-cancelled",
+                title: "sub-cancelled",
+                status: "cancelled",
+                ...aceEvidence("sub-cancelled"),
+              },
             ],
           },
         ],
+        edges: [{ from: "already-completed", to: "failed-item", type: "invalidates" }],
       },
     });
     const fixed = new Date("2026-07-27T15:30:00.000Z");
@@ -987,7 +1111,7 @@ describe("runTransition", () => {
               },
             ],
           },
-          { title: "blocked-item", status: "blocked" },
+          { title: "blocked-item", status: "blocked", ...aceEvidence("blocked-item") },
         ],
       },
     });
@@ -1496,5 +1620,331 @@ describe("runTransition activate envelope policy (#3933 criterion 7)", () => {
       },
     });
     expect(runTransition("promote", child).ok).toBe(true);
+  });
+});
+
+describe("runTransition complete persist-path merge stamp (#5120)", () => {
+  let root = "";
+  afterEach(() => {
+    if (root.length > 0) {
+      rmSync(root, { recursive: true, force: true });
+      root = "";
+    }
+  });
+
+  function gitOk(): GitRunner {
+    return (_cwd, args) => {
+      const joined = args.join(" ");
+      if (joined.includes("merge-base") && joined.includes("--is-ancestor")) {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (joined.includes("rev-parse") && joined.includes("origin/")) {
+        return { code: 0, stdout: "abcdef1", stderr: "" };
+      }
+      if (joined.includes("symbolic-ref")) {
+        return { code: 0, stdout: "origin/master", stderr: "" };
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+  }
+
+  function writeProjectDefinition(dir: string): void {
+    writeFileSync(
+      join(dir, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          title: "P",
+          status: "running",
+          policy: { deliveryBranch: "master", wipCap: 20 },
+        },
+      }),
+      "utf8",
+    );
+  }
+
+  function mergeItem(): Record<string, unknown> {
+    return {
+      id: "clause.1",
+      title: "Merge tip ancestry",
+      status: "pending",
+      "x-directive/requires": "merge",
+    };
+  }
+
+  function deliveryIdentity(opts?: {
+    prNumber?: number;
+    issueNumber?: number;
+    mergeCommitSha?: string;
+  }) {
+    const prNumber = opts?.prNumber ?? 5120;
+    const issueNumber = opts?.issueNumber ?? 5120;
+    const mergeCommitSha = opts?.mergeCommitSha ?? "abcdef1";
+    return {
+      fetchPrPayload: (n: number, repo: string) => {
+        if (n !== prNumber || repo !== "deftai/directive") return null;
+        return {
+          merged_at: "2026-09-30T11:00:00Z",
+          merge_commit_sha: mergeCommitSha,
+          base: { ref: "master" },
+          head: { sha: "head5120" },
+        };
+      },
+      fetchClosingIssueIds: (n: number, repo: string) => {
+        if (n !== prNumber || repo !== "deftai/directive") return null;
+        return [{ repository: "deftai/directive", issueNumber }];
+      },
+    };
+  }
+
+  function deliveryOpts() {
+    return {
+      runGit: gitOk(),
+      ...deliveryIdentity(),
+      deliveryEvidence: {
+        repository: "deftai/directive",
+        prNumber: 5120,
+        prBase: "master",
+        mergeCommit: "abcdef1",
+        mergedAt: "2026-09-30T11:00:00Z",
+        deliveryBranch: "master",
+      },
+    } as const;
+  }
+
+  it("writes merge evidence onto the completed destination brief", () => {
+    root = makeRepo();
+    writeProjectDefinition(root);
+    const path = join(root, "xbrief", "active", "merge-stamp.xbrief.json");
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "product.txt"), "v1\n", "utf8");
+    writeFile(path, {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "merge-stamp",
+        status: "running",
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/5120",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+        items: [mergeItem()],
+        acceptance: {
+          commands: [],
+          none_stated: true,
+          source_rung: "derived",
+          ambiguity_attestation: "none_found",
+          clauses: [
+            {
+              id: 1,
+              text: "Merge tip ancestry",
+              artifact_path: "src/product.txt",
+              ambiguous: false,
+            },
+          ],
+        },
+        metadata: {
+          swarm: {
+            file_scope: ["src/product.txt"],
+            verify_commands: ["task check"],
+          },
+        },
+      },
+    });
+    const now = new Date("2026-09-30T12:00:00.000Z");
+    const result = runTransition("complete", path, now, {
+      ...deliveryOpts(),
+      assumeEvidenceValidated: true,
+      acceptanceRunner: () => ({ exitCode: 0, stdout: "ok", stderr: "" }),
+    });
+    expect(result.ok).toBe(true);
+    const dest = join(root, "xbrief", "completed", "merge-stamp.xbrief.json");
+    expect(existsSync(path)).toBe(false);
+    const data = JSON.parse(readFileSync(dest, "utf8")) as {
+      plan: { items: Array<Record<string, unknown>> };
+    };
+    expect(data.plan.items[0]?.["x-directive/evidence"]).toMatchObject({
+      kind: "merge",
+      pointer: "abcdef1",
+      recorded_by: "scope:complete",
+    });
+    expect(
+      (data.plan as { metadata?: { completionProvenance?: unknown } }).metadata
+        ?.completionProvenance,
+    ).toMatchObject({
+      mergeCommit: "abcdef1",
+      prNumber: 5120,
+      deliveryBranch: "master",
+    });
+  });
+
+  it("persists the merge stamp on the active brief when later acceptance refuses", () => {
+    root = makeRepo();
+    writeProjectDefinition(root);
+    const path = join(root, "xbrief", "active", "merge-then-refuse.xbrief.json");
+    writeFile(path, {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "merge-then-refuse",
+        status: "running",
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/5120",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+        items: [mergeItem(), { id: "clause.2", title: "still open", status: "pending" }],
+        acceptance: {
+          clauses: [
+            { id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false },
+            { id: 2, text: "still open", artifact_path: null, ambiguous: false },
+          ],
+        },
+      },
+    });
+    const now = new Date("2026-09-30T12:00:00.000Z");
+    const result = runTransition("complete", path, now, deliveryOpts());
+    expect(result.ok).toBe(false);
+    expect(existsSync(path)).toBe(true);
+    expect(existsSync(join(root, "xbrief", "completed", "merge-then-refuse.xbrief.json"))).toBe(
+      false,
+    );
+    const data = JSON.parse(readFileSync(path, "utf8")) as {
+      plan: { items: Array<Record<string, unknown>> };
+    };
+    expect(data.plan.items[0]?.["x-directive/evidence"]).toMatchObject({
+      kind: "merge",
+      pointer: "abcdef1",
+    });
+    expect(data.plan.items[1]?.["x-directive/evidence"]).toBeUndefined();
+  });
+
+  it("reuses delivery ancestry so a second fetch failure still stamps", () => {
+    root = makeRepo();
+    writeProjectDefinition(root);
+    const path = join(root, "xbrief", "active", "merge-reuse-ancestry.xbrief.json");
+    writeFile(path, {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "merge-reuse-ancestry",
+        status: "running",
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/5120",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+        items: [mergeItem(), { id: "clause.2", title: "still open", status: "pending" }],
+        acceptance: {
+          clauses: [
+            { id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false },
+            { id: 2, text: "still open", artifact_path: null, ambiguous: false },
+          ],
+        },
+      },
+    });
+    let fetchCount = 0;
+    const runGit: GitRunner = (_cwd, args) => {
+      const joined = args.join(" ");
+      if (args[0] === "fetch") {
+        fetchCount += 1;
+        if (fetchCount > 1) {
+          return { code: 1, stdout: "", stderr: "second fetch boom" };
+        }
+        return { code: 0, stdout: "ok", stderr: "" };
+      }
+      if (joined.includes("merge-base") && joined.includes("--is-ancestor")) {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (joined.includes("rev-parse") && joined.includes("origin/")) {
+        return { code: 0, stdout: "abcdef1", stderr: "" };
+      }
+      if (joined.includes("symbolic-ref")) {
+        return { code: 0, stdout: "origin/master", stderr: "" };
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+    const now = new Date("2026-09-30T12:00:00.000Z");
+    const result = runTransition("complete", path, now, {
+      runGit,
+      ...deliveryIdentity(),
+      deliveryEvidence: {
+        repository: "deftai/directive",
+        prNumber: 5120,
+        prBase: "master",
+        mergeCommit: "abcdef1",
+        mergedAt: "2026-09-30T11:00:00Z",
+        deliveryBranch: "master",
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(fetchCount).toBe(1);
+    const data = JSON.parse(readFileSync(path, "utf8")) as {
+      plan: { items: Array<Record<string, unknown>> };
+    };
+    expect(data.plan.items[0]?.["x-directive/evidence"]).toMatchObject({
+      kind: "merge",
+      pointer: "abcdef1",
+    });
+  });
+
+  it("does not fetch when delivery evidence was already validated", () => {
+    root = makeRepo();
+    writeProjectDefinition(root);
+    const path = join(root, "xbrief", "active", "merge-prevalidated.xbrief.json");
+    writeFile(path, {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "merge-prevalidated",
+        status: "running",
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/5120",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+        items: [mergeItem(), { id: "clause.2", title: "still open", status: "pending" }],
+        acceptance: {
+          clauses: [
+            { id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false },
+            { id: 2, text: "still open", artifact_path: null, ambiguous: false },
+          ],
+        },
+      },
+    });
+    let fetchCount = 0;
+    const runGit: GitRunner = (_cwd, args) => {
+      if (args[0] === "fetch") {
+        fetchCount += 1;
+        return { code: 1, stdout: "", stderr: "must not fetch" };
+      }
+      if (args.join(" ").includes("symbolic-ref")) {
+        return { code: 0, stdout: "origin/master", stderr: "" };
+      }
+      return { code: 0, stdout: "ok", stderr: "" };
+    };
+    const now = new Date("2026-09-30T12:00:00.000Z");
+    const result = runTransition("complete", path, now, {
+      runGit,
+      ...deliveryIdentity(),
+      assumeEvidenceValidated: true,
+      deliveryEvidence: {
+        repository: "deftai/directive",
+        prNumber: 5120,
+        prBase: "master",
+        mergeCommit: "abcdef1",
+        mergedAt: "2026-09-30T11:00:00Z",
+        deliveryBranch: "master",
+      },
+    });
+    expect(result.ok).toBe(false);
+    expect(fetchCount).toBe(0);
+    const data = JSON.parse(readFileSync(path, "utf8")) as {
+      plan: { items: Array<Record<string, unknown>> };
+    };
+    expect(data.plan.items[0]?.["x-directive/evidence"]).toMatchObject({
+      kind: "merge",
+      pointer: "abcdef1",
+    });
   });
 });

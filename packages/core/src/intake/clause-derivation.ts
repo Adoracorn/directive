@@ -21,6 +21,10 @@ import {
   serializeAcceptanceClauses,
   stripInlineMarkdownBold,
 } from "../verify-ac/clauses.js";
+import {
+  stampRequirementSources,
+  type WorkspaceSourceInput,
+} from "../verify-ac/requirement-sources.js";
 
 /** One-line remediation when a stamp has no statement-traceable clause (#3398). */
 export const CLAUSE_STAMP_IMPLEMENTATION_ONLY_REMEDIATION =
@@ -362,6 +366,35 @@ export function applyClauseQualityForIngest(plan: Record<string, unknown>): Clau
   return quality;
 }
 
+/**
+ * Dedicated empty-after-harvest ingest writer (#4671).
+ * Persists and prints a concrete remediation when plan.items is still empty after
+ * checkbox / Acceptance Criteria / Requirements: harvest. Distinct from
+ * applyClauseQualityForIngest empty-clause silence.
+ */
+export const EMPTY_AFTER_HARVEST_REMEDIATION =
+  "plan.items is empty after body harvest (checkbox list, Acceptance Criteria heading, or whole-line Requirements: colon-label). Add structured list items on the issue body before promote/activate; bare prose stays under #4374.";
+
+export function applyEmptyAfterHarvestNoticeForIngest(
+  plan: Record<string, unknown>,
+): ClauseDerivationResult {
+  const items = Array.isArray(plan.items) ? plan.items : [];
+  if (items.length > 0) {
+    return { applied: false, clauses: readAcceptanceClauses(plan.acceptance), notice: "" };
+  }
+  const existing = asRecord(plan.acceptance);
+  const notice = EMPTY_AFTER_HARVEST_REMEDIATION;
+  plan.acceptance = {
+    ...(existing ?? { none_stated: true, commands: [] }),
+    quality_notice: notice,
+  };
+  return {
+    applied: true,
+    clauses: readAcceptanceClauses(plan.acceptance),
+    notice,
+  };
+}
+
 function formatAmbiguousClauseNotice(clauses: readonly AcceptanceClause[]): string {
   const flagged = clauses.filter((clause) => clause.ambiguous);
   const lines = [
@@ -387,7 +420,13 @@ function formatAmbiguousClauseNotice(clauses: readonly AcceptanceClause[]): stri
  */
 export function applyClauseDerivationToPlan(
   plan: Record<string, unknown>,
-  options: { readonly projectRoot?: string; readonly emitStamp?: boolean } = {},
+  options: {
+    readonly projectRoot?: string;
+    readonly emitStamp?: boolean;
+    /** Workspace artifacts this stamp already read (#3920). */
+    readonly workspaceSources?: readonly WorkspaceSourceInput[];
+    readonly now?: () => string;
+  } = {},
 ): ClauseDerivationResult {
   if (!needsClauseDerivation(plan.acceptance)) {
     return {
@@ -443,6 +482,17 @@ export function applyClauseDerivationToPlan(
       clauses: quality.clauses,
       notice: quality.notice,
     };
+  }
+  // Stamp only after quality accepts — avoids orphan requirement_sources on
+  // quality rollback (#3920). Callers must pass already-read external paths;
+  // do not invent candidates (prefix-match discovery false-stamped files) and
+  // never stamp the brief path (lifecycle moves rename it).
+  const workspaceSources = options.workspaceSources ?? [];
+  if (workspaceSources.length > 0 && options.projectRoot !== undefined) {
+    const stamped = stampRequirementSources(plan, options.projectRoot, workspaceSources, {
+      now: options.now,
+    });
+    plan.metadata = stamped.metadata;
   }
   if (options.emitStamp !== false && options.projectRoot !== undefined) {
     emitAcceptanceStampFromPlan(options.projectRoot, plan);

@@ -47,6 +47,10 @@
       "types": "./dist/agents-md-advisory/index.d.ts",
       "default": "./dist/agents-md-advisory/index.js"
     },
+    "./project": {
+      "types": "./dist/project/index.d.ts",
+      "default": "./dist/project/index.js"
+    },
     "./eval-health-relocation": {
       "types": "./dist/eval-health-relocation/index.d.ts",
       "default": "./dist/eval-health-relocation/index.js"
@@ -66,6 +70,18 @@
     "./intent-constraint": {
       "types": "./dist/intent-constraint/index.d.ts",
       "default": "./dist/intent-constraint/index.js"
+    },
+    "./durable-effect-acquisition": {
+      "types": "./dist/durable-effect-acquisition/index.d.ts",
+      "default": "./dist/durable-effect-acquisition/index.js"
+    },
+    "./operator-scope-limit": {
+      "types": "./dist/operator-scope-limit/index.d.ts",
+      "default": "./dist/operator-scope-limit/index.js"
+    },
+    "./presentation-coverage": {
+      "types": "./dist/presentation-coverage/index.d.ts",
+      "default": "./dist/presentation-coverage/index.js"
     },
     "./class-checks": {
       "types": "./dist/class-checks/index.d.ts",
@@ -107,9 +123,17 @@
       "types": "./dist/authz/index.d.ts",
       "default": "./dist/authz/index.js"
     },
+    "./authz/campaign-end-seal": {
+      "types": "./dist/authz/campaign-end-seal.d.ts",
+      "default": "./dist/authz/campaign-end-seal.js"
+    },
     "./one-pr-unit": {
       "types": "./dist/one-pr-unit/index.d.ts",
       "default": "./dist/one-pr-unit/index.js"
+    },
+    "./pre-pr-controller": {
+      "types": "./dist/pre-pr-controller/index.d.ts",
+      "default": "./dist/pre-pr-controller/index.js"
     },
     "./escalation": {
       "types": "./dist/escalation/index.d.ts",
@@ -267,6 +291,11 @@
       "types": "./dist/verify-source/index.d.ts",
       "default": "./dist/verify-source/index.js"
     },
+    "./spec-reconstruct": {
+      "types": "./dist/spec-reconstruct/reconstruct.d.ts",
+      "default": "./dist/spec-reconstruct/reconstruct.js"
+    },
+
     "./validate-content": {
       "types": "./dist/validate-content/index.d.ts",
       "default": "./dist/validate-content/index.js"
@@ -417,7 +446,8 @@
     "@deftai/directive-content": "workspace:*",
     "@deftai/directive-types": "workspace:*",
     "archiver": "^8.0.0",
-    "parse5": "^7.3.0"
+    "parse5": "^7.3.0",
+    "typescript": "^5.9.3"
   },
   "scripts": {
     "build": "tsc -b",

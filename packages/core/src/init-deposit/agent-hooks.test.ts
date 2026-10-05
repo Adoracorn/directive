@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { runWithMutationLedger, snapshotMutationSummary } from "../fs/mutation-ledger.js";
 import {
   DIRECT_WRITE_TOOL_NAMES,
+  GROK_MUTATION_TOOL_CATALOG,
   isDirectWriteTool,
   isSpawnTool,
   SPAWN_TOOL_NAMES,
@@ -30,6 +31,7 @@ import {
   inspectSessionStartNotice,
   MCP_HOOK_MATCHER,
   NESTED_HOOK_TIMEOUT_SECONDS,
+  NESTED_TOOL_BEFORE_TIMEOUT_SECONDS,
   SHELL_HOOK_MATCHER,
   SPAWN_HOOK_MATCHER,
   writeAgentHookDeposit,
@@ -156,24 +158,43 @@ describe("writeAgentHookDeposit", () => {
           e.timeout === CURSOR_TOOL_BEFORE_TIMEOUT_SECONDS,
       ),
     ).toBe(true);
-    // Nested hosts keep their shorter command timeout.
-    const claude = JSON.parse(readFileSync(join(root, ".claude/settings.json"), "utf8")) as {
-      hooks: { PreToolUse: Array<{ hooks: Array<{ timeout?: number }> }> };
-    };
-    expect(
-      claude.hooks.PreToolUse.some((group) =>
-        group.hooks.some((h) => h.timeout === NESTED_HOOK_TIMEOUT_SECONDS),
-      ),
-    ).toBe(true);
-
-    // #3736: Cursor loads its flat registrations plus nested host registrations.
-    // Its effective tool.before budget is the minimum across every loaded entry,
-    // not the timeout declared by any one deposit schema.
-    const nestedTimeouts = [
+    // #3739: nested tool.before shares Cursor's readiness ceiling; session stays at 5s.
+    expect(NESTED_TOOL_BEFORE_TIMEOUT_SECONDS).toBe(CURSOR_TOOL_BEFORE_TIMEOUT_SECONDS);
+    expect(NESTED_TOOL_BEFORE_TIMEOUT_SECONDS).toBeGreaterThan(NESTED_HOOK_TIMEOUT_SECONDS);
+    const nestedHosts = [
       ".claude/settings.json",
       ".grok/hooks/deft.json",
       ".codex/hooks.json",
-    ].flatMap((relativePath) => {
+    ] as const;
+    for (const relativePath of nestedHosts) {
+      const nested = JSON.parse(readFileSync(join(root, relativePath), "utf8")) as {
+        hooks: {
+          SessionStart?: Array<{ hooks?: Array<{ timeout?: number }> }>;
+          PreToolUse?: Array<{ hooks?: Array<{ timeout?: number }> }>;
+          PreCompact?: Array<{ hooks?: Array<{ timeout?: number }> }>;
+        };
+      };
+      expect(
+        (nested.hooks.PreToolUse ?? []).every((group) =>
+          (group.hooks ?? []).every((h) => h.timeout === NESTED_TOOL_BEFORE_TIMEOUT_SECONDS),
+        ),
+      ).toBe(true);
+      expect(
+        (nested.hooks.SessionStart ?? []).every((group) =>
+          (group.hooks ?? []).every((h) => h.timeout === NESTED_HOOK_TIMEOUT_SECONDS),
+        ),
+      ).toBe(true);
+      if (nested.hooks.PreCompact !== undefined) {
+        expect(
+          nested.hooks.PreCompact.every((group) =>
+            (group.hooks ?? []).every((h) => h.timeout === NESTED_HOOK_TIMEOUT_SECONDS),
+          ),
+        ).toBe(true);
+      }
+    }
+
+    // Cursor + nested PreToolUse budgets align after #3739 (no longer dragged to 5s).
+    const nestedTimeouts = nestedHosts.flatMap((relativePath) => {
       const config = JSON.parse(readFileSync(join(root, relativePath), "utf8")) as {
         hooks: { PreToolUse?: Array<{ hooks?: Array<{ timeout?: number }> }> };
       };
@@ -187,7 +208,7 @@ describe("writeAgentHookDeposit", () => {
       typeof entry.timeout === "number" ? [entry.timeout] : [],
     );
     const effectiveTimeoutSeconds = Math.min(...cursorTimeouts, ...nestedTimeouts);
-    expect(effectiveTimeoutSeconds).toBe(NESTED_HOOK_TIMEOUT_SECONDS);
+    expect(effectiveTimeoutSeconds).toBe(NESTED_TOOL_BEFORE_TIMEOUT_SECONDS);
   });
 
   it("ledgers adapter deletes even when the writer return is discarded (#3392)", () => {
@@ -429,8 +450,8 @@ describe("writeAgentHookDeposit", () => {
     expect(codex).toContain("./resume-check.sh");
     expect(codex).toContain("./custom-codex-check.sh");
     expect(codex).not.toContain("--old");
-    // direct-write + spawn + shell + MCP (#2711) managed PreToolUse groups
-    expect(codex.match(/--host codex --event tool\.before/g)).toHaveLength(4);
+    // direct-write + spawn + shell + kill (#5281) + MCP managed PreToolUse groups
+    expect(codex.match(/--host codex --event tool\.before/g)).toHaveLength(5);
   });
 
   it("preserves malformed unrelated nested candidates without treating them as managed", () => {
@@ -802,6 +823,128 @@ describe("inspectAgentHookDeposit", () => {
     expect(inspectAgentHookDeposit(root).find((entry) => entry.host === "cursor")).toMatchObject({
       status: "drifted",
     });
+  });
+
+  it("keeps grok healthy when direct-write matcher lacks EditNotebook but has catalog tokens (#4574)", () => {
+    const root = project();
+    writeAgentHookDeposit(root);
+    const grokPath = join(root, ".grok/hooks/deft.json");
+    const grok = JSON.parse(readFileSync(grokPath, "utf8")) as {
+      hooks: { PreToolUse: Array<Record<string, unknown>> };
+    };
+    const withoutEditNotebook = DIRECT_WRITE_HOOK_MATCHER.replace(
+      "|EditNotebook|edit_notebook",
+      "",
+    );
+    expect(withoutEditNotebook).not.toBe(DIRECT_WRITE_HOOK_MATCHER);
+    expect(withoutEditNotebook.split("|")).toEqual(
+      expect.arrayContaining([...GROK_MUTATION_TOOL_CATALOG.directWrite]),
+    );
+    grok.hooks.PreToolUse = grok.hooks.PreToolUse.map((entry) =>
+      entry.matcher === DIRECT_WRITE_HOOK_MATCHER
+        ? { ...entry, matcher: withoutEditNotebook }
+        : entry,
+    );
+    writeFileSync(grokPath, `${JSON.stringify(grok, null, 2)}\n`, "utf8");
+
+    expect(inspectAgentHookDeposit(root).find((entry) => entry.host === "grok")).toMatchObject({
+      status: "healthy",
+    });
+    expect(inspectAgentHookDeposit(root).find((entry) => entry.host === "claude")).toMatchObject({
+      status: "healthy",
+    });
+  });
+
+  it("marks grok drifted when a GROK_MUTATION_TOOL_CATALOG.directWrite token is missing (#4574)", () => {
+    const root = project();
+    writeAgentHookDeposit(root);
+    const grokPath = join(root, ".grok/hooks/deft.json");
+    const grok = JSON.parse(readFileSync(grokPath, "utf8")) as {
+      hooks: { PreToolUse: Array<Record<string, unknown>> };
+    };
+    const missingSearchReplace = DIRECT_WRITE_HOOK_MATCHER.replace("|search_replace", "");
+    grok.hooks.PreToolUse = grok.hooks.PreToolUse.map((entry) =>
+      entry.matcher === DIRECT_WRITE_HOOK_MATCHER
+        ? { ...entry, matcher: missingSearchReplace }
+        : entry,
+    );
+    writeFileSync(grokPath, `${JSON.stringify(grok, null, 2)}\n`, "utf8");
+
+    expect(inspectAgentHookDeposit(root).find((entry) => entry.host === "grok")).toMatchObject({
+      status: "drifted",
+    });
+  });
+
+  it("does not use write|search_replace exact-equality as the grok registration bar (#4574)", () => {
+    const root = project();
+    writeAgentHookDeposit(root);
+    const grokPath = join(root, ".grok/hooks/deft.json");
+    const grok = JSON.parse(readFileSync(grokPath, "utf8")) as {
+      hooks: { PreToolUse: Array<Record<string, unknown>> };
+    };
+    // Longer union that still carries catalog tokens — token presence, not exact bar.
+    const longerThanCatalogBar = `${DIRECT_WRITE_HOOK_MATCHER}|ExtraWriteAlias`;
+    expect(longerThanCatalogBar).not.toBe("write|search_replace");
+    grok.hooks.PreToolUse = grok.hooks.PreToolUse.map((entry) =>
+      entry.matcher === DIRECT_WRITE_HOOK_MATCHER
+        ? { ...entry, matcher: longerThanCatalogBar }
+        : entry,
+    );
+    writeFileSync(grokPath, `${JSON.stringify(grok, null, 2)}\n`, "utf8");
+
+    expect(inspectAgentHookDeposit(root).find((entry) => entry.host === "grok")).toMatchObject({
+      status: "healthy",
+    });
+  });
+
+  it("keeps claude on exact-equality for DIRECT_WRITE_HOOK_MATCHER (#4574)", () => {
+    const root = project();
+    writeAgentHookDeposit(root);
+    const claudePath = join(root, ".claude/settings.json");
+    const claude = JSON.parse(readFileSync(claudePath, "utf8")) as {
+      hooks: { PreToolUse: Array<Record<string, unknown>> };
+    };
+    const withoutEditNotebook = DIRECT_WRITE_HOOK_MATCHER.replace(
+      "|EditNotebook|edit_notebook",
+      "",
+    );
+    claude.hooks.PreToolUse = claude.hooks.PreToolUse.map((entry) =>
+      entry.matcher === DIRECT_WRITE_HOOK_MATCHER
+        ? { ...entry, matcher: withoutEditNotebook }
+        : entry,
+    );
+    writeFileSync(claudePath, `${JSON.stringify(claude, null, 2)}\n`, "utf8");
+
+    expect(inspectAgentHookDeposit(root).find((entry) => entry.host === "claude")).toMatchObject({
+      status: "drifted",
+    });
+  });
+
+  it("marks nested hosts drifted when PreToolUse still has the old 5s timeout (#3739)", () => {
+    const root = project();
+    writeAgentHookDeposit(root);
+    const claudePath = join(root, ".claude/settings.json");
+    const claude = JSON.parse(readFileSync(claudePath, "utf8")) as {
+      hooks: {
+        PreToolUse: Array<{ hooks?: Array<{ timeout?: number }> }>;
+      };
+    };
+    claude.hooks.PreToolUse = claude.hooks.PreToolUse.map((group) => ({
+      ...group,
+      hooks: (group.hooks ?? []).map((hook) => ({ ...hook, timeout: 5 })),
+    }));
+    writeFileSync(claudePath, `${JSON.stringify(claude, null, 2)}\n`, "utf8");
+
+    expect(inspectAgentHookDeposit(root).find((entry) => entry.host === "claude")).toMatchObject({
+      status: "drifted",
+    });
+  });
+
+  it("still deposits shared DIRECT_WRITE_HOOK_MATCHER for grok merge writer (#4574)", () => {
+    const root = project();
+    writeAgentHookDeposit(root);
+    const grok = readFileSync(join(root, ".grok/hooks/deft.json"), "utf8");
+    expect(grok).toContain(`"matcher": "${DIRECT_WRITE_HOOK_MATCHER}"`);
   });
 
   it("treats non-array event collections as registration drift", () => {

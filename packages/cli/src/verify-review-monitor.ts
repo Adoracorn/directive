@@ -2,18 +2,23 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  bindLivePhaseCorrectWait,
   evaluateMergePathArm,
   type MergePathArmResult,
 } from "@deftai/directive-core/dist/pr-watch/main.js";
+import { evaluateApproach1ArmStartup } from "@deftai/directive-core/orchestration";
 import {
   EXIT_CONFIG_ERROR,
   EXIT_NOT_READY,
   evaluateReviewMonitorGate,
+  formatApproach1BabysitterOneLiner,
   isTier1,
   REVIEW_MONITOR_HELP,
   type ReviewMonitorCallSite,
+  spawnRedirect,
   verifyResultToJson,
 } from "@deftai/directive-core/review-monitor";
+import { writeMergePathExplicitFinishAttestation } from "@deftai/directive-core/swarm";
 
 interface ParsedArgs {
   pr: number | null;
@@ -29,6 +34,8 @@ interface ParsedArgs {
   liveWait: boolean;
   explicitFinish: boolean;
   stickyLease: boolean;
+  /** DeliveryAttemptRecord.startedAt for Approach 1 arm-startup halt (#5278 P3). */
+  dispatchStartedAt: string | null;
   help: boolean;
   error?: string;
 }
@@ -54,6 +61,7 @@ export function parseVerifyReviewMonitorArgs(argv: readonly string[]): ParsedArg
     liveWait: false,
     explicitFinish: false,
     stickyLease: false,
+    dispatchStartedAt: null,
     help: false,
   };
 
@@ -72,6 +80,15 @@ export function parseVerifyReviewMonitorArgs(argv: readonly string[]): ParsedArg
       acc.explicitFinish = true;
     } else if (arg === "--sticky-lease") {
       acc.stickyLease = true;
+    } else if (arg === "--dispatch-started-at") {
+      const value = argv[i + 1];
+      if (value === undefined) {
+        return { ...acc, error: "argument --dispatch-started-at: expected one argument" };
+      }
+      acc.dispatchStartedAt = value;
+      i += 1;
+    } else if (arg?.startsWith("--dispatch-started-at=")) {
+      acc.dispatchStartedAt = arg.slice("--dispatch-started-at=".length);
     } else if (arg === "--approach3") {
       acc.approach3 = true;
     } else if (arg === "--approach3-warned") {
@@ -151,13 +168,23 @@ export function run(argv: readonly string[]): number {
   if (args.help) {
     process.stdout.write(REVIEW_MONITOR_HELP);
     process.stdout.write(
-      "\n#4882 merge-path arm observer (optional):\n" +
+      "\n#4882 / #5020 / #5219 merge-path arm observer (optional):\n" +
         "  --merge-path-arm       Fail closed when neither live wait nor explicit finish\n" +
-        "  --live-wait            Attest a still-running phase-correct wait for this PR\n" +
-        "                         (Tier 1: bound to gate lease evidence for --pr)\n" +
+        "  --live-wait            Require still-running wait evidence for this PR\n" +
+        "                         (Tier 1: lease + active polling heartbeat with pid liveness;\n" +
+        "                         lease+flag alone is not armed — #5020).\n" +
+        "                         On spawn_subagent hosts, lease platform_primitive must be\n" +
+        "                         spawn_subagent and heartbeat parent_id must match the lease\n" +
+        "                         monitor_agent_id, or pr-wait-mergeable only after local\n" +
+        "                         pr:watch CLEAN attestation — #5219;\n" +
+        "                         parent-shell pr:watch (parent_id=pr-watch) does not arm.\n" +
         "  --explicit-finish      Attest option-C BLOCKED/FAILED finish for this PR\n" +
         "  --sticky-lease         Attest a fresh sticky lease (not sufficient alone)\n" +
-        "  Prefer Approach 1 / native pr:watch; homemade line-parsed --json is not an arm.\n",
+        "  --dispatch-started-at  DeliveryAttemptRecord.startedAt ISO for Approach 1\n" +
+        "                         arm-startup halt (#5278); when merge-path-arm stays\n" +
+        "                         red past the 3m allowance, emit approach1-arm-startup.\n" +
+        "  Prefer Approach 1 / native pr:watch --monitor-agent-id <id> or post-CLEAN\n" +
+        "  pr:wait-mergeable-and-merge; homemade line-parsed --json is not an arm.\n",
     );
     return 0;
   }
@@ -187,22 +214,99 @@ export function run(argv: readonly string[]): number {
 
   let arm: MergePathArmResult | null = null;
   if (args.mergePathArm) {
-    // Bind --live-wait to gate-observed lease evidence on Tier 1 for this PR.
-    // Bare flags must not arm when Tier 1 requires a lease and none is present.
+    // Durable option-C attestation for cohort inventory halted-explicit (#5318).
+    // Do not write (or arm from) --explicit-finish when the monitor gate is a config error,
+    // and fail closed if the durable write itself fails.
+    let explicitFinishDurable = false;
+    if (args.explicitFinish) {
+      if (result.exitCode === EXIT_CONFIG_ERROR) {
+        explicitFinishDurable = false;
+      } else {
+        const written = writeMergePathExplicitFinishAttestation(
+          resolve(args.projectRoot),
+          args.pr,
+          {
+            source: "verify:review-monitor --explicit-finish",
+          },
+        );
+        if (!written.ok) {
+          process.stderr.write(`verify_review_monitor: ${written.reason}
+`);
+          return EXIT_CONFIG_ERROR;
+        }
+        explicitFinishDurable = true;
+      }
+    }
+    // Bind --live-wait to lease (#5018) + process-liveness heartbeat (#5020) on Tier 1.
+    // spawn_subagent identity join is already applied in evaluateReviewMonitorGate (#5219).
     const leaseEvidence = result.monitorRecord !== null;
-    const liveBound = args.liveWait && (!isTier1(result.tier) || leaseEvidence);
+    const liveBind = bindLivePhaseCorrectWait({
+      liveWaitFlag: args.liveWait,
+      tierIs1: isTier1(result.tier),
+      leaseEvidence,
+      heartbeatActive: result.heartbeatActive,
+      pr: args.pr,
+    });
     arm = evaluateMergePathArm({
-      livePhaseCorrectWait: liveBound,
-      explicitFinish: args.explicitFinish,
+      livePhaseCorrectWait: liveBind.livePhaseCorrectWait,
+      explicitFinish: explicitFinishDurable,
       stickyLeaseActive: args.stickyLease || leaseEvidence,
     });
-    if (args.liveWait && !liveBound && !args.explicitFinish && !arm.armed) {
+    if (args.liveWait && !liveBind.livePhaseCorrectWait && !args.explicitFinish && !arm.armed) {
+      const spawnHost = result.tier.primitive === "spawn_subagent";
+      const lease = result.monitorRecord;
+      let message = liveBind.message;
+      if (spawnHost && lease !== null && lease.platform_primitive !== "spawn_subagent") {
+        message =
+          `unarmed stand-down: Tier-1 spawn_subagent requires lease ` +
+          `platform_primitive=spawn_subagent for PR #${args.pr} (#5219); ` +
+          `got ${lease.platform_primitive}.\n` +
+          `  ${spawnRedirect(result.tier)}`;
+      } else if (
+        spawnHost &&
+        lease !== null &&
+        lease.platform_primitive === "spawn_subagent" &&
+        liveBind.reason === "missing_process_liveness"
+      ) {
+        message =
+          `unarmed stand-down: --live-wait for PR #${args.pr} has spawn_subagent lease ` +
+          `(monitor_agent_id=${lease.monitor_agent_id}) but no child-bound wait identity ` +
+          `(heartbeat parent_id must match monitor_agent_id, or pr-wait-mergeable after ` +
+          `pr:watch CLEAN attestation; start child pr:watch before verify; ` +
+          `parent-shell pr:watch does not arm) (#5219).\n` +
+          `  Cheaper path:\n` +
+          `  ${formatApproach1BabysitterOneLiner(args.pr, lease.monitor_agent_id)}\n` +
+          `  ${spawnRedirect(result.tier)}`;
+      } else if (message === null) {
+        message = arm.message;
+      }
       arm = {
         armed: false,
         reason: "unarmed_stand_down",
-        message:
-          `unarmed stand-down: --live-wait attestation unbound to lease evidence ` +
-          `for PR #${args.pr} (Tier 1); sticky lease alone is not a live arm (#4882)`,
+        message,
+      };
+    }
+  }
+
+  // Approach 1 arm-startup halt (#5278 P3): production caller for evaluateApproach1ArmStartup.
+  let armStartupHalt: ReturnType<typeof evaluateApproach1ArmStartup> | null = null;
+  if (
+    args.mergePathArm &&
+    args.dispatchStartedAt !== null &&
+    args.dispatchStartedAt.trim().length > 0 &&
+    arm !== null &&
+    !arm.armed &&
+    !args.explicitFinish
+  ) {
+    armStartupHalt = evaluateApproach1ArmStartup({
+      dispatchStartedAt: args.dispatchStartedAt,
+      probeReady: false,
+    });
+    if (armStartupHalt.halt && armStartupHalt.message.length > 0) {
+      arm = {
+        armed: false,
+        reason: "unarmed_stand_down",
+        message: `${arm.message}\n${armStartupHalt.message}`,
       };
     }
   }
@@ -218,7 +322,16 @@ export function run(argv: readonly string[]): number {
         explicit_finish: args.explicitFinish,
         sticky_lease: args.stickyLease,
         lease_evidence: result.monitorRecord !== null,
+        heartbeat_active: result.heartbeatActive,
       };
+      if (armStartupHalt !== null) {
+        payload.approach1_arm_startup = {
+          halt: armStartupHalt.halt,
+          halt_class: armStartupHalt.halt_class,
+          elapsed_seconds: armStartupHalt.elapsed_seconds,
+          message: armStartupHalt.message,
+        };
+      }
       // Combined gate+arm: unarmed fails closed even when the monitor gate is ready.
       if (!arm.armed && result.exitCode !== EXIT_CONFIG_ERROR) {
         payload.ready = false;

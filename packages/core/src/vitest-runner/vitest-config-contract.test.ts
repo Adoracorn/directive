@@ -90,6 +90,17 @@ describe("vitest.config.ts Windows coverage tmp regression (#2634)", () => {
   });
 });
 
+describe("vitest.config.ts coverage json producer (#4244)", () => {
+  const source = readFileSync(configPath, "utf8");
+
+  it("includes json in coverage.reporter so coverage-final.json is produced", () => {
+    const block = /coverage:\s*\{[\s\S]*?reporter:\s*\[([^\]]+)\]/.exec(source)?.[1] ?? "";
+    expect(block).toMatch(/["']text["']/);
+    expect(block).toMatch(/["']text-summary["']/);
+    expect(block).toMatch(/["']json["']/);
+  });
+});
+
 describe("vitest.config.ts coverage threshold contract (#2573)", () => {
   const source = readFileSync(configPath, "utf8");
 
@@ -180,7 +191,7 @@ describe("vitest.config.ts coverage wall classes (#4591)", () => {
     expect(source).toMatch(/RELEASE_CHECK_TIMEOUT_MS/);
     expect(source).toContain("#4744");
     expect(source).toMatch(/progress-reporter\.ts/);
-    expect(constants).toMatch(/RELEASE_CHECK_TIMEOUT_MS = 30 \* 60 \* 1000/);
+    expect(constants).toMatch(/RELEASE_CHECK_TIMEOUT_MS = 60 \* 60 \* 1000/);
   });
 
   it("splits spawn-heavy leftovers into their own vitest project", () => {
@@ -245,6 +256,30 @@ describe("vitest.config.ts coverage wall classes (#4591)", () => {
     expect(occupancy).toMatch(/function otherRoot/);
     expect(occupancy).toMatch(/beforeAll/);
     expect(occupancy).toMatch(/sharedRoot/);
+  });
+
+  it("keeps durable-effect evaluate on unit share-plus-reset without isolate:false (#5140)", () => {
+    const durable = readFileSync(
+      join(repoRoot, "packages/core/src/durable-effect-acquisition/evaluate.test.ts"),
+      "utf8",
+    );
+    const durations = JSON.parse(
+      readFileSync(join(repoRoot, "packages/core/fixtures/vitest-file-durations.json"), "utf8"),
+    ) as { files: Record<string, number> };
+    expect(durable).toMatch(/resetSharedSnap/);
+    expect(durable).toMatch(/sharedSnapshot/);
+    expect(durable).toMatch(/beforeAll/);
+    expect(source).not.toMatch(/\bisolate\s*:\s*false\b/);
+    expect(source).not.toContain("durable-effect-acquisition/evaluate.test.ts");
+    expect(
+      durations.files["packages/core/src/durable-effect-acquisition/evaluate.test.ts"],
+    ).toBeGreaterThan(30_000);
+    expect(
+      durations.files["packages/core/src/presentation-coverage/gates.test.ts"],
+    ).toBeGreaterThan(30_000);
+    expect(
+      durations.files["packages/core/src/vbrief-validate/landed-filename.test.ts"],
+    ).toBeGreaterThan(30_000);
   });
 });
 

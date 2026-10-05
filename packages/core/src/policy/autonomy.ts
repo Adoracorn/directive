@@ -215,6 +215,21 @@ export function recommendAutonomyLevel(
   const sampleSize = options.sample_size;
   const p0Reversal = options.p0_reversal ?? false;
 
+  // P3-a: dial zeros mean absent decision-event producer, not a clean window.
+  // P0 reversal still retreats — sample 0 must not mask that safety signal.
+  if (sampleSize === 0 && !p0Reversal) {
+    return {
+      current_level: cur,
+      recommended_level: cur,
+      action: AUTONOMY_ACTION_HOLD,
+      rationale:
+        `hold at ${cur}: sample 0 -- autonomy dial zeros mean absent decision-event ` +
+        "producer, not a clean observation window. ADVISORY: a human confirms; no auto-ratchet.",
+      gate_id: gateId,
+      advisory: true,
+    };
+  }
+
   if (p0Reversal || overrideRate > pol.retreat_override_rate) {
     const trigger = p0Reversal
       ? "P0 reversal observed"

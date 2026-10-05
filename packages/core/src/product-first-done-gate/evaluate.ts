@@ -8,8 +8,8 @@
  * floor, empty resolution is soft_empty — not a green run (#3334).
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import {
   emitAcceptanceStampFromPlan,
   MISSING_AMBIGUITY_ATTESTATION_CAUSE,
@@ -45,7 +45,7 @@ import {
   resolveScopeIdForAcReuse,
   snapshotFromReuseFields,
 } from "../session/ac-pass-reuse.js";
-import { gitHead } from "../session/git.js";
+import { defaultGitRunner, gitHead } from "../session/git.js";
 import { hashProductState } from "../session/product-state-hash.js";
 import {
   type AcServedFrom,
@@ -67,6 +67,14 @@ import {
   mergeOracleVerdict,
 } from "../verify-ac/evaluate.js";
 import {
+  evaluateRequirementSourcesStaleness,
+  writeRequirementSourcesAutofixToXbrief,
+} from "../verify-ac/requirement-sources.js";
+import {
+  digestAdmittedSourceSentences,
+  extractAdmittedSourceSentencesFromText,
+  readAdmittedSourceDigest,
+  readAdmittedSourceSentences,
   readPlanAcceptance,
   STATEMENT_SENTENCE_NARRATIVE_KEYS,
   stampAcceptanceFromLiteralCapture,
@@ -111,12 +119,18 @@ export interface VerifyAcResult extends LiteralAcceptanceGateResult {
   readonly unmappedSentenceCount?: number;
   /** Reuse-gate miss cause when servedFrom is executed (#3558). */
   readonly missReason?: string;
+  /** Workspace requirement_sources re-hashed this walk (#3920). */
+  readonly sourcesRechecked?: number;
+  /** Workspace requirement_sources whose digest changed this walk (#3920). */
+  readonly sourcesChanged?: number;
 }
 
 export interface EvaluateVerifyAcOptions extends EvaluateLiteralAcceptanceOptions {
   /**
    * When true, missing xBRIEF / no active scope is exit 0 (check composition).
-   * Default false for standalone done-gate use.
+   * Default false for standalone done-gate use. Multi-active path selection for
+   * check composition lives in resolveSoftMissingAcTargets (#4285); this flag
+   * does not soft-green past stated AC for the selected story (#3284).
    */
   readonly softMissingXbrief?: boolean;
   /**
@@ -125,6 +139,7 @@ export interface EvaluateVerifyAcOptions extends EvaluateLiteralAcceptanceOption
    *   (promotion remains a done-gate / scope:complete concern via verify:ac standalone).
    * - Executable command failures still fail closed (product-first).
    * - Safety-rejected ledger still fails closed.
+   * - Multi-active composition selects one story via DEFT_ACTIVE_SCOPE / path (#4285).
    */
   readonly checkIntegrated?: boolean;
   /** Allow task_statement sources to execute (tests / explicit promote). */
@@ -175,7 +190,48 @@ export interface EvaluateVerifyAcOptions extends EvaluateLiteralAcceptanceOption
   readonly reuseMode?: "auto" | "bank" | "never";
   readonly sessionId?: string | null;
   readonly productPaths?: readonly string[];
+  /**
+   * Merge-base / HEAD copy of the admitted-source pin (#5055). Tests inject;
+   * production may resolve via git show of the brief. Null means "looked up, absent".
+   */
+  readonly admittedSourceMergeBase?: {
+    readonly sentences: readonly string[];
+    readonly digest?: string | null;
+  } | null;
+  /**
+   * Live admitted-source text at the ingest-recorded revision (#5055).
+   * Body-normative: origin issue body. Spec-path: Bound-remedy harvest (not the
+   * refused raw body). Returned failure on outage — do not skip. Tests inject.
+   */
+  readonly fetchAdmittedSourceText?: () =>
+    | { readonly ok: true; readonly text: string }
+    | { readonly ok: false; readonly reason: string };
+  /**
+   * Absolute or project-relative xBRIEF path (#5055). When set, plan evaluation
+   * recovers the admitted-source pin from merge-base / HEAD the same way as
+   * evaluateVerifyAcFromPath — so scope:complete cannot skip missing-pin recovery.
+   */
+  readonly xbriefPath?: string | null;
+  /**
+   * Persist requirement_sources autofix restamp (#3920). Path helper writes the
+   * xBRIEF; tests may inject. Default: in-memory plan only.
+   */
+  readonly persistRequirementSourcesAutofix?: (plan: Record<string, unknown>) => void;
+  /** Internal: stamped by evaluateVerifyAcFromPlan after the #3920 re-hash. */
+  readonly requirementSourcesTelemetry?: {
+    readonly sourcesRechecked: number;
+    readonly sourcesChanged: number;
+    readonly autofixMessage?: string;
+  };
 }
+
+/** Cause when an admitted-source identity left the inspected clause set (#5055). */
+export const ADMITTED_SOURCE_IDENTITY_REMOVED_CAUSE = "admitted_source_identity_removed" as const;
+/** Cause when the working-tree pin digest disagrees with live REST / merge-base (#5055). */
+export const ADMITTED_SOURCE_DIGEST_MISMATCH_CAUSE = "admitted_source_digest_mismatch" as const;
+/** Cause when digest comparison cannot reach live REST / forge (#5055). */
+export const ADMITTED_SOURCE_DIGEST_UNAVAILABLE_CAUSE =
+  "admitted_source_digest_unavailable" as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (typeof value === "object" && value !== null && !Array.isArray(value)) {
@@ -515,19 +571,146 @@ function persistVerifyAcSessionCache(
 }
 
 /**
+ * Locate an active brief path for plan.id so plan-only readers can recover the
+ * admitted-source pin from git (#5055). Prefer a unique match; never pick an
+ * arbitrary peer when multiple active briefs share the same id.
+ */
+function findActiveBriefPathForPlan(
+  projectRoot: string,
+  plan: Record<string, unknown>,
+): string | null {
+  const planId = typeof plan.id === "string" && plan.id.trim() ? plan.id.trim() : null;
+  if (planId === null) {
+    return null;
+  }
+  const matches: string[] = [];
+  for (const dirName of ["xbrief", "vbrief"] as const) {
+    const active = join(projectRoot, dirName, "active");
+    if (!existsSync(active)) {
+      continue;
+    }
+    let names: string[] = [];
+    try {
+      names = readdirSync(active)
+        .filter((n) => n.endsWith(".xbrief.json") || n.endsWith(".vbrief.json"))
+        .sort();
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const abs = join(active, name);
+      try {
+        const parsed = JSON.parse(readFileSync(abs, "utf8")) as unknown;
+        const root = asRecord(parsed);
+        const briefPlan = asRecord(root?.plan);
+        if (briefPlan !== null && briefPlan.id === planId) {
+          matches.push(abs);
+        }
+      } catch {
+        // Skip unreadable peers; recovery is best-effort.
+      }
+    }
+  }
+  return matches.length === 1 ? (matches[0] ?? null) : null;
+}
+
+/**
+ * Resolve git admitted-source pin for plan evaluation (#5055).
+ * Prefer options.xbriefPath; else a unique active/ match by plan.id. Ambiguous
+ * id matches fail closed (no peer pin) — callers must pass xbriefPath.
+ */
+function resolveAdmittedSourceGitPin(
+  plan: Record<string, unknown>,
+  options: EvaluateVerifyAcOptions,
+  projectRoot: string,
+): { readonly sentences: readonly string[]; readonly digest: string | null } | null | undefined {
+  // Explicit null = looked up, absent — do not scan active/ again (#5055).
+  if (options.admittedSourceMergeBase !== undefined) {
+    // Options allow omitted digest; callers require string | null (#5055 / PR #5062).
+    return options.admittedSourceMergeBase === null
+      ? null
+      : {
+          sentences: options.admittedSourceMergeBase.sentences,
+          digest: options.admittedSourceMergeBase.digest ?? null,
+        };
+  }
+  const hinted =
+    typeof options.xbriefPath === "string" && options.xbriefPath.trim().length > 0
+      ? resolve(projectRoot, options.xbriefPath.trim())
+      : findActiveBriefPathForPlan(projectRoot, plan);
+  if (hinted === null) {
+    return undefined;
+  }
+  return loadAdmittedSourceFromGit(projectRoot, hinted);
+}
+
+/**
  * Evaluate product AC from an in-memory plan.
  */
 export function evaluateVerifyAcFromPlan(
-  plan: Record<string, unknown>,
+  planInput: Record<string, unknown>,
   options: EvaluateVerifyAcOptions = {},
 ): VerifyAcResult {
+  const projectRootEarly = resolve(options.projectRoot ?? process.cwd());
+  // Completion / path walks pass xbriefPath — default a persist callback so
+  // autofix restamps reach disk and mutate the caller's plan (#3920 Greptile).
+  let persistAutofix = options.persistRequirementSourcesAutofix;
+  const hintedPath =
+    typeof options.xbriefPath === "string" && options.xbriefPath.trim().length > 0
+      ? resolve(projectRootEarly, options.xbriefPath.trim())
+      : null;
+  if (persistAutofix === undefined && hintedPath !== null) {
+    persistAutofix = (next) => {
+      for (const key of Object.keys(planInput)) {
+        delete planInput[key];
+      }
+      Object.assign(planInput, next);
+      writeRequirementSourcesAutofixToXbrief(hintedPath, planInput, projectRootEarly);
+    };
+  }
+  const sourcesVerdict = evaluateRequirementSourcesStaleness(planInput, projectRootEarly, {
+    writePlan: persistAutofix,
+  });
+  if (!sourcesVerdict.ok) {
+    const quiet = options.quiet === true;
+    return applyOracle(
+      {
+        ok: false,
+        code: 1,
+        message: quiet
+          ? ""
+          : `${sourcesVerdict.message}\n  Remediation: ${sourcesVerdict.remediation}`,
+        commands: [],
+        runs: [],
+        sourceRung: readPlanAcceptance(planInput).source_rung,
+        noneStated: readPlanAcceptance(planInput).none_stated,
+        acceptance: readPlanAcceptance(planInput),
+        resolution: "fail",
+        resolvedCommandCount: 0,
+        sourcesRechecked: sourcesVerdict.sources_rechecked,
+        sourcesChanged: sourcesVerdict.sources_changed,
+      },
+      options,
+      planInput,
+    );
+  }
+  const plan = sourcesVerdict.plan;
   const planId = typeof plan.id === "string" && plan.id.trim() ? plan.id.trim() : null;
+  const admittedSourceMergeBase = resolveAdmittedSourceGitPin(plan, options, projectRootEarly);
   const optionsWithScope: EvaluateVerifyAcOptions = {
     ...options,
     oracleScopeKey: options.oracleScopeKey?.trim() || planId || null,
     bankScopeId: options.bankScopeId?.trim() || planId || options.bankScopeId,
     observedAcceptance:
       options.observedAcceptance !== undefined ? options.observedAcceptance : plan.acceptance,
+    ...(admittedSourceMergeBase !== undefined ? { admittedSourceMergeBase } : {}),
+    requirementSourcesTelemetry: {
+      sourcesRechecked: sourcesVerdict.sources_rechecked,
+      sourcesChanged: sourcesVerdict.sources_changed,
+      ...(sourcesVerdict.kind === "autofixed" && sourcesVerdict.message.length > 0
+        ? { autofixMessage: sourcesVerdict.message }
+        : {}),
+    },
   };
   const acceptance = readPlanAcceptance(plan);
   const schemaErrors = validatePlanAcceptance(plan.acceptance ?? acceptance);
@@ -907,6 +1090,10 @@ function emitAcceptanceOutcome(
       ...(result.unmappedSentenceCount !== undefined
         ? { unmapped_sentence_count: result.unmappedSentenceCount }
         : {}),
+      ...(result.sourcesRechecked !== undefined
+        ? { sources_rechecked: result.sourcesRechecked }
+        : {}),
+      ...(result.sourcesChanged !== undefined ? { sources_changed: result.sourcesChanged } : {}),
       miss_reason: (result.servedFrom ?? "executed") === "executed" ? result.missReason : undefined,
     });
   } catch {
@@ -1106,7 +1293,7 @@ function applyOracle(
       next = { ...next, resolution: "fail" };
     }
   }
-  next = applyStatementSentenceFloor(next, plan, options.quiet === true);
+  next = applyStatementSentenceFloor(next, plan, options);
   const servedFrom = next.servedFrom ?? "executed";
   let missReason = next.missReason;
   if (servedFrom === "executed" && (missReason === undefined || missReason.length === 0)) {
@@ -1124,12 +1311,31 @@ function applyOracle(
     });
     if (reuse.kind === "miss") missReason = reuse.reason;
   }
-  const stamped: VerifyAcResult = {
+  const telemetry = options.requirementSourcesTelemetry;
+  const withSources: VerifyAcResult = {
     ...next,
     message: options.quiet === true ? next.message : labelVerdict(next),
     servedFrom,
     missReason: servedFrom === "executed" ? missReason : undefined,
+    ...(telemetry !== undefined
+      ? {
+          sourcesRechecked: telemetry.sourcesRechecked,
+          sourcesChanged: telemetry.sourcesChanged,
+        }
+      : {}),
   };
+  const stamped: VerifyAcResult =
+    options.quiet === true ||
+    telemetry?.autofixMessage === undefined ||
+    telemetry.autofixMessage.length === 0
+      ? withSources
+      : {
+          ...withSources,
+          message:
+            withSources.message.trim().length > 0
+              ? `${telemetry.autofixMessage}\n${withSources.message}`
+              : telemetry.autofixMessage,
+        };
   persistVerifyAcSessionCache(stamped, options, projectRoot, plan);
   if (options.skipAcceptanceEmit !== true) {
     emitAcceptanceTelemetry(stamped, options, projectRoot);
@@ -1206,51 +1412,311 @@ function acceptanceForSentenceFloor(plan: Record<string, unknown>, walked: unkno
   return current;
 }
 
+function normalizeIdentityText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function formatMissingAdmittedIdentities(missing: readonly string[]): string {
+  return [
+    `verify:ac admitted-source identity (#5055): ${missing.length} identity(ies) removed from the inspected clause set`,
+    "Confession is not restoration; restore as a same-text clause or amend via authz:grant (#3110).",
+    ...missing.map((text) => `  - ${text}`),
+  ].join("\n");
+}
+
+/**
+ * Spec-path briefs persist the refused GitHub body under plan.metadata.issueBody
+ * (#4524 / #5055), including empty string when the origin body was empty.
+ */
+function planHasSpecPathRefusedBody(plan: Record<string, unknown>): boolean {
+  const meta = asRecord(plan.metadata);
+  if (meta === null) {
+    return false;
+  }
+  return Object.hasOwn(meta, "issueBody") && typeof meta.issueBody === "string";
+}
+
+/**
+ * Resolve the authoritative admitted-source identity list (#5055).
+ * Prefer git pin (merge-base / HEAD) when supplied, else working-tree pin, else
+ * live admitted-source extract. Empty / deleted working-tree pins do not remint
+ * from live narratives. Spec-path recovery must not admit the refused raw body.
+ */
+function resolveAdmittedSourceIdentities(
+  plan: Record<string, unknown>,
+  options: EvaluateVerifyAcOptions,
+):
+  | {
+      readonly ok: true;
+      readonly identities: readonly string[];
+      readonly digest: string | null;
+      /** Live digest check applies only to a working-tree pin (#5055). */
+      readonly compareLiveDigest: boolean;
+    }
+  | { readonly ok: false; readonly cause: string; readonly message: string } {
+  const mergeBase = options.admittedSourceMergeBase;
+  if (mergeBase !== undefined && mergeBase !== null && mergeBase.sentences.length > 0) {
+    const identities = mergeBase.sentences.map(normalizeIdentityText);
+    return {
+      ok: true,
+      identities,
+      digest:
+        typeof mergeBase.digest === "string" && mergeBase.digest.trim().length > 0
+          ? mergeBase.digest.trim()
+          : digestAdmittedSourceSentences(identities),
+      // Git pin is already the ingest-recorded reference — no live compare.
+      compareLiveDigest: false,
+    };
+  }
+
+  const working = readAdmittedSourceSentences(plan.acceptance);
+  if (working !== null) {
+    return {
+      ok: true,
+      identities: working,
+      digest: readAdmittedSourceDigest(plan.acceptance),
+      compareLiveDigest: true,
+    };
+  }
+
+  const recordedDigest = readAdmittedSourceDigest(plan.acceptance);
+  const specPath = planHasSpecPathRefusedBody(plan);
+
+  // Pin deleted / emptied: recover from the admitted live source when no git pin.
+  if (options.fetchAdmittedSourceText !== undefined) {
+    const fetched = options.fetchAdmittedSourceText();
+    if (!fetched.ok) {
+      return {
+        ok: false,
+        cause: ADMITTED_SOURCE_DIGEST_UNAVAILABLE_CAUSE,
+        message: `verify:ac admitted-source digest (#5055): ${fetched.reason}`,
+      };
+    }
+    // Same quarantine-aware extract as the first-ingest pin (#5055 P1).
+    const identities = extractAdmittedSourceSentencesFromText(fetched.text).map(
+      normalizeIdentityText,
+    );
+    if (identities.length === 0) {
+      if (recordedDigest !== null) {
+        return {
+          ok: false,
+          cause: ADMITTED_SOURCE_DIGEST_MISMATCH_CAUSE,
+          message:
+            "verify:ac admitted-source digest (#5055): recovered source is empty but a digest remains",
+        };
+      }
+      return { ok: true, identities: [], digest: null, compareLiveDigest: false };
+    }
+    const liveDigest = digestAdmittedSourceSentences(identities);
+    if (recordedDigest !== null && liveDigest !== recordedDigest) {
+      return {
+        ok: false,
+        cause: ADMITTED_SOURCE_DIGEST_MISMATCH_CAUSE,
+        message:
+          "verify:ac admitted-source digest (#5055): recovered source disagrees with the recorded digest",
+      };
+    }
+    // Spec-path with both pin+digest removed: do not trust a mutable harvest
+    // remnant without a digest check — refuse offline / restore from git.
+    if (specPath && recordedDigest === null) {
+      return {
+        ok: false,
+        cause: ADMITTED_SOURCE_DIGEST_UNAVAILABLE_CAUSE,
+        message:
+          "verify:ac admitted-source digest (#5055): Spec-path pin and digest removed; restore from git or re-ingest the Bound-remedy harvest",
+      };
+    }
+    return {
+      ok: true,
+      identities,
+      digest: recordedDigest ?? liveDigest,
+      // Recovered + digest-checked already — no second comparison.
+      compareLiveDigest: false,
+    };
+  }
+
+  // Digest remains but no pin, no git pin, no live source → refuse offline.
+  if (recordedDigest !== null) {
+    return {
+      ok: false,
+      cause: ADMITTED_SOURCE_DIGEST_UNAVAILABLE_CAUSE,
+      message:
+        "verify:ac admitted-source digest (#5055): pin removed; provide live admitted-source text or restore from git",
+    };
+  }
+
+  // Spec-path with both fields removed and no recovery path → refuse offline.
+  if (specPath) {
+    return {
+      ok: false,
+      cause: ADMITTED_SOURCE_DIGEST_UNAVAILABLE_CAUSE,
+      message:
+        "verify:ac admitted-source digest (#5055): Spec-path pin and digest removed; restore from git or re-ingest the Bound-remedy harvest",
+    };
+  }
+
+  // No pin and no external reference: nothing to enforce (pre-#5055 briefs).
+  return { ok: true, identities: [], digest: null, compareLiveDigest: false };
+}
+
+function applyAdmittedSourceIdentityGate(
+  result: VerifyAcResult,
+  plan: Record<string, unknown>,
+  options: EvaluateVerifyAcOptions,
+): VerifyAcResult {
+  if (result.resolution === "config" || result.resolution === "skipped") {
+    return result;
+  }
+  const quiet = options.quiet === true;
+  const resolved = resolveAdmittedSourceIdentities(plan, options);
+  if (!resolved.ok) {
+    return {
+      ...result,
+      ok: false,
+      code: result.code === 2 ? 2 : 1,
+      resolution: "fail",
+      cause: resolved.cause,
+      message: quiet ? "" : joinFloorMessage(resolved.message, result.message),
+    };
+  }
+  if (resolved.identities.length === 0) {
+    return result;
+  }
+
+  // Digest comparison against live REST for a working-tree pin (#5055).
+  // Merge-base recovery and live-recovery skips this — Spec-path harvest must
+  // not be compared to the raw refused issue body.
+  if (resolved.compareLiveDigest && options.fetchAdmittedSourceText !== undefined) {
+    const fetched = options.fetchAdmittedSourceText();
+    if (!fetched.ok) {
+      return {
+        ...result,
+        ok: false,
+        code: result.code === 2 ? 2 : 1,
+        resolution: "fail",
+        cause: ADMITTED_SOURCE_DIGEST_UNAVAILABLE_CAUSE,
+        message: quiet
+          ? ""
+          : joinFloorMessage(
+              `verify:ac admitted-source digest (#5055): ${fetched.reason}`,
+              result.message,
+            ),
+      };
+    }
+    // Quarantine-aware: match pin extract so unchanged bodies do not mismatch.
+    const liveIdentities = extractAdmittedSourceSentencesFromText(fetched.text).map(
+      normalizeIdentityText,
+    );
+    const liveDigest = digestAdmittedSourceSentences(liveIdentities);
+    const expectedDigest = resolved.digest ?? digestAdmittedSourceSentences(resolved.identities);
+    if (liveDigest !== expectedDigest) {
+      return {
+        ...result,
+        ok: false,
+        code: result.code === 2 ? 2 : 1,
+        resolution: "fail",
+        cause: ADMITTED_SOURCE_DIGEST_MISMATCH_CAUSE,
+        message: quiet
+          ? ""
+          : joinFloorMessage(
+              "verify:ac admitted-source digest (#5055): working pin disagrees with live REST at the ingest-recorded revision",
+              result.message,
+            ),
+      };
+    }
+  }
+
+  const inspectedAcceptance = acceptanceForSentenceFloor(plan, result.acceptance);
+  const inspectedRec = asPlanRecord(inspectedAcceptance);
+  const inspectedSentences = new Set(
+    (Array.isArray(inspectedRec?.sentences) ? inspectedRec.sentences : [])
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      .map(normalizeIdentityText),
+  );
+  const clauseTexts = new Set(
+    (result.acceptance.clauses ?? []).map((clause) => normalizeIdentityText(clause.text)),
+  );
+  const confessionTexts = new Set(
+    (Array.isArray(inspectedRec?.confessions) ? inspectedRec.confessions : [])
+      .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+      .map(normalizeIdentityText),
+  );
+
+  // Removed from the inspected set, or covered only by confession (#5055).
+  // Ordinary unmapped (still listed, not confessed) stays on the #3550 cause.
+  const missing = resolved.identities.filter((text) => {
+    if (clauseTexts.has(text)) {
+      return false;
+    }
+    if (!inspectedSentences.has(text)) {
+      return true;
+    }
+    return confessionTexts.has(text);
+  });
+  if (missing.length === 0) {
+    return result;
+  }
+  const floor = formatMissingAdmittedIdentities(missing);
+  return {
+    ...result,
+    ok: false,
+    code: result.code === 2 ? 2 : 1,
+    resolution: "fail",
+    cause: ADMITTED_SOURCE_IDENTITY_REMOVED_CAUSE,
+    message: quiet ? (result.ok ? "" : result.message) : joinFloorMessage(floor, result.message),
+  };
+}
+
 /**
  * Fail closed when a sentence on the brief is neither a clause nor a confession.
  * Runs for every reader that reaches the oracle walk. Does not read a file (#3550).
+ * Admitted-source identities additionally require clause restoration (#5055).
  */
 function applyStatementSentenceFloor(
   result: VerifyAcResult,
   plan: Record<string, unknown>,
-  quiet: boolean,
+  options: EvaluateVerifyAcOptions,
 ): VerifyAcResult {
+  const quiet = options.quiet === true;
   const coverage = evaluateStatementSentenceCoverage(
     acceptanceForSentenceFloor(plan, result.acceptance),
     result.acceptance.clauses ?? [],
   );
   // No list means the brief has no statement sentences. Clauseless plans and
   // plans with no narrative body do not enter the production stamp.
-  if (!coverage.hasSentenceList) {
-    return result;
-  }
-  const counted: VerifyAcResult = {
-    ...result,
-    behavioralClauseCount: coverage.behavioralClauseCount,
-    unmappedSentenceCount: coverage.unmappedSentenceCount,
-  };
-  if (
-    coverage.unmappedSentenceCount === 0 ||
-    result.resolution === "config" ||
-    result.resolution === "skipped"
-  ) {
-    return counted;
-  }
-  const floor = formatUnmappedSentenceFloor(coverage.unmapped);
-  if (!result.ok) {
-    return {
-      ...counted,
-      message: quiet ? result.message : joinFloorMessage(floor, result.message),
+  let next: VerifyAcResult = result;
+  if (coverage.hasSentenceList) {
+    const counted: VerifyAcResult = {
+      ...result,
+      behavioralClauseCount: coverage.behavioralClauseCount,
+      unmappedSentenceCount: coverage.unmappedSentenceCount,
     };
+    if (
+      coverage.unmappedSentenceCount === 0 ||
+      result.resolution === "config" ||
+      result.resolution === "skipped"
+    ) {
+      next = counted;
+    } else {
+      const floor = formatUnmappedSentenceFloor(coverage.unmapped);
+      if (!result.ok) {
+        next = {
+          ...counted,
+          message: quiet ? result.message : joinFloorMessage(floor, result.message),
+        };
+      } else {
+        next = {
+          ...counted,
+          ok: false,
+          code: result.code === 2 ? 2 : 1,
+          resolution: "fail",
+          cause: UNMAPPED_STATEMENT_SENTENCE_CAUSE,
+          message: quiet ? "" : joinFloorMessage(floor, result.message),
+        };
+      }
+    }
   }
-  return {
-    ...counted,
-    ok: false,
-    code: result.code === 2 ? 2 : 1,
-    resolution: "fail",
-    cause: UNMAPPED_STATEMENT_SENTENCE_CAUSE,
-    message: quiet ? "" : joinFloorMessage(floor, result.message),
-  };
+  return applyAdmittedSourceIdentityGate(next, plan, options);
 }
 
 function annotate(
@@ -1299,6 +1765,77 @@ function annotate(
 }
 
 /**
+ * Load admitted-source pin from a git treeish:path show (#5055).
+ */
+function loadAdmittedSourceAtTreeish(
+  projectRoot: string,
+  rel: string,
+  treeish: string,
+): { readonly sentences: readonly string[]; readonly digest: string | null } | null {
+  const shown = defaultGitRunner(projectRoot, ["show", `${treeish}:${rel}`]);
+  if (shown.code !== 0 || shown.stdout.trim().length === 0) {
+    return null;
+  }
+  return parseAdmittedSourceFromBriefText(shown.stdout);
+}
+
+/**
+ * Load admitted-source pin from merge-base, then HEAD (#5055).
+ * New branch-only briefs have no merge-base copy; HEAD still recovers a deleted
+ * working-tree pin after the ingest commit. Null → caller may fall through to live.
+ */
+function loadAdmittedSourceFromGit(
+  projectRoot: string,
+  xbriefPath: string,
+): { readonly sentences: readonly string[]; readonly digest: string | null } | null {
+  const abs = resolve(xbriefPath);
+  const rel = relative(projectRoot, abs).replace(/\\/g, "/");
+  if (rel.length === 0 || rel.startsWith("..")) {
+    return null;
+  }
+  const baseRef =
+    process.env.DEFT_BASE_REF?.trim() || process.env.GITHUB_BASE_REF?.trim() || "origin/master";
+  const left = baseRef.includes("/") ? baseRef : `origin/${baseRef}`;
+  const mb = defaultGitRunner(projectRoot, ["merge-base", left, "HEAD"]);
+  if (mb.code === 0) {
+    const fromMb = loadAdmittedSourceAtTreeish(projectRoot, rel, mb.stdout.trim());
+    if (fromMb !== null) {
+      return fromMb;
+    }
+  } else {
+    const fallback = defaultGitRunner(projectRoot, ["merge-base", "origin/main", "HEAD"]);
+    if (fallback.code === 0) {
+      const fromMain = loadAdmittedSourceAtTreeish(projectRoot, rel, fallback.stdout.trim());
+      if (fromMain !== null) {
+        return fromMain;
+      }
+    }
+  }
+  // Branch-only ingest: merge-base lacks the file; HEAD still has the pin.
+  return loadAdmittedSourceAtTreeish(projectRoot, rel, "HEAD");
+}
+
+function parseAdmittedSourceFromBriefText(
+  text: string,
+): { readonly sentences: readonly string[]; readonly digest: string | null } | null {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const root = asRecord(parsed);
+    const plan = asRecord(root?.plan);
+    const sentences = readAdmittedSourceSentences(plan?.acceptance);
+    if (sentences === null) {
+      return null;
+    }
+    return {
+      sentences,
+      digest: readAdmittedSourceDigest(plan?.acceptance),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Evaluate from xBRIEF path.
  */
 export function evaluateVerifyAcFromPath(
@@ -1334,10 +1871,30 @@ export function evaluateVerifyAcFromPath(
   // Path-relative keys stay unique across xbrief/ vs vbrief/ and duplicate plan.id (#3337 Greptile).
   const oracleScopeKey =
     options.oracleScopeKey?.trim() || resolveOracleScopeKey(plan, abs, projectRoot);
+  let admittedSourceMergeBase = options.admittedSourceMergeBase;
+  // #5055: recover git pin (merge-base / HEAD) even when a working pin remains so
+  // an edited/shrunk pin cannot silently replace the ingest-recorded identities.
+  if (admittedSourceMergeBase === undefined) {
+    const fromGit = loadAdmittedSourceFromGit(projectRoot, abs);
+    if (fromGit !== null) {
+      admittedSourceMergeBase = fromGit;
+    }
+  }
   const emitOptions: EvaluateVerifyAcOptions = {
     ...options,
+    xbriefPath: abs,
     oracleScopeKey,
     observedAcceptance: plan.acceptance,
+    ...(admittedSourceMergeBase !== undefined ? { admittedSourceMergeBase } : {}),
+    persistRequirementSourcesAutofix:
+      options.persistRequirementSourcesAutofix ??
+      ((next) => {
+        for (const key of Object.keys(plan)) {
+          delete plan[key];
+        }
+        Object.assign(plan, next);
+        writeRequirementSourcesAutofixToXbrief(abs, plan, projectRoot);
+      }),
   };
   const result = evaluateVerifyAcFromPlan(plan, {
     ...emitOptions,

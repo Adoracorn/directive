@@ -7,9 +7,13 @@ import {
   VERDICT_CI_CANCELLED_NO_FAILOVER,
   VERDICT_CI_NEVER_SCHEDULED,
   VERDICT_CLEAN,
+  VERDICT_CLOSED_UNMERGED,
   VERDICT_CONFIG,
   VERDICT_ERRORED,
+  VERDICT_GREPTILE_SHA_STALL,
+  VERDICT_MERGED,
   VERDICT_NEW_P0_P1,
+  VERDICT_NO_REVIEWER_INSTALLED,
   VERDICT_PENDING,
   VERDICT_RUNNER_CAPACITY_STALL,
   VERDICT_STALL,
@@ -39,6 +43,10 @@ function makeProbe(overrides: Partial<WatchProbe> = {}): WatchProbe {
     terminalCheckRun: true,
     isClean: false,
     cleanGateHoldout: null,
+    reviewerReadyState: "expected",
+    reviewCycleHandback: null,
+    prState: "open",
+    prMerged: false,
     error: null,
     ...overrides,
   };
@@ -118,6 +126,68 @@ describe("watch verdict matrix (one-shot, single probe)", () => {
       }),
     );
     // Review present but stuck on a stale commit, single probe -> PENDING, not NEW_P0_P1.
+    expect(r.verdict).toBe(VERDICT_PENDING);
+    expect(r.exitCode).toBe(EXIT_TERMINAL_ERROR);
+  });
+
+  it("HEAD-anchored inline blockers with stale summary SHA are NEW_P0_P1 (#3944)", () => {
+    // Probe sets shaMatch from originalCommit HEAD match even when lastReviewedSha lags.
+    const r = runOneShot(
+      makeProbe({
+        hasBlocking: true,
+        p1Count: 1,
+        lastReviewedSha: STALE,
+        shaMatch: true,
+        cleanGateHoldout: "has_blocking",
+      }),
+    );
+    expect(r.verdict).toBe(VERDICT_NEW_P0_P1);
+    expect(r.exitCode).toBe(EXIT_NEW_P0_P1);
+  });
+
+  it("merged + sha_match false → MERGED exit 0 immediately (#4288)", () => {
+    const r = runOneShot(
+      makeProbe({
+        prState: "closed",
+        prMerged: true,
+        shaMatch: false,
+        lastReviewedSha: STALE,
+        cleanGateHoldout: "sha_match",
+        isClean: false,
+        found: false,
+      }),
+    );
+    expect(r.verdict).toBe(VERDICT_MERGED);
+    expect(r.exitCode).toBe(EXIT_CLEAN);
+  });
+
+  it("closed unmerged → CLOSED_UNMERGED exit 2 (#4288)", () => {
+    const r = runOneShot(
+      makeProbe({
+        prState: "closed",
+        prMerged: false,
+        shaMatch: false,
+        lastReviewedSha: null,
+        found: false,
+        isClean: false,
+        cleanGateHoldout: null,
+      }),
+    );
+    expect(r.verdict).toBe(VERDICT_CLOSED_UNMERGED);
+    expect(r.exitCode).toBe(EXIT_TERMINAL_ERROR);
+  });
+
+  it("open + sha_match false → still PENDING (#4288 / #1259 / #2313)", () => {
+    const r = runOneShot(
+      makeProbe({
+        prState: "open",
+        prMerged: false,
+        shaMatch: false,
+        lastReviewedSha: STALE,
+        cleanGateHoldout: "sha_match",
+        isClean: false,
+      }),
+    );
     expect(r.verdict).toBe(VERDICT_PENDING);
     expect(r.exitCode).toBe(EXIT_TERMINAL_ERROR);
   });
@@ -204,6 +274,27 @@ describe("watch verdict matrix (one-shot, single probe)", () => {
     );
     expect(r.verdict).toBe(VERDICT_CI_NEVER_SCHEDULED);
     expect(r.exitCode).toBe(EXIT_TERMINAL_ERROR);
+  });
+
+  it("no_reviewer_installed -> NO_REVIEWER_INSTALLED exit 2 without polling (#3630)", () => {
+    const r = runOneShot(
+      makeProbe({
+        found: false,
+        lastReviewedSha: null,
+        shaMatch: false,
+        confidence: null,
+        isClean: false,
+        cleanGateHoldout: "no_reviewer_installed",
+        reviewerReadyState: "no_reviewer_installed",
+        reviewCycleHandback: "review_cycle: skipped:no-reviewer-installed",
+        ciReadyState: "ci_never_scheduled",
+      }),
+    );
+    expect(r.verdict).toBe(VERDICT_NO_REVIEWER_INSTALLED);
+    expect(r.exitCode).toBe(EXIT_TERMINAL_ERROR);
+    expect(r.pollCount).toBe(1);
+    expect(r.probe.isClean).toBe(false);
+    expect(r.probe.reviewCycleHandback).toBe("review_cycle: skipped:no-reviewer-installed");
   });
 
   it("ci_cancelled_no_failover -> CI_CANCELLED_NO_FAILOVER exit 2 (#3167)", () => {
@@ -317,6 +408,98 @@ describe("watch blocking loop (injected clock + sleep)", () => {
     expect(r.pollCount).toBeGreaterThan(3);
   });
 
+  it("GREPTILE_SHA_STALL after sticky tip-rot clock with no in-flight Greptile (#5162)", () => {
+    const clock = new FakeClock();
+    const sleep = vi.fn(makeSleep(clock));
+    const tipRot = makeProbe({
+      lastReviewedSha: STALE,
+      shaMatch: false,
+      hasBlocking: false,
+      isClean: false,
+      cleanGateHoldout: "sha_match",
+      confidence: 4,
+      greptileReviewInFlight: false,
+    });
+    const { fn } = makeProbeSeq(tipRot);
+
+    const r = watch(5162, "deftai/directive", {
+      pollSeconds: 1,
+      maxWaitMinutes: 30,
+      stickyShaStallSeconds: 2,
+      probeFn: fn,
+      clockFn: clock,
+      sleepFn: sleep,
+    });
+
+    expect(r.verdict).toBe(VERDICT_GREPTILE_SHA_STALL);
+    expect(r.exitCode).toBe(EXIT_TERMINAL_ERROR);
+  });
+
+  it("resets sticky-sha clock when HEAD changes mid-wait (#5162)", () => {
+    const clock = new FakeClock();
+    const sleep = vi.fn(makeSleep(clock));
+    const HEAD2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const first = makeProbe({
+      lastReviewedSha: STALE,
+      shaMatch: false,
+      hasBlocking: false,
+      isClean: false,
+      cleanGateHoldout: "sha_match",
+      confidence: 4,
+      greptileReviewInFlight: false,
+    });
+    const second = makeProbe({
+      headSha: HEAD2,
+      lastReviewedSha: STALE,
+      shaMatch: false,
+      hasBlocking: false,
+      isClean: false,
+      cleanGateHoldout: "sha_match",
+      confidence: 4,
+      greptileReviewInFlight: false,
+    });
+    // Burn 2s of a 3s sticky window on HEAD1, then switch to HEAD2. An inherited
+    // timer would stall on the next poll; a reset reaches TIMEOUT instead.
+    const { fn } = makeProbeSeq(first, first, second, second);
+    const r = watch(5162, "deftai/directive", {
+      pollSeconds: 1,
+      maxWaitMinutes: 0.05,
+      stickyShaStallSeconds: 3,
+      probeFn: fn,
+      clockFn: clock,
+      sleepFn: sleep,
+    });
+    expect(r.verdict).toBe(VERDICT_TIMEOUT);
+    expect(r.verdict).not.toBe(VERDICT_GREPTILE_SHA_STALL);
+  });
+
+  it("keeps waiting on sha_match while Greptile Review is in flight (#5162 / #2313)", () => {
+    const clock = new FakeClock();
+    const sleep = vi.fn(makeSleep(clock));
+    const inFlight = makeProbe({
+      lastReviewedSha: STALE,
+      shaMatch: false,
+      hasBlocking: false,
+      isClean: false,
+      cleanGateHoldout: "sha_match",
+      confidence: 4,
+      greptileReviewInFlight: true,
+    });
+    const { fn } = makeProbeSeq(inFlight);
+
+    const r = watch(5162, "deftai/directive", {
+      pollSeconds: 1,
+      maxWaitMinutes: 0.1,
+      stickyShaStallSeconds: 1,
+      probeFn: fn,
+      clockFn: clock,
+      sleepFn: sleep,
+    });
+
+    expect(r.verdict).toBe(VERDICT_TIMEOUT);
+    expect(r.verdict).not.toBe(VERDICT_GREPTILE_SHA_STALL);
+  });
+
   it("STALL after stallThreshold wedged HEAD holdouts (#1039)", () => {
     const clock = new FakeClock();
     const sleep = vi.fn(makeSleep(clock));
@@ -342,6 +525,32 @@ describe("watch blocking loop (injected clock + sleep)", () => {
     expect(r.verdict).toBe(VERDICT_STALL);
     expect(r.exitCode).toBe(EXIT_TERMINAL_ERROR);
     expect(r.pollCount).toBe(3);
+  });
+
+  it("NO_REVIEWER_INSTALLED on first probe does not sleep (#3630)", () => {
+    const clock = new FakeClock();
+    const sleep = vi.fn(makeSleep(clock));
+    const absent = makeProbe({
+      found: false,
+      lastReviewedSha: null,
+      shaMatch: false,
+      confidence: null,
+      isClean: false,
+      cleanGateHoldout: "no_reviewer_installed",
+      reviewerReadyState: "no_reviewer_installed",
+      reviewCycleHandback: "review_cycle: skipped:no-reviewer-installed",
+    });
+    const { fn } = makeProbeSeq(absent);
+    const r = watch(12, "deftai/directive", {
+      pollSeconds: 90,
+      maxWaitMinutes: 30,
+      probeFn: fn,
+      clockFn: clock,
+      sleepFn: sleep,
+    });
+    expect(r.verdict).toBe(VERDICT_NO_REVIEWER_INSTALLED);
+    expect(r.pollCount).toBe(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("TIMEOUT when the review never appears before the cap", () => {

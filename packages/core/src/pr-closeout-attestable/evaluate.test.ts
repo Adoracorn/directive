@@ -1,11 +1,25 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { RunGhFn } from "../pr-protected-issues/types.js";
+import type { GitRunner } from "../session/git.js";
 import { ENV_TRIAGE_REPO } from "../triage/queue/constants.js";
 import { evaluate, type FetchClosingIssuesFn } from "./evaluate.js";
+
+const gitSpy = vi.hoisted(() => ({ fetchCalls: [] as string[][] }));
+
+vi.mock("../session/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session/git.js")>();
+  const wrapped: GitRunner = (root, args) => {
+    if (args.includes("fetch")) {
+      gitSpy.fetchCalls.push([...args]);
+    }
+    return actual.defaultGitRunner(root, args);
+  };
+  return { ...actual, defaultGitRunner: wrapped };
+});
 
 const REPO = "deftai/directive";
 
@@ -50,12 +64,14 @@ function bareItems(count: number): Record<string, unknown>[] {
 }
 
 function attestedItem(title: string): Record<string, unknown> {
+  // Empty-axis / undeclared criteria accept non-merge kinds (#5105 dual).
+  // kind:merge needs explicit x-directive/requires=merge + a commit-sha pointer.
   return {
     title,
     status: "proposed",
     "x-directive/evidence": {
-      kind: "merge",
-      pointer: `https://github.com/${REPO}/pull/3786`,
+      kind: "test",
+      pointer: "packages/core/src/pr-closeout-attestable/evaluate.test.ts",
       recorded_at: "2026-08-27T02:23:58Z",
       recorded_by: "swarm:finalize-cohort",
     },
@@ -70,8 +86,16 @@ const NEVER_CALLED: RunGhFn = () => {
   throw new Error("runGh must not be called");
 };
 
+const MATCHING_HEAD = "a".repeat(40);
+
 function opts(fetchClosingIssues: FetchClosingIssuesFn, proxied = false) {
-  return { repo: REPO, runner: { runGh: NEVER_CALLED, proxied }, fetchClosingIssues };
+  return {
+    repo: REPO,
+    runner: { runGh: NEVER_CALLED, proxied },
+    fetchClosingIssues,
+    // Hermetic suites pin matching SHAs so the #3875 assert does not hit git/gh.
+    prHeadAssert: { localHeadSha: MATCHING_HEAD, prHeadSha: MATCHING_HEAD },
+  };
 }
 
 describe("pr-closeout-attestable evaluate", () => {
@@ -90,6 +114,28 @@ describe("pr-closeout-attestable evaluate", () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]?.issue).toBe(3609);
     expect(result.findings[0]?.unattested).toHaveLength(5);
+  });
+
+  it("inherits #3819 missing/unrecognized item.status inversion via the shared gate", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3819-closeout.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3819)],
+      items: [
+        { title: "empty status", status: "" },
+        { title: "unrecognized status", status: "done" },
+      ],
+    });
+
+    const result = evaluate(root, 5260, opts(closing(3819)));
+
+    expect(result.code).toBe(1);
+    expect(result.findings[0]?.issue).toBe(3819);
+    expect(result.findings[0]?.unattested).toHaveLength(2);
+    expect(
+      result.findings[0]?.unattested.every((row) => !row.detail.includes("already_terminal")),
+    ).toBe(true);
   });
 
   it("passes when every non-terminal criterion carries evidence", () => {
@@ -258,9 +304,137 @@ describe("pr-closeout-attestable evaluate", () => {
   it("passes cleanly when the project has no xbrief/ lifecycle root", () => {
     const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-"));
     temps.push(root);
-    const result = evaluate(root, 1, opts(closing(1)));
+    const result = evaluate(root, 1, {
+      ...opts(closing(1)),
+      prHeadAssert: {
+        localHeadSha: MATCHING_HEAD,
+        prHeadSha: MATCHING_HEAD,
+        resolveWorktreeAtSha: () => ({ status: "absent" }),
+      },
+    });
     expect(result.code).toBe(0);
     expect(result.message).toContain("nothing to check");
+  });
+
+  it("no-xbrief fails closed when OWNER/REPO cannot be resolved (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-norepo-"));
+    temps.push(root);
+    execFileSync("git", ["init", "-q", "-b", "master"], { cwd: root, stdio: "ignore" });
+    const prevRepo = process.env[ENV_TRIAGE_REPO];
+    delete process.env[ENV_TRIAGE_REPO];
+    try {
+      const result = evaluate(root, 1, {
+        repo: null,
+        runner: { runGh: NEVER_CALLED, proxied: false },
+        fetchClosingIssues: closing(1),
+      });
+      expect(result.code).toBe(2);
+      expect(result.message).toContain("cannot resolve OWNER/REPO");
+    } finally {
+      if (prevRepo === undefined) {
+        delete process.env[ENV_TRIAGE_REPO];
+      } else {
+        process.env[ENV_TRIAGE_REPO] = prevRepo;
+      }
+    }
+  });
+
+  it("no-xbrief skip wins over a PR-head mismatch when no linked worktree (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-mismatch-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        localHeadSha: "a".repeat(40),
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => ({ status: "absent" }),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.message).toContain("nothing to check");
+  });
+
+  it("no-xbrief fails closed when worktree list lookup errors (#3819 residual)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-wtfail-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => ({
+          status: "error",
+          message: "cannot list linked worktrees under /tmp (git worktree list exited 128)",
+        }),
+      },
+    });
+    expect(result.code).toBe(2);
+    expect(result.message).toMatch(/cannot list linked worktrees|unverified/);
+  });
+
+  it("no-xbrief fails closed when PR-head SHA lookup fails (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-fetchfail-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        prHeadSha: null,
+        resolveWorktreeAtSha: () => {
+          throw new Error("must not probe worktree after failed PR-head lookup");
+        },
+      },
+    });
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("cannot read PR #1 head SHA");
+  });
+
+  it("no-xbrief fails closed when a found worktree HEAD mismatches (#3875)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-closeout-nolayout-headfail-"));
+    temps.push(root);
+    const result = evaluate(root, 1, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(1),
+      prHeadAssert: {
+        prHeadSha: "b".repeat(40),
+        resolveWorktreeAtSha: () => ({ status: "found", path: root }),
+        resolveLocalHeadSha: () => "a".repeat(40),
+      },
+    });
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("is not PR #1 head");
+  });
+
+  it("no-xbrief caller still reads a linked PR-head worktree with xbrief (#3875)", () => {
+    const primary = mkdtempSync(join(tmpdir(), "deft-closeout-primary-"));
+    const dest = makeRepo();
+    temps.push(primary);
+    writeBrief(dest, "2026-08-26-3609-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3609)],
+      items: bareItems(2),
+    });
+    const prHead = "b".repeat(40);
+    const result = evaluate(primary, 3786, {
+      repo: REPO,
+      runner: { runGh: NEVER_CALLED, proxied: false },
+      fetchClosingIssues: closing(3609),
+      prHeadAssert: {
+        prHeadSha: prHead,
+        resolveWorktreeAtSha: () => ({ status: "found", path: dest }),
+        resolveLocalHeadSha: (root) => (root === dest ? prHead : "a".repeat(40)),
+        resolveLifecycleDirty: () => null,
+      },
+    });
+    expect(result.code).toBe(1);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.issue).toBe(3609);
   });
 
   it("walks nested subItems and items", () => {
@@ -339,7 +513,23 @@ describe("pr-closeout-attestable failure message", () => {
     expect(message).toContain("closing references, not the branch diff");
     expect(message).toContain("task verify:pr-closeout-attestable -- --pr 3786");
     expect(message).toContain("recorded_by accepts any non-empty string");
+    expect(message).toContain("stamp the non-merge criteria above");
     expect(message).not.toContain("cached");
+  });
+
+  it("does not tell the PR author to stamp-evidence a merge-declared criterion", () => {
+    const message = refusalFor([
+      {
+        title: "Merge tip ancestry",
+        status: "pending",
+        "x-directive/requires": "merge",
+      },
+    ]);
+
+    expect(message).toContain("scope:stamp-evidence");
+    expect(message).toContain("no --merge-commit");
+    expect(message).not.toContain("stamp the criteria above");
+    expect(message).not.toContain("stamp the non-merge criteria");
   });
 
   it("discloses the ghx cache caveat when the read could not be pinned to gh", () => {
@@ -412,6 +602,106 @@ describe("pr-closeout-attestable #3598 shape (brief predates the closing branch)
   });
 });
 
+describe("pr-closeout-attestable persisted merge evidence (#5120)", () => {
+  function git(root: string, args: string[]): string {
+    return execFileSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+      cwd: root,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: "ci",
+        GIT_AUTHOR_EMAIL: "ci@example.com",
+        GIT_COMMITTER_NAME: "ci",
+        GIT_COMMITTER_EMAIL: "ci@example.com",
+      },
+    });
+  }
+
+  function makeOriginRepo(): { root: string; sha: string } {
+    const root = makeRepo();
+    const origin = mkdtempSync(join(tmpdir(), "deft-closeout-origin-"));
+    temps.push(origin);
+    git(origin, ["init", "--bare", "-q", "-b", "master"]);
+    git(root, ["init", "-q", "-b", "master"]);
+    git(root, ["config", "user.email", "ci@example.com"]);
+    git(root, ["config", "user.name", "ci"]);
+    writeFileSync(join(root, "README"), "closeout-origin\n", "utf8");
+    git(root, ["add", "README"]);
+    git(root, ["commit", "-q", "-m", "init"]);
+    git(root, ["remote", "add", "origin", origin]);
+    git(root, ["push", "-q", "-u", "origin", "master"]);
+    const sha = git(root, ["rev-parse", "HEAD"]).trim();
+    return { root, sha };
+  }
+
+  function mergeDeclaredPlan(sha: string, withEvidence: boolean): Record<string, unknown> {
+    const item: Record<string, unknown> = {
+      id: "clause.1",
+      title: "Merge tip ancestry",
+      status: "pending",
+      "x-directive/requires": "merge",
+    };
+    if (withEvidence) {
+      item["x-directive/evidence"] = {
+        kind: "merge",
+        pointer: sha,
+        recorded_at: "2026-09-30T00:00:00Z",
+        recorded_by: "scope:complete",
+      };
+    }
+    return {
+      title: "story",
+      status: "running",
+      references: [issueRef(5120)],
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false }],
+      },
+      metadata: withEvidence
+        ? {}
+        : {
+            completionProvenance: {
+              mergeCommit: sha,
+              deliveryBranch: "master",
+              verifier: "scope:complete",
+            },
+          },
+    };
+  }
+
+  it("refuses valid provenance with no persisted evidence and leaves bytes unchanged", () => {
+    const { root, sha } = makeOriginRepo();
+    const briefPath = writeBrief(
+      root,
+      "2026-09-30-5120-story.xbrief.json",
+      mergeDeclaredPlan(sha, false),
+    );
+    const before = readFileSync(briefPath, "utf8");
+    gitSpy.fetchCalls.length = 0;
+    const result = evaluate(root, 5120, opts(closing(5120)));
+    expect(result.code).toBe(1);
+    expect(result.findings[0]?.unattested).toHaveLength(1);
+    expect(readFileSync(briefPath, "utf8")).toBe(before);
+    expect(gitSpy.fetchCalls).toEqual([]);
+  });
+
+  it("passes when persisted merge evidence is present and does not rewrite the brief", () => {
+    const root = makeRepo();
+    const sha = "abcdef1";
+    const briefPath = writeBrief(
+      root,
+      "2026-09-30-5120-story.xbrief.json",
+      mergeDeclaredPlan(sha, true),
+    );
+    const before = readFileSync(briefPath, "utf8");
+    const result = evaluate(root, 5120, opts(closing(5120)));
+    expect(result.code).toBe(0);
+    expect(result.findings).toEqual([]);
+    expect(readFileSync(briefPath, "utf8")).toBe(before);
+  });
+});
+
 describe("one-PR-unit at forge closing references (#4494)", () => {
   it("fails closed when forge closing refs name five origins without a grant", () => {
     const root = makeRepo();
@@ -479,5 +769,72 @@ describe("one-PR-unit at forge closing references (#4494)", () => {
     });
     expect(result.code).toBe(1);
     expect(result.message).not.toMatch(/OK:/);
+  });
+});
+
+describe("pr-closeout-attestable PR-head assert (#3875)", () => {
+  it("fails exit 2 when local HEAD is not the PR head", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3875-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3875)],
+      items: [attestedItem("ok")],
+    });
+
+    const result = evaluate(root, 99, {
+      ...opts(closing(3875)),
+      prHeadAssert: {
+        localHeadSha: "b".repeat(40),
+        prHeadSha: "c".repeat(40),
+        resolveWorktreeAtSha: () => ({ status: "absent" }),
+      },
+    });
+
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("is not PR #99 head");
+    expect(result.message).toContain("tree that merges");
+  });
+
+  it("fails exit 2 when the PR head SHA cannot be read", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3875-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3875)],
+      items: [attestedItem("ok")],
+    });
+
+    const result = evaluate(root, 99, {
+      ...opts(closing(3875)),
+      prHeadAssert: {
+        localHeadSha: MATCHING_HEAD,
+        prHeadSha: null,
+      },
+    });
+
+    expect(result.code).toBe(2);
+    expect(result.message).toContain("cannot read PR #99 head SHA");
+  });
+
+  it("passes the assert when abbreviated and full SHAs name the same commit", () => {
+    const root = makeRepo();
+    writeBrief(root, "2026-10-02-3875-story.xbrief.json", {
+      title: "story",
+      status: "running",
+      references: [issueRef(3875)],
+      items: [attestedItem("ok")],
+    });
+
+    const full = "abcdef0123456789abcdef0123456789abcdef01";
+    const result = evaluate(root, 99, {
+      ...opts(closing(3875)),
+      prHeadAssert: {
+        localHeadSha: full.slice(0, 12),
+        prHeadSha: full,
+      },
+    });
+
+    expect(result.code).toBe(0);
   });
 });

@@ -71,6 +71,48 @@ Before rendering menu options, classify the repo (same rule as setup Phase 3; #4
 ⊗ Skip this gate on scoped/brownfield repos.
 ⊗ Skip this gate when the operator chose Add-scope, Update, or Replace.
 
+### Interview continuation carrier (#5352 Prefer-A Bound)
+
+! Post-draft design-interview corrections, gap reviews, and cross-session
+  handoffs MUST preserve phase/approval scope on
+  `plan["x-directive/interviewContinuation"]` under `./xbrief/plan.xbrief.json`
+  (closed namespaced field). Full field list, closed phase enum, and refuse
+  surfaces: `skills/deft-directive-interview/SKILL.md` Rule 12.
+
+! On brownfield **Update project definition** (delta interview) and any
+  continuation after a planning draft is approved: load that durable carrier
+  before asking the next question.
+
+! **First-delta initialize (absent carrier):** When `plan["x-directive/interviewContinuation"]`
+  is absent/omitted (no active continuation), initialize it before the next question from
+  (1) the existing PROJECT-DEFINITION identity / deliverable under review and (2) the
+  operator-named change request. Seed at least: `targetDeliverable`, `phase`
+  (`planning-draft-approved` or `correction-or-gap-review`), `reopenableDecisionSet` /
+  `deltaUnderReview.keys` from the operator-enumerated delta, empty `acceptedDeferrals`
+  and `confirmations` as needed. Absent field means "initialize," not "refuse."
+
+! **Incomplete carrier refuse:** Resume MUST fail closed when a carrier **is present**
+  but orientation is next-question-only / Resume-point-only without the required fields.
+
+! Delta reopen is operator-enumerated only (Rule 6 L160 shape). Default
+  refuse-to-widen; agent-inferred dependents are not a widen path.
+
+#### Approval menu bind-map (S2)
+
+| Moment | Gate |
+|--------|------|
+| Design-answer numeric confirm | Interview Rule 8 / Rule 6 — `answer` scope only |
+| First write after answers | Setup Post-Interview Confirmation Gate |
+| Full Path narrative/scope approval | Setup Output — Full Path human approval |
+| SPEC "Approve and continue" (optional PRD export is never this gate) | This strategy's SPECIFICATION Approval Menu — still subject to planning-only precedence |
+| Bounded delta phase completion | Durable-record write on the carrier (not a new re-ask prompt) |
+
+! When a planning-only constraint is in force, option 1
+  (`Approve and continue (lock the SPEC, proceed to implementation)`) MUST NOT
+  silently override it — refuse or re-route with explicit precedence.
+
+⊗ Use ephemeral `xbrief/continue.xbrief.json` / continue-here as this carrier.
+
 ### Options
 
 ! Numbered Chaining Gate menus (greenfield and brownfield examples below) MUST end with `Discuss` and `Back` as the final two options per [deterministic-questions.md](../contracts/deterministic-questions.md).
@@ -251,21 +293,27 @@ flowchart LR
         G{"⚖️ Sizing Gate"}
         I_L["💬 Interview<br/><i>Light path</i>"]
         I_F["💬 Interview<br/><i>Full path</i>"]
-        P["📄 PRD<br/><i>What to build</i>"]
+        PD_L["📋 PROJECT-DEFINITION<br/>+ proposed (Light)"]
+        PD_F["📋 PROJECT-DEFINITION<br/>+ proposed (Full)"]
         S["📋 SPECIFICATION<br/><i>How to build it</i>"]
+        R["📄 PRD.md<br/><i>optional export</i>"]
     end
 
     G -->|"Light"| I_L
     G -->|"Full"| I_F
-    I_L -->|"Ambiguity resolved"| S
-    I_F -->|"Ambiguity resolved"| P
-    P -->|"Approved"| S
+    I_L -->|"Ambiguity resolved"| PD_L
+    I_F -->|"Ambiguity resolved"| PD_F
+    PD_L -->|"Accepted (stay proposed)"| S
+    PD_F -->|"Accepted (stay proposed)"| S
+    PD_F -. "Full only: optional export" .-> R
     S -->|"Ready"| IMPL["🔨 Implementation"]
 
     style G fill:#f0abfc,stroke:#a21caf,color:#000
     style I_L fill:#c4b5fd,stroke:#7c3aed,color:#000
     style I_F fill:#c4b5fd,stroke:#7c3aed,color:#000
-    style P fill:#fef08a,stroke:#ca8a04,color:#000
+    style PD_L fill:#fef08a,stroke:#ca8a04,color:#000
+    style PD_F fill:#fef08a,stroke:#ca8a04,color:#000
+    style R fill:#fde68a,stroke:#d97706,color:#000
     style S fill:#6ee7b7,stroke:#059669,color:#000
     style IMPL fill:#7dd3fc,stroke:#0284c7,color:#000
 ```
@@ -287,17 +335,18 @@ flowchart LR
 
 - ! Missing decisions (language, framework, deployment)
 - ! Edge cases (errors, boundaries, failure modes)
-- ! Implementation details (architecture, patterns, libraries)
+- ~ Implementation details (architecture, patterns, libraries) — **phase-scoped** under the Full material-decision contract (#5351): after inventory confirm, implementation-detail asks MUST cite an outstanding material requirement's resolution condition or an accepted inventory amendment; ⊗ keep ordering unbounded detail asks after inventory confirm
 - ! Requirements (performance, security, scalability)
 - ! UX/constraints (users, timeline, compatibility)
 - ! Tradeoffs (simplicity vs features, speed vs safety)
 
 ### Transition Criteria (interview complete)
 
-- ! All major decisions have answers
-- ! Edge cases are addressed
+- ! All major decisions required for the current deliverable have answers (or accepted deferrals under the Full material-decision contract)
+- ! Edge cases that change required behavior, constraints, acceptance, or feasibility for this deliverable are addressed
 - ! User has approved key tradeoffs (Interview strategy) or Johnbot has chosen recommended options (Yolo strategy)
-- ~ Little ambiguity remains
+- ! On the Full material-decision contract path (#5351): inventory sufficiency + Confirmation Gate dispositions replace open-ended "little ambiguity remains" as the completion strength (aligned with setup Phase 3 Completion)
+- ! Apply the Full material-decision contract when Sizing-Gate is Full, Full-depth questioning is already underway, or reopen/continuation that enters or remains in Full depth after declared-ready / Rule 6 confirmation — not for short-path corrections that stay Light / Add-scope / delta (see `skills/deft-directive-interview/SKILL.md` Rule 4)
 
 ---
 
@@ -312,7 +361,7 @@ Interview → scope records (date-prefixed in proposed/) + live PROJECT-DEFINITI
 3. Write scope record(s) to the live lifecycle root — `./xbrief/proposed/YYYY-MM-DD-<slug>.xbrief.json` when `./xbrief/` is live; else legacy `./vbrief/proposed/YYYY-MM-DD-<slug>.vbrief.json` — date-prefixed with `status: proposed`
 4. Run `task project:render` to create/update the **live** PROJECT-DEFINITION under the resolved layout root (`./xbrief/PROJECT-DEFINITION.xbrief.json`). Engine layout resolution requires `xbrief/` (#2112); if the repo is legacy-only `./vbrief/`, run `deft migrate:xbrief` first, then render. Ensure all five lifecycle folders exist under the live root. ⊗ Write a second PROJECT-DEFINITION under legacy `vbrief/` when `xbrief/` is live
 5. Summarize decisions, ask user to review
-6. On approval, use `task scope:promote` (or equivalent) to move scope record(s) to `pending/` under the **same** live root with `status: pending` / `approved`
+6. On approval, leave scope record(s) in `proposed/` with `status: proposed`. ⊗ Auto-run `task scope:promote` or `task scope:activate` as the effect of approving planning artifacts. Downstream build/swarm/refinement with explicit operator lifecycle intent remains the promote/activate bridge (setup Lifecycle Bridge polarity).
 7. Run `task project:export-spec` / `task spec:render` as appropriate (SPECIFICATION.md is a rendered derivative with deprecation sentinel; `specification.vbrief.json` / `specification.xbrief.json` are legacy and are NOT written by this strategy on the v0.20 path)
 
 ! **Before writing** scope records or updating `PROJECT-DEFINITION` on the Light path, follow [artifact-guards.md](./artifact-guards.md): Preparatory Guard for `proposed/` scopes; Spec-Generating Guard against the **live** identity file (xbrief-first). Prefer enrich/merge when the user declines replace.
@@ -370,115 +419,32 @@ How to ship it.
 
 ## Full Path (large/complex projects)
 
-Interview → PRD → scope records (date-prefixed in proposed/) + live PROJECT-DEFINITION + rendered SPECIFICATION (v0.20 contract). Paths are **xbrief-first**: use `./xbrief/` when that root is the live project layout; else legacy `./vbrief/`.
+Interview → PROJECT-DEFINITION narratives + scope records (date-prefixed in proposed/) + live PROJECT-DEFINITION + rendered SPECIFICATION (v0.20 contract). `PRD.md` is never authoritative (? optional `task prd:render` read-only export). Paths are **xbrief-first**: use `./xbrief/` when that root is the live project layout; else legacy `./vbrief/`.
 
 ### Flow
 
 1. Sizing gate selects Full
 2. Interview (rules above)
-3. Generate `PRD.md` — user approval gate
-4. Write scope record(s) to the live lifecycle root — `./xbrief/proposed/YYYY-MM-DD-<slug>.xbrief.json` when `./xbrief/` is live; else legacy `./vbrief/proposed/YYYY-MM-DD-<slug>.vbrief.json` — date-prefixed with `status: proposed`
-5. Run `task project:render` to create/update the **live** PROJECT-DEFINITION under the resolved layout root (`./xbrief/PROJECT-DEFINITION.xbrief.json`). Engine layout resolution requires `xbrief/` (#2112); if the repo is legacy-only `./vbrief/`, run `deft migrate:xbrief` first, then render. Ensure all five lifecycle folders exist under the live root. ⊗ Write a second PROJECT-DEFINITION under legacy `vbrief/` when `xbrief/` is live
-6. Summarize decisions, ask user to review
-7. On approval, use `task scope:promote` (or equivalent) to move scope record(s) to `pending/` under the **same** live root with `status: pending` / `approved`
-8. Run `task project:export-spec` / `task spec:render` as appropriate (SPECIFICATION.md is a rendered derivative with deprecation sentinel; `specification.vbrief.json` / `specification.xbrief.json` are legacy and are NOT written by this strategy on the v0.20 path)
+3. Write scope record(s) to the live lifecycle root — `./xbrief/proposed/YYYY-MM-DD-<slug>.xbrief.json` when `./xbrief/` is live; else legacy `./vbrief/proposed/YYYY-MM-DD-<slug>.vbrief.json` — date-prefixed with `status: proposed`
+4. Run `task project:render` to create/update the **live** PROJECT-DEFINITION under the resolved layout root (`./xbrief/PROJECT-DEFINITION.xbrief.json`). Engine layout resolution requires `xbrief/` (#2112); if the repo is legacy-only `./vbrief/`, run `deft migrate:xbrief` first, then render. Ensure all five lifecycle folders exist under the live root. ⊗ Write a second PROJECT-DEFINITION under legacy `vbrief/` when `xbrief/` is live
+5. Summarize decisions (PROJECT-DEFINITION narratives + proposed scopes), ask user to review
+6. On approval, leave scope record(s) in `proposed/` with `status: proposed`. ⊗ Auto-run `task scope:promote` or `task scope:activate` as the effect of approving planning artifacts. Downstream build/swarm/refinement with explicit operator lifecycle intent remains the promote/activate bridge (setup Lifecycle Bridge polarity).
+7. Run `task project:export-spec` / `task spec:render` as appropriate (SPECIFICATION.md is a rendered derivative with deprecation sentinel; `specification.vbrief.json` / `specification.xbrief.json` are legacy and are NOT written by this strategy on the v0.20 path)
+8. ? Optionally run `task prd:render` for a read-only stakeholder `PRD.md` export — never an approval gate or source of truth
 
-! **Before writing** PRD, scope records, or updating `PROJECT-DEFINITION` on the Full path, follow [artifact-guards.md](./artifact-guards.md): Preparatory Guard for `proposed/` scopes; Spec-Generating Guard against the **live** identity file (xbrief-first). Prefer enrich/merge when the user declines replace.
+! **Before writing** scope records or updating `PROJECT-DEFINITION` on the Full path, follow [artifact-guards.md](./artifact-guards.md): Preparatory Guard for `proposed/` scopes; Spec-Generating Guard against the **live** identity file (xbrief-first). Prefer enrich/merge when the user declines replace.
 ! ⊗ Write a second PROJECT-DEFINITION under legacy `vbrief/` when `./xbrief/PROJECT-DEFINITION.xbrief.json` is already the live identity.
+! ⊗ Generate an authoritative `PRD.md` — if needed, users run `task prd:render`
 
-! At the emission step (step 4 above), after writing the scope record(s) to the live `proposed/`, surface the GitHub-issue tracking hint from [emit-hints.md](./emit-hints.md) — name all three patterns (none / `--umbrella` / `--per-vbrief`).
+! At the emission step (step 3 above), after writing the scope record(s) to the live `proposed/`, surface the GitHub-issue tracking hint from [emit-hints.md](./emit-hints.md) — name all three patterns (none / `--umbrella` / `--per-vbrief`).
 
-### PRD Structure (Full path only)
+### Optional PRD export (never authoritative)
 
-```markdown
-# [Project Name] PRD
+! Greenfield Full-path authority is PROJECT-DEFINITION narratives + lifecycle scopes in `proposed/`. `PRD.md` is never authoritative.
 
-## Problem Statement
-What problem does this solve? Who has this problem?
-
-## Goals
-- Primary goal
-- Secondary goals
-- Non-goals (explicitly out of scope)
-
-## User Stories
-As a [user type], I want [capability] so that [benefit].
-
-## Requirements
-
-### Functional Requirements
-- FR-1: [requirement]
-- FR-2: [requirement]
-
-### Non-Functional Requirements
-- NFR-1: Performance — [requirement]
-- NFR-2: Security — [requirement]
-
-## Success Metrics
-How do we know this succeeded?
-
-## Open Questions
-Any remaining decisions deferred to implementation.
-```
-
-### PRD Guidelines
-
-- ! Focus on WHAT, not HOW
-- ! Use RFC 2119 language (MUST, SHOULD, MAY)
-- ! Number all requirements for traceability
-- ~ Include acceptance criteria for each requirement
-- ⊗ Include implementation details or architecture
-
-### PRD Transition Criteria
-
-- ! All functional requirements documented
-- ! Non-functional requirements specified
-- ! User has reviewed and approved PRD
-- ~ No blocking open questions remain
-
-### PRD Approval Menu (#740, refs #767)
-
-! After every PRD (Product Requirements Document) review, the agent MUST
-present the canonical numbered approval menu defined in
-[`../references/plain-english-ux.md`](../references/plain-english-ux.md)
-`## Rule 4`. The menu replaces ambiguous `Accept / Refine / Edit`
-buttons with action-shaped labels and follows the #767 framework rule
-for deterministic numbered menus -- the **final two numbered options
-MUST be `Discuss` and `Back`**, in that order.
-
-```
-What would you like to do with the PRD (Product Requirements Document)?
-
-  1. Approve and continue (lock the PRD, generate the SPECIFICATION)
-  2. Suggest changes (you describe what to change; the agent rewrites)
-  3. Edit yourself (you edit the PRD directly; the agent waits)
-  4. Discuss
-  5. Back
-
-Enter confirm / b back / 0 discuss
-```
-
-! When `contracts/deterministic-questions.md` lands (Agent 1, #767), this
-strategy MUST defer to that contract for canonical menu wording.
-
-! When the PRD review surfaces a red/green diff, the agent MUST emit a
-non-alarming preface above it (per `references/plain-english-ux.md` Rule 5):
-
-```
-Here's what changed since the previous draft. Red lines were removed,
-green lines were added. Nothing here is broken -- this is a normal
-review.
-```
-
-? Alternatively, the agent MAY hide the diff entirely on the first review
-pass and present a plain-English summary of changes; show the diff only
-on the second pass or when the user explicitly asks for it.
-
-- ⊗ Use plain `Accept / Refine / Edit` buttons without explanatory
-  parentheticals.
-- ⊗ Add a numbered approval menu where Discuss and Back are not the
-  final two options.
-- ⊗ Show a red/green diff at first review without a non-alarming preface.
+? Users MAY run `task prd:render` for a read-only stakeholder export after scopes sit in `proposed/`.
+⊗ Generate an authoritative `PRD.md` as an interview approval gate
+⊗ Treat `PRD.md` as a source of truth or require PRD approval before writing scopes / PROJECT-DEFINITION
 
 ### SPECIFICATION Structure (Full)
 
@@ -486,7 +452,7 @@ on the second pass or when the user explicitly asks for it.
 # [Project Name] SPECIFICATION
 
 ## Overview
-Brief summary and link to PRD.
+Brief summary of the project (optional link to a read-only PRD export if one exists).
 
 ## Architecture
 High-level system design, components, data flow.
@@ -607,10 +573,6 @@ green lines were added. Nothing here is broken -- this is a normal
 review.
 ```
 
-? Alternatively, the agent MAY hide the diff entirely on the first
-review pass and present a plain-English summary of changes; show the
-diff only on the second pass or when the user explicitly asks for it.
-
 - ⊗ Add a numbered approval menu where Discuss and Back are not the
   final two options.
 - ⊗ Show a red/green diff at first review without a non-alarming preface.
@@ -647,8 +609,8 @@ diff only on the second pass or when the user explicitly asks for it.
 
 | Artifact | Purpose | Created By |
 |----------|---------|------------|
-| `PRD.md` | What to build (approval gate) | Interview |
-| `./xbrief/proposed/YYYY-MM-DD-*.xbrief.json` (else legacy `./vbrief/proposed/YYYY-MM-DD-*.vbrief.json`) | Scope story records (date-prefixed, v0.20 contract) | Post-PRD interview |
+| `PRD.md` (optional) | Read-only stakeholder export via `task prd:render`; never authoritative | Optional export |
+| `./xbrief/proposed/YYYY-MM-DD-*.xbrief.json` (else legacy `./vbrief/proposed/YYYY-MM-DD-*.vbrief.json`) | Scope story records (date-prefixed, v0.20 contract) | Interview |
 | `./xbrief/PROJECT-DEFINITION.xbrief.json` (else legacy `./vbrief/PROJECT-DEFINITION.vbrief.json`) | Project identity gestalt + items registry | `task project:render` (triggered by strategy) |
 | `SPECIFICATION.md` | Generated implementation plan (rendered derivative; deprecation sentinel) | export / `task spec:render` |
 | (no `specification.*.json`) | Legacy artifact — omitted on v0.20 path | — |

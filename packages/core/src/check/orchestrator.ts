@@ -1,5 +1,5 @@
 /**
- * check/orchestrator.ts -- Context-aware `task check` orchestrator (#1854).
+ * check/orchestrator.ts -- Context-aware `task check` orchestrator (#1854 / #1883).
  *
  * TypeScript port of scripts/_project_context.py dispatch_task_check().
  * Detects whether we are running in the framework-source context or a
@@ -9,6 +9,7 @@
  * Default path uses the cached sequential gate runner (#1713) with
  * fast-before-slow ordering (#3188): cheap gates run before `ts:check-lane`
  * (vitest+coverage). A fast-gate failure aborts before the suite starts.
+ * Opaque / generic-only named-cause fallbacks on that path are bugs (#1883).
  *
  * Exit codes (three-state, mirrors _project_context.py):
  *   0 -- all gates passed
@@ -23,7 +24,18 @@ import {
   evaluateConsumerGateIntegrity,
   formatConsumerGateIntegrityFailure,
 } from "./consumer-gate-integrity.js";
+import {
+  CONSUMER_HEADER_PLACEHOLDER_GATE_ID,
+  evaluateConsumerHeaderPlaceholderAtRoot,
+} from "./consumer-header-placeholder.js";
 import { type CheckOrchestratorSeams, resolveCheckTarget } from "./context.js";
+import { CONSUMER_CHECK_GATES, checkGateId, FRAMEWORK_CHECK_GATES } from "./gate-lists.js";
+import { listCompositionGatesMissingSpecificRemedies } from "./named-cause.js";
+import {
+  CHECK_EMPTY_PLANNING_NARRATIVES_GATE_ID,
+  checkRejectsEmptyPlanningNarratives,
+  evaluateCheckPersistedPlanningNarratives,
+} from "./persisted-planning-narratives-gate.js";
 
 export type {
   CachedCheckCompletion,
@@ -31,6 +43,15 @@ export type {
   CheckOrchestratorSeams,
 } from "./context.js";
 export { isFrameworkRepoRoot, isFrameworkSourceContext, resolveCheckTarget } from "./context.js";
+
+/**
+ * Composition gates (framework ∪ consumer) still missing a concrete GATE_REMEDIES
+ * entry — residual audit for the named-cause seam (#1883). Empty is the ship bar.
+ */
+export function auditCheckCompositionNamedRemedies(): readonly string[] {
+  const ids = [...new Set([...FRAMEWORK_CHECK_GATES, ...CONSUMER_CHECK_GATES].map(checkGateId))];
+  return listCompositionGatesMissingSpecificRemedies(ids);
+}
 
 /**
  * Dispatch to the context-appropriate `task check` aggregate target.
@@ -67,6 +88,34 @@ export function dispatchTaskCheck(
       process.stderr.write(formatConsumerGateIntegrityFailure(integrity));
       return 2;
     }
+  }
+
+  // #5176 Prefer-A: refuse empty PD narratives only with product-mutation
+  // completion (mirror #4544). Missing PD and scaffold-empty stay legal here;
+  // setup Phase 2 verify stays unconditional. Do not shell the verify task
+  // from Taskfile check deps — that exits 2 on missing PD.
+  const planning = evaluateCheckPersistedPlanningNarratives(resolvedProject);
+  if (checkRejectsEmptyPlanningNarratives(planning.narratives, planning.productMutation)) {
+    process.stderr.write(`check: ${planning.narratives.message}\n`);
+    process.stderr.write(
+      `check: gate ${CHECK_EMPTY_PLANNING_NARRATIVES_GATE_ID} failed (exit 1)\n` +
+        `  cause: ${planning.narratives.cause}\n` +
+        `  remedy: ${planning.narratives.remedy}\n`,
+    );
+    return 1;
+  }
+
+  // #4544 Prefer-A: fail closed on uncached / Taskfile path too (cached
+  // orchestrator already runs this before composition).
+  const headerPlaceholder = evaluateConsumerHeaderPlaceholderAtRoot(resolvedProject);
+  if (!headerPlaceholder.ok) {
+    process.stderr.write(`${headerPlaceholder.message}\n`);
+    process.stderr.write(
+      `check: gate ${CONSUMER_HEADER_PLACEHOLDER_GATE_ID} failed (exit 1)\n` +
+        `  cause: ${headerPlaceholder.reason}\n` +
+        `  remedy: ${headerPlaceholder.message}\n`,
+    );
+    return 1;
   }
 
   const spawn = seams.spawnFn ?? defaultSpawn;

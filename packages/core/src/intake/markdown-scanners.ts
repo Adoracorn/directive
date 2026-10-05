@@ -235,6 +235,107 @@ export function extractBoundRemedyHarvest(text: string): {
   return { items: parseListItems(sourceText), sourceText };
 }
 
+/**
+ * Whole-line `Requirements:` colon-label match (#4671).
+ * Case-insensitive label; trailing colon required; no same-line body text.
+ */
+export interface ColonLabelMatch {
+  readonly sectionStart: number;
+}
+
+/** Find a whole-line Requirements: colon-label (case-insensitive). */
+export function findRequirementsColonLabel(text: string): ColonLabelMatch | null {
+  let offset = 0;
+  for (const line of text.split("\n")) {
+    if (isRequirementsColonLabelLine(line)) {
+      return { sectionStart: offset + line.length };
+    }
+    offset += line.length + 1;
+  }
+  return null;
+}
+
+function isRequirementsColonLabelLine(line: string): boolean {
+  return /^requirements:\s*$/i.test(line.trim());
+}
+
+/** True for any ATX heading line (0–3 leading spaces, `#`…`######` + space or EOL). */
+function isAtxHeadingLine(line: string): boolean {
+  let i = 0;
+  while (i < line.length && i < 3 && line[i] === " ") {
+    i += 1;
+  }
+  if (i >= line.length || line[i] !== "#") {
+    return false;
+  }
+  let hashes = 0;
+  while (i + hashes < line.length && line[i + hashes] === "#") {
+    hashes += 1;
+  }
+  if (hashes < 1 || hashes > 6) {
+    return false;
+  }
+  const after = i + hashes;
+  return after >= line.length || line[after] === " ";
+}
+
+/**
+ * Same-shape colon-label terminator: whole-line `Label:` (letters/digits/_/-/space),
+ * not a list item. Distinct from inline `Label: value` prose.
+ */
+function isSameShapeColonLabelLine(line: string): boolean {
+  if (matchListItemLine(line) !== null) {
+    return false;
+  }
+  return /^[A-Za-z][A-Za-z0-9 _/-]*:\s*$/.test(line.trim());
+}
+
+/**
+ * Slice after a colon-label until EOF, next ATX heading, or next same-shape `Label:` (#4671).
+ */
+export function sliceColonLabelSection(text: string, match: ColonLabelMatch): string {
+  const after = text.slice(match.sectionStart);
+  let offset = 0;
+  for (const line of after.split("\n")) {
+    if (offset > 0 && (isAtxHeadingLine(line) || isSameShapeColonLabelLine(line))) {
+      return after.slice(0, offset);
+    }
+    offset += line.length + 1;
+  }
+  return after;
+}
+
+/** Body-only Requirements: list harvest via closed colon-label delimiter (#4671). */
+export function extractRequirementsSectionItems(text: string): CheckboxItem[] {
+  if (text.length === 0) {
+    return [];
+  }
+  // Single pass: prefer the first non-empty Requirements: section (no per-label rescan).
+  const lines = text.split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    if (!isRequirementsColonLabelLine(lines[i] ?? "")) {
+      i += 1;
+      continue;
+    }
+    i += 1;
+    const bodyLines: string[] = [];
+    while (i < lines.length) {
+      const line = lines[i] ?? "";
+      if (isAtxHeadingLine(line) || isSameShapeColonLabelLine(line)) {
+        break;
+      }
+      bodyLines.push(line);
+      i += 1;
+    }
+    const items = parseListItems(bodyLines.join("\n"));
+    if (items.length > 0) {
+      return items;
+    }
+  }
+  return [];
+}
+
 /** Slice text until the next heading at the same or higher level. */
 export function sliceAcSection(text: string, heading: AcHeadingMatch): string {
   const after = text.slice(heading.sectionStart);

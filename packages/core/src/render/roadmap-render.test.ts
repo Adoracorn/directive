@@ -16,6 +16,7 @@ import {
   generateRoadmapContent,
   renderRoadmap,
   renderRoadmapToBuffer,
+  renderRoadmapToBufferResult,
   main as roadmapRenderMain,
 } from "./roadmap-render.js";
 
@@ -23,6 +24,12 @@ const temps: string[] = [];
 afterEach(() => {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+function expectRoadmapBuffer(pendingDir: string, completedDir?: string): string {
+  const [ok, value] = renderRoadmapToBufferResult(pendingDir, completedDir);
+  expect(ok).toBe(true);
+  return value;
+}
 
 function makeFixture(): {
   root: string;
@@ -135,7 +142,7 @@ describe("roadmap-render idempotency", () => {
     renderRoadmap(pending, outPath, completed);
 
     const onDisk = readFileSync(outPath, "utf8");
-    const buffer = renderRoadmapToBuffer(pending, completed);
+    const buffer = expectRoadmapBuffer(pending, completed);
     expect(onDisk).toBe(buffer);
 
     const [checkOk] = checkDrift(pending, outPath, completed);
@@ -204,7 +211,7 @@ describe("roadmap-render idempotency", () => {
       xBRIEFInfo: { version: "0.8" },
       plan: { title: "Done", status: "completed", references: [{ id: "#99" }] },
     });
-    expect(generateRoadmapContent(pending, completed)).toBe(
+    expect(generateRoadmapContent(pending, completed)).toEqual(
       renderRoadmapToBuffer(pending, completed),
     );
   });
@@ -398,7 +405,7 @@ describe("roadmap-render forward projection (#2653)", () => {
       },
     });
 
-    const content = renderRoadmapToBuffer(pending, completed);
+    const content = expectRoadmapBuffer(pending, completed);
     expect(content).toContain("## Proposed");
     expect(content).toContain("Proposed forward work");
     expect(content).toContain("## Completed");
@@ -421,7 +428,7 @@ describe("roadmap-render forward projection (#2653)", () => {
         references: [{ id: "#1" }],
       },
     });
-    const content = renderRoadmapToBuffer(pending, completed);
+    const content = expectRoadmapBuffer(pending, completed);
     expect(content).toContain("## Forward plan");
     expect(content).toContain("No open work in `pending/`");
     expect(content).toContain("## Completed");
@@ -438,7 +445,7 @@ describe("roadmap-render forward projection (#2653)", () => {
         references: [{ id: "#200" }],
       },
     });
-    const content = renderRoadmapToBuffer(pending);
+    const content = expectRoadmapBuffer(pending);
     expect(content).toContain("## Active");
     expect(content).toContain("In flight");
     expect(content).toContain("`[running]`");
@@ -460,7 +467,7 @@ describe("roadmap-render forward projection (#2653)", () => {
         },
       });
     }
-    const content = renderRoadmapToBuffer(pending, completed);
+    const content = expectRoadmapBuffer(pending, completed);
     expect(content).toContain("Showing 25 of 30 completed scopes");
     expect(content).toContain("Done 30");
     expect(content).toContain("Done 6"); // 30..6 = 25 newest by completedAt
@@ -503,7 +510,7 @@ describe("roadmap-render forward projection (#2653)", () => {
         },
       });
     }
-    const content = renderRoadmapToBuffer(pending, completed);
+    const content = expectRoadmapBuffer(pending, completed);
     // 26 total → cap 25; earliest completedAt (2026-02) must drop
     expect(content).toContain("Recently finished old scope");
     expect(content).not.toContain("Early finished new name");
@@ -513,7 +520,7 @@ describe("roadmap-render forward projection (#2653)", () => {
   it("banner names forward lifecycle sources (#2653)", () => {
     const { pending } = makeFixture();
     writeVbrief(pending, "2026-01-01-a.xbrief.json", MULTI_REF_SCOPE_A);
-    const content = renderRoadmapToBuffer(pending);
+    const content = expectRoadmapBuffer(pending);
     expect(content).toContain("pending/ + proposed/ + active/");
     expect(content).toContain("completed/ capped");
     expect(content).not.toMatch(/Source of truth: vbrief\/pending\/ \(scope vBRIEFs\)/);
@@ -559,7 +566,7 @@ describe("roadmap-render forward projection (#2653)", () => {
       xBRIEFInfo: { version: "0.8" },
       plan: { title: "Later idea", status: "proposed", references: [{ id: "#11" }] },
     });
-    const content = renderRoadmapToBuffer(pending);
+    const content = expectRoadmapBuffer(pending);
     expect(content).toContain("## Accepted plan");
     expect(content).toContain("Leaf");
     expect(content).toContain("## Proposed");
@@ -569,7 +576,7 @@ describe("roadmap-render forward projection (#2653)", () => {
 
   it("empty lifecycle emits no-pending message", () => {
     const { pending, completed } = makeFixture();
-    const content = renderRoadmapToBuffer(pending, completed);
+    const content = expectRoadmapBuffer(pending, completed);
     expect(content).toContain("No pending work items.");
     expect(content).not.toContain("## Completed");
   });
@@ -586,7 +593,7 @@ describe("roadmap-render forward projection (#2653)", () => {
         items: [{ id: "p1", title: "Only phase", status: "pending", subItems: [] }],
       },
     });
-    const content = renderRoadmapToBuffer(pending);
+    const content = expectRoadmapBuffer(pending);
     expect(content).toContain("## With overview (#42)");
     expect(content).toContain("Why this work matters.");
   });
@@ -635,15 +642,53 @@ describe("roadmap-render main() --project-root layout resolver (#2139)", () => {
     expect(content).toContain("Feature X");
   });
 
-  it("falls back to vbrief/pending/ via --project-root on legacy tree (#2139)", () => {
-    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-vbrief-"));
+  it("refuses vbrief-only trees via --project-root with migrate hint (#4756 R5)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-vbrief-only-"));
     tmpDirs.push(root);
-    writePendingVbrief(root, "xbrief");
+    const pending = join(root, "vbrief", "pending");
+    mkdirSync(pending, { recursive: true });
+    writeFileSync(
+      join(pending, "2026-01-01-feature.vbrief.json"),
+      JSON.stringify({
+        vBRIEFInfo: { version: "0.6" },
+        plan: { title: "Legacy", status: "pending", items: [] },
+      }),
+      "utf8",
+    );
+    const outPath = join(root, "ROADMAP.md");
+    const exit = roadmapRenderMain(["--project-root", root, outPath]);
+    expect(exit).toBe(2);
+    expect(existsSync(outPath)).toBe(false);
+  });
+
+  it("refuses empty xbrief that would hide legacy vbrief scopes (#4756 Greptile P1)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-empty-xbrief-legacy-"));
+    tmpDirs.push(root);
+    mkdirSync(join(root, "xbrief"), { recursive: true });
+    const pending = join(root, "vbrief", "pending");
+    mkdirSync(pending, { recursive: true });
+    writeFileSync(
+      join(pending, "2026-01-01-feature.vbrief.json"),
+      JSON.stringify({
+        vBRIEFInfo: { version: "0.6" },
+        plan: { title: "Legacy still here", status: "pending", items: [] },
+      }),
+      "utf8",
+    );
+    const outPath = join(root, "ROADMAP.md");
+    const exit = roadmapRenderMain(["--project-root", root, outPath]);
+    expect(exit).toBe(2);
+    expect(existsSync(outPath)).toBe(false);
+  });
+
+  it("keeps canonical xbrief fallback for empty --project-root (#4756 R5)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-empty-root-"));
+    tmpDirs.push(root);
     const outPath = join(root, "ROADMAP.md");
     const exit = roadmapRenderMain(["--project-root", root, outPath]);
     expect(exit).toBe(0);
     const content = readFileSync(outPath, "utf8");
-    expect(content).toContain("Feature X");
+    expect(content).toContain("No pending work items.");
   });
 
   it("--check mode resolves xbrief/pending/ via --project-root (#2139)", () => {
@@ -709,6 +754,384 @@ describe("roadmap-render projection containment (#2839)", () => {
       expect(existsSync(join(escapeDir, "ROADMAP.md"))).toBe(false);
     },
   );
+});
+
+describe("roadmap-render main() Prefer-A #4756 false-empty boundary", () => {
+  const tmpDirs: string[] = [];
+  afterEach(() => {
+    for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  function validProjectDefinition(): unknown {
+    return {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "Roadmap Fixture",
+        status: "running",
+        items: [],
+        narratives: {
+          Overview: "Fixture project for roadmap:render.",
+          "Tech Stack": "TypeScript",
+        },
+      },
+    };
+  }
+
+  function schemaOnlyProjectDefinition(): unknown {
+    return {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        title: "Schema only",
+        status: "running",
+        items: [],
+      },
+    };
+  }
+
+  function writeActiveStory(activeDir: string, name: string, title: string): void {
+    writeFileSync(
+      join(activeDir, name),
+      JSON.stringify({
+        xBRIEFInfo: { version: "0.8" },
+        plan: {
+          title,
+          status: "running",
+          items: [],
+          references: [{ id: "#4756", type: "github-issue" }],
+        },
+      }),
+      "utf8",
+    );
+  }
+
+  function withCwd<T>(dir: string, fn: () => T): T {
+    const prev = process.cwd();
+    process.chdir(dir);
+    try {
+      return fn();
+    } finally {
+      process.chdir(prev);
+    }
+  }
+
+  it("main([]) lists active work on xbrief-only tree with valid PROJECT-DEFINITION", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-active-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story-a.xbrief.json", "Active Story A");
+    writeActiveStory(active, "2026-01-01-story-b.xbrief.json", "Active Story B");
+
+    const exit = withCwd(root, () => roadmapRenderMain([]));
+    expect(exit).toBe(0);
+    const content = readFileSync(join(root, "ROADMAP.md"), "utf8");
+    expect(content).toContain("## Active");
+    expect(content).toContain("Active Story A");
+    expect(content).toContain("Active Story B");
+    expect(content).not.toContain("No pending work items.");
+  });
+
+  it("main([--check]) accepts active projection and refuses false-empty ROADMAP", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-check-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Active Story");
+
+    expect(withCwd(root, () => roadmapRenderMain([]))).toBe(0);
+    expect(withCwd(root, () => roadmapRenderMain(["--check"]))).toBe(0);
+
+    writeFileSync(
+      join(root, "ROADMAP.md"),
+      "<!-- AUTO-GENERATED -->\n# Roadmap\n\nNo pending work items.\n\n",
+      "utf8",
+    );
+    expect(withCwd(root, () => roadmapRenderMain(["--check"]))).not.toBe(0);
+  });
+
+  it("no-flag cwd without local layout refuses without writing child ROADMAP", () => {
+    const parent = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-parent-"));
+    tmpDirs.push(parent);
+    const xbrief = join(parent, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Parent Active");
+    const child = join(parent, "child");
+    mkdirSync(child);
+
+    const exit = withCwd(child, () => roadmapRenderMain([]));
+    expect(exit).toBe(2);
+    expect(existsSync(join(child, "ROADMAP.md"))).toBe(false);
+    expect(withCwd(child, () => roadmapRenderMain(["--check"]))).toBe(2);
+  });
+
+  it("empty child xbrief/ refuses no-flag render and check", () => {
+    const parent = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-empty-child-"));
+    tmpDirs.push(parent);
+    const xbrief = join(parent, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Parent Active");
+    const child = join(parent, "pkg");
+    mkdirSync(join(child, "xbrief"), { recursive: true });
+
+    expect(withCwd(child, () => roadmapRenderMain([]))).toBe(2);
+    expect(existsSync(join(child, "ROADMAP.md"))).toBe(false);
+    expect(withCwd(child, () => roadmapRenderMain(["--check"]))).toBe(2);
+  });
+
+  it("nested-only .eval scratch under child xbrief refuses no-flag path", () => {
+    const parent = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-eval-child-"));
+    tmpDirs.push(parent);
+    const xbrief = join(parent, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Parent Active");
+    const child = join(parent, "nested");
+    const evalDir = join(child, "xbrief", ".eval");
+    mkdirSync(evalDir, { recursive: true });
+    writeFileSync(join(evalDir, "scratch.xbrief.json"), JSON.stringify({ note: true }), "utf8");
+
+    expect(withCwd(child, () => roadmapRenderMain([]))).toBe(2);
+    expect(existsSync(join(child, "ROADMAP.md"))).toBe(false);
+  });
+
+  it("child {} PROJECT-DEFINITION stub refuses no-flag render and check", () => {
+    const parent = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-stub-"));
+    tmpDirs.push(parent);
+    const xbrief = join(parent, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Parent Active");
+    const child = join(parent, "child");
+    mkdirSync(join(child, "xbrief"), { recursive: true });
+    writeFileSync(join(child, "xbrief", "PROJECT-DEFINITION.xbrief.json"), "{}\n", "utf8");
+
+    expect(withCwd(child, () => roadmapRenderMain([]))).toBe(2);
+    expect(existsSync(join(child, "ROADMAP.md"))).toBe(false);
+    expect(withCwd(child, () => roadmapRenderMain(["--check"]))).toBe(2);
+  });
+
+  it("invalid JSON / schema-valid project-invalid / non-file marker refuse", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-markers-"));
+    tmpDirs.push(root);
+
+    const badJson = join(root, "bad-json");
+    mkdirSync(join(badJson, "xbrief"), { recursive: true });
+    writeFileSync(join(badJson, "xbrief", "PROJECT-DEFINITION.xbrief.json"), "{not-json", "utf8");
+    expect(withCwd(badJson, () => roadmapRenderMain([]))).toBe(2);
+
+    const schemaOnly = join(root, "schema-only");
+    mkdirSync(join(schemaOnly, "xbrief"), { recursive: true });
+    writeFileSync(
+      join(schemaOnly, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(schemaOnlyProjectDefinition()),
+      "utf8",
+    );
+    expect(withCwd(schemaOnly, () => roadmapRenderMain([]))).toBe(2);
+
+    const nonFile = join(root, "non-file");
+    mkdirSync(join(nonFile, "xbrief", "PROJECT-DEFINITION.xbrief.json"), { recursive: true });
+    expect(withCwd(nonFile, () => roadmapRenderMain([]))).toBe(2);
+  });
+
+  it("non-directory active folder refuses empty claim render and check", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-active-file-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    mkdirSync(xbrief, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeFileSync(join(xbrief, "active"), "not-a-directory", "utf8");
+
+    expect(withCwd(root, () => roadmapRenderMain([]))).not.toBe(0);
+    expect(existsSync(join(root, "ROADMAP.md"))).toBe(false);
+    expect(withCwd(root, () => roadmapRenderMain(["--check"]))).not.toBe(0);
+  });
+
+  it("corrupt active-only file refuses all-empty claim", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-corrupt-only-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeFileSync(join(active, "broken.xbrief.json"), "{broken", "utf8");
+
+    expect(withCwd(root, () => roadmapRenderMain([]))).not.toBe(0);
+    expect(existsSync(join(root, "ROADMAP.md"))).toBe(false);
+    expect(withCwd(root, () => roadmapRenderMain(["--check"]))).not.toBe(0);
+  });
+
+  it("buffer/result path refuses corrupt-only empty claim (release gate) (#4756 Greptile P1)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-buffer-corrupt-"));
+    tmpDirs.push(root);
+    const pending = join(root, "xbrief", "pending");
+    const active = join(root, "xbrief", "active");
+    mkdirSync(pending, { recursive: true });
+    mkdirSync(active, { recursive: true });
+    writeFileSync(join(active, "broken.xbrief.json"), "{broken", "utf8");
+
+    const [ok, msg] = renderRoadmapToBufferResult(pending);
+    expect(ok).toBe(false);
+    expect(msg).toMatch(/Unreadable lifecycle file/i);
+    expect(renderRoadmapToBuffer(pending)).toEqual([false, msg]);
+  });
+
+  it("corrupt active beside completed history refuses completed-only marker", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-4756-corrupt-completed-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    const active = join(xbrief, "active");
+    const completed = join(xbrief, "completed");
+    mkdirSync(active, { recursive: true });
+    mkdirSync(completed, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeFileSync(join(active, "broken.xbrief.json"), "{broken", "utf8");
+    writeFileSync(
+      join(completed, "2026-01-01-done.xbrief.json"),
+      JSON.stringify({
+        xBRIEFInfo: { version: "0.8" },
+        plan: { title: "Done", status: "completed", items: [] },
+      }),
+      "utf8",
+    );
+
+    expect(withCwd(root, () => roadmapRenderMain([]))).not.toBe(0);
+    expect(existsSync(join(root, "ROADMAP.md"))).toBe(false);
+    expect(withCwd(root, () => roadmapRenderMain(["--check"]))).not.toBe(0);
+  });
+
+  it("main([--, --project-root, root]) ignores bare -- and writes ROADMAP.md (#5251)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-5251-sep-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Active Story");
+
+    const exit = withCwd(root, () => roadmapRenderMain(["--", "--project-root", root]));
+    expect(exit).toBe(0);
+    const content = readFileSync(join(root, "ROADMAP.md"), "utf8");
+    expect(content).toContain("## Active");
+    expect(content).toContain("Active Story");
+    expect(existsSync(join(root, "--"))).toBe(false);
+  });
+
+  it("main([--]) refuses identity like main([]) without local PROJECT-DEFINITION (#5251)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-5251-bare-"));
+    tmpDirs.push(root);
+    mkdirSync(root, { recursive: true });
+
+    const emptyExit = withCwd(root, () => roadmapRenderMain([]));
+    const bareExit = withCwd(root, () => roadmapRenderMain(["--"]));
+    expect(emptyExit).toBe(2);
+    expect(bareExit).toBe(2);
+    expect(existsSync(join(root, "ROADMAP.md"))).toBe(false);
+    expect(existsSync(join(root, "--"))).toBe(false);
+  });
+
+  it("main([--help]) exits 0 without overwriting ROADMAP.md (#5251)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-5251-help-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Active Story");
+    const roadmapPath = join(root, "ROADMAP.md");
+    const sentinel = "SENTINEL-ROADMAP-CONTENT\n";
+    writeFileSync(roadmapPath, sentinel, "utf8");
+
+    const outChunks: string[] = [];
+    const origWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      outChunks.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+      return (origWrite as (c: string | Uint8Array, ...a: unknown[]) => boolean)(chunk, ...rest);
+    }) as typeof process.stdout.write;
+    let exit: number;
+    try {
+      exit = withCwd(root, () => roadmapRenderMain(["--help"]));
+    } finally {
+      process.stdout.write = origWrite;
+    }
+    expect(exit).toBe(0);
+    expect(readFileSync(roadmapPath, "utf8")).toBe(sentinel);
+    const help = outChunks.join("");
+    expect(help).toContain("[--project-root <dir>] [outPath]");
+    expect(help).toContain("<pendingDir> [outPath]");
+    expect(help).toContain("not end-of-options");
+  });
+
+  it("main([--bogus]) exits 2 without writing ROADMAP.md (#5251)", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-roadmap-5251-bogus-"));
+    tmpDirs.push(root);
+    const xbrief = join(root, "xbrief");
+    const active = join(xbrief, "active");
+    mkdirSync(active, { recursive: true });
+    writeFileSync(
+      join(xbrief, "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify(validProjectDefinition()),
+      "utf8",
+    );
+    writeActiveStory(active, "2026-01-01-story.xbrief.json", "Active Story");
+
+    const exit = withCwd(root, () => roadmapRenderMain(["--bogus"]));
+    expect(exit).toBe(2);
+    expect(existsSync(join(root, "ROADMAP.md"))).toBe(false);
+  });
 });
 
 describe("ROADMAP producer stays off complete/finalize (#4316)", () => {

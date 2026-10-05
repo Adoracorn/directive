@@ -1,11 +1,11 @@
-import { type SpawnSyncOptions, spawnSync } from "node:child_process";
+import type { SpawnSyncOptions } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertNoDeftAllowEscape, CLAIMED_SET_REQUIRED } from "../one-pr-unit/close-via-app.js";
 import type { OriginRef } from "../one-pr-unit/types.js";
 import { SUBPROCESS_MAX_BUFFER } from "../subprocess/max-buffer.js";
-import { defaultWhich, type WhichFn } from "./binary.js";
+import { defaultWhich, spawnScmBinary, type WhichFn } from "./binary.js";
 import { classifyScmArgv, resolveBinaryForRole } from "./call-shape.js";
 import { pyRepr } from "./py-format.js";
 import {
@@ -98,7 +98,7 @@ function defaultGhSpawn(
   args: readonly string[],
   options: SpawnSyncOptions,
 ): GhSpawnResult {
-  return spawnSync(command, [...args], options);
+  return spawnScmBinary(command, args, options);
 }
 
 function finalizeGhApiResult(
@@ -328,6 +328,7 @@ export const PUBLIC_HELPERS = [
   "restGetUser",
   "restUpdateIssue",
   "restCreateLabel",
+  "restGetLabel",
   "restCloseIssue",
   "restOpenPr",
   "restMergePr",
@@ -481,6 +482,24 @@ export function restCreateLabel(
     hint: "verify repo permissions; label may already exist (422 is acceptable for idempotent bootstrap)",
     ...seams,
   });
+}
+
+/** `GET /repos/{owner}/{repo}/labels/{name}` — preflight existence (#5326). */
+export function restGetLabel(
+  repo: string,
+  name: string,
+  seams: GhRestSeams = {},
+): Record<string, unknown> {
+  const [owner, repoName] = splitRepo(repo);
+  const encoded = encodeURIComponent(name);
+  const endpoint = `repos/${owner}/${repoName}/labels/${encoded}`;
+  return execApi([endpoint, "--method", "GET"], {
+    endpoint,
+    payload: null,
+    hint: "HTTP 404 means the label is missing on the repo; 401/403 are auth-or-permission",
+    runGhApiFn: seams.runGhApiFn,
+    whichFn: seams.whichFn,
+  }) as Record<string, unknown>;
 }
 
 export interface RestCloseIssueSeams extends GhRestSeams {
@@ -746,4 +765,170 @@ export function restIssueListPaginated(
     payload: null,
     hint: "pass an explicit `limit` to bound the run, or open a follow-up to add explicit `page` cursor support",
   });
+}
+
+/** Shared REST page-row budget (100 pages × 100/page) for #3495 discovery walks. */
+export const REST_SHARED_ROW_BUDGET = REST_PAGINATION_MAX_PAGES * REST_MAX_PER_PAGE;
+
+export type ClosedPullWalkOutcome = "window-exhausted" | "list-exhausted" | "cap" | "error";
+
+export interface ClosedPullWalkResult {
+  readonly outcome: ClosedPullWalkOutcome;
+  /** Closed PRs with non-null `merged_at` inside `[windowStartIso, windowEndIso]`. */
+  readonly mergedInWindow: readonly Record<string, unknown>[];
+  readonly rawRows: number;
+  readonly keptMergedInWindow: number;
+  readonly hitReviewTrigger: boolean;
+  readonly errorMessage?: string;
+}
+
+export interface RestClosedPullWalkOptions {
+  readonly windowStartIso: string;
+  readonly windowEndIso: string;
+  readonly perPage?: number;
+  /** Remaining shared raw-row budget (defaults to REST_SHARED_ROW_BUDGET). */
+  readonly remainingBudget?: number;
+}
+
+/**
+ * Window-bounded closed-PR walk for #3495 merged-closing-pr index.
+ *
+ * `GET .../pulls?state=closed&sort=updated&direction=desc`, client-filter
+ * `merged_at` into the window, stop when `updated_at` precedes window start.
+ * Complete outcomes: `window-exhausted` | `list-exhausted` (ordering race
+ * accepted on both). `cap` / `error` are incomplete.
+ */
+export function restWalkClosedPullsUpdatedDesc(
+  repo: string,
+  options: RestClosedPullWalkOptions,
+  seams: GhRestSeams = {},
+): ClosedPullWalkResult {
+  const cappedPerPage = Math.min(
+    Math.max(1, options.perPage ?? REST_MAX_PER_PAGE),
+    REST_MAX_PER_PAGE,
+  );
+  const budget = Math.max(0, options.remainingBudget ?? REST_SHARED_ROW_BUDGET);
+  const windowStartMs = Date.parse(options.windowStartIso);
+  const windowEndMs = Date.parse(options.windowEndIso);
+  if (!Number.isFinite(windowStartMs) || !Number.isFinite(windowEndMs)) {
+    return {
+      outcome: "error",
+      mergedInWindow: [],
+      rawRows: 0,
+      keptMergedInWindow: 0,
+      hitReviewTrigger: false,
+      errorMessage: "invalid window ISO bounds",
+    };
+  }
+
+  const [owner, name] = splitRepo(repo);
+  const endpoint = `repos/${owner}/${name}/pulls`;
+  const merged: Record<string, unknown>[] = [];
+  let rawRows = 0;
+  let hitReviewTrigger = false;
+
+  try {
+    for (let page = 1; page <= REST_PAGINATION_MAX_PAGES; page += 1) {
+      if (rawRows >= budget) {
+        hitReviewTrigger = true;
+        return {
+          outcome: "cap",
+          mergedInWindow: merged,
+          rawRows,
+          keptMergedInWindow: merged.length,
+          hitReviewTrigger,
+        };
+      }
+
+      const args: string[] = [endpoint, "--method", "GET"];
+      args.push("--raw-field", "state=closed");
+      args.push("--raw-field", "sort=updated");
+      args.push("--raw-field", "direction=desc");
+      args.push("--raw-field", `per_page=${cappedPerPage}`);
+      args.push("--raw-field", `page=${page}`);
+
+      const pagePayload = execApi(args, {
+        endpoint,
+        payload: null,
+        hint: "verify repo and core REST bucket quota for closed pulls walk",
+        expectList: true,
+        runGhApiFn: seams.runGhApiFn,
+        whichFn: seams.whichFn,
+      }) as Record<string, unknown>[];
+
+      if (pagePayload.length === 0) {
+        return {
+          outcome: "list-exhausted",
+          mergedInWindow: merged,
+          rawRows,
+          keptMergedInWindow: merged.length,
+          hitReviewTrigger,
+        };
+      }
+
+      for (const item of pagePayload) {
+        if (rawRows >= budget) {
+          hitReviewTrigger = true;
+          return {
+            outcome: "cap",
+            mergedInWindow: merged,
+            rawRows,
+            keptMergedInWindow: merged.length,
+            hitReviewTrigger,
+          };
+        }
+        rawRows += 1;
+
+        const updatedRaw = item.updated_at;
+        const updatedMs = typeof updatedRaw === "string" ? Date.parse(updatedRaw) : Number.NaN;
+        if (Number.isFinite(updatedMs) && updatedMs < windowStartMs) {
+          return {
+            outcome: "window-exhausted",
+            mergedInWindow: merged,
+            rawRows,
+            keptMergedInWindow: merged.length,
+            hitReviewTrigger,
+          };
+        }
+
+        const mergedRaw = item.merged_at;
+        if (typeof mergedRaw !== "string" || mergedRaw.length === 0) {
+          continue;
+        }
+        const mergedMs = Date.parse(mergedRaw);
+        if (Number.isFinite(mergedMs) && mergedMs >= windowStartMs && mergedMs <= windowEndMs) {
+          merged.push(item);
+        }
+      }
+
+      if (pagePayload.length < cappedPerPage) {
+        return {
+          outcome: "list-exhausted",
+          mergedInWindow: merged,
+          rawRows,
+          keptMergedInWindow: merged.length,
+          hitReviewTrigger,
+        };
+      }
+    }
+
+    hitReviewTrigger = true;
+    return {
+      outcome: "cap",
+      mergedInWindow: merged,
+      rawRows,
+      keptMergedInWindow: merged.length,
+      hitReviewTrigger,
+    };
+  } catch (caught: unknown) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    return {
+      outcome: "error",
+      mergedInWindow: merged,
+      rawRows,
+      keptMergedInWindow: merged.length,
+      hitReviewTrigger,
+      errorMessage: message,
+    };
+  }
 }

@@ -9,6 +9,7 @@ import type {
   AgentHookLiveProbeResult,
   AgentHookLiveProbeSeams,
 } from "../verify-env/agent-hooks-live-probe.js";
+import type { PowershellBinReachabilityResult } from "../verify-env/command-spawn.js";
 
 export const EXIT_CLEAN = 0;
 export const EXIT_DRIFT = 1;
@@ -21,6 +22,14 @@ export interface CheckResult {
   readonly status: CheckStatus;
   readonly detail: string;
   readonly data?: Readonly<Record<string, unknown>>;
+}
+
+/** One dangling junction/symlink under node_modules (#3749). */
+export interface DanglingNodeModulesLink {
+  readonly relativePath: string;
+  readonly target: string;
+  /** Target path matches AGENT_SCRATCH_DIRS + worktrees/ (P2 bonus). */
+  readonly agentScratchWorktreeTarget: boolean;
 }
 
 export interface DoctorResult {
@@ -202,6 +211,19 @@ export interface DoctorSeams {
       readonly isDir?: (path: string) => boolean;
     },
   ) => Record<string, unknown>;
+  /**
+   * Override dangling node_modules probe for tests (#3749). Used by throttle
+   * and the framework-only full-doctor carve-in (`reportDanglingNodeModulesLinksCheck`).
+   */
+  readonly checkDanglingNodeModulesLinks?: (
+    projectRoot: string,
+    seams?: {
+      readonly readText?: (path: string) => string | null;
+      readonly isFile?: (path: string) => boolean;
+      readonly isDir?: (path: string) => boolean;
+      readonly packageManager?: string;
+    },
+  ) => CheckResult;
   /** Read-only agent-host hook registration probe (#2438). */
   readonly evaluateAgentHooks?: (projectRoot: string) => AgentHookHealthResult;
   /** Per-host SessionStart registration probe for kill-switch agent notice (#4884). */
@@ -213,6 +235,8 @@ export interface DoctorSeams {
     projectRoot: string,
     seams?: AgentHookLiveProbeSeams,
   ) => AgentHookLiveProbeResult;
+  /** Restricted PowerShell Get-Command reachability for deft-hook (#4659). */
+  readonly probePowershellDeftHookReachability?: () => PowershellBinReachabilityResult;
   /**
    * xBRIEF project-envelope staleness probe (#2971). Injected so doctor can
    * fail closed on 0.6 project JSON under an xbrief/ layout without re-deriving

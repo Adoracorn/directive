@@ -1,7 +1,25 @@
-import { describe, expect, it } from "vitest";
-import { computeGateResult } from "./compute.js";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { type ComputeGateOptions, computeGateResult } from "./compute.js";
+import { isMergeReady } from "./evaluate.js";
 import { exitCodeFor, printHuman } from "./output.js";
+import { MERGE_READY_NO_REVIEWER_FAILURE } from "./reviewer-presence.js";
 import type { RunGhFn } from "./types.js";
+
+/** Hermetic Greptile suites must opt out of closeout explicitly (#3875). */
+function computeGate(
+  prNumber: number,
+  repo: string | null,
+  runGh: RunGhFn,
+  options: ComputeGateOptions = {},
+) {
+  return computeGateResult(prNumber, repo, runGh, {
+    skipCloseoutAttestable: true,
+    ...options,
+  });
+}
 
 const HEAD = "abc1234567890def1234567890abcdef12345678";
 const OLD = "1111111111111111111111111111111111111111";
@@ -83,8 +101,16 @@ function fakeRunGh(opts: FakeOpts): RunGhFn {
 }
 
 describe("computeGateResult #2260 reconciliation", () => {
+  let emptyReviewersRoot = "";
+  afterEach(() => {
+    if (emptyReviewersRoot.length > 0) {
+      rmSync(emptyReviewersRoot, { recursive: true, force: true });
+      emptyReviewersRoot = "";
+    }
+  });
+
   it("merges when verdict is ABSENT but GitHub is CLEAN + MERGEABLE", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: "", mergeableState: "clean", mergeable: true }),
@@ -104,7 +130,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("merges when verdict is STALE (rebased head SHA) but GitHub is CLEAN", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: cleanGreptileBody(OLD), mergeableState: "clean", mergeable: true }),
@@ -117,8 +143,34 @@ describe("computeGateResult #2260 reconciliation", () => {
     expect(override.reason).toBe("verdict-stale-head-sha");
   });
 
+  it("keeps no-reviewer failure when verdict is absent and GitHub is CLEAN (#3630)", () => {
+    emptyReviewersRoot = mkdtempSync(join(tmpdir(), "merge-ready-reviewers-"));
+    mkdirSync(join(emptyReviewersRoot, "xbrief"), { recursive: true });
+    writeFileSync(
+      join(emptyReviewersRoot, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify({
+        plan: { title: "P", status: "running", policy: { review: { reviewers: [] } } },
+      }),
+      "utf8",
+    );
+    const result = computeGate(
+      3630,
+      "deftai/directive",
+      fakeRunGh({ commentBody: "", mergeableState: "clean", mergeable: true }),
+      { projectRoot: emptyReviewersRoot },
+    );
+    expect(result.failures).toContain(MERGE_READY_NO_REVIEWER_FAILURE);
+    expect((result.partialData as Record<string, unknown>).verdict_override).toBeUndefined();
+    expect((result.partialData as Record<string, unknown>).reviewer_ready_state).toBe(
+      "no_reviewer_installed",
+    );
+    expect(printHuman(result)).toContain("MERGE-BLOCKED");
+    expect(printHuman(result)).not.toContain("Result: MERGE-READY");
+    expect(exitCodeFor(result)).toBe(1);
+  });
+
   it("does NOT merge when verdict absent but GitHub is UNSTABLE (not clean)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: "", mergeableState: "unstable", mergeable: true }),
@@ -137,7 +189,7 @@ describe("computeGateResult #2260 reconciliation", () => {
       "## Greptile Summary\n\n**Confidence Score: 5/5**\n\n" +
       `Last reviewed commit: [x](https://github.com/deftai/directive/commit/${OLD})\n` +
       '### P0 findings (1)\n<img alt="P0" />\n';
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: body, mergeableState: "clean", mergeable: true }),
@@ -148,7 +200,7 @@ describe("computeGateResult #2260 reconciliation", () => {
 
   it("merges when Greptile excluded-author skip is present and CI is green (#2375)", () => {
     const body = "<!-- greptile-status --> PR author is in the excluded authors list.";
-    const result = computeGateResult(
+    const result = computeGate(
       2352,
       "deftai/directive",
       fakeRunGh({ commentBody: body, mergeableState: "clean", mergeable: true }),
@@ -163,7 +215,7 @@ describe("computeGateResult #2260 reconciliation", () => {
       "## Greptile Summary\n\n**Confidence Score: 5/5**\n\n" +
       `Last reviewed commit: [x](https://github.com/deftai/directive/commit/${HEAD})\n` +
       '### P0 findings (1)\n<img alt="P0" />\n';
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: body, mergeableState: "clean", mergeable: true }),
@@ -173,7 +225,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("respects disableMergeabilityReconcile", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: "", mergeableState: "clean", mergeable: true }),
@@ -184,7 +236,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("clean canonical verdict + green CI still merges via existing path", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: cleanGreptileBody(HEAD), mergeableState: "clean", mergeable: true }),
@@ -203,7 +255,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("does not MERGE-READY an empty failure list when GitHub is not clean (#4883)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       4883,
       "deftai/directive",
       fakeRunGh({
@@ -232,7 +284,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("does not MERGE-READY when mergeable is true but mergeable_state is not clean (#4883)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       4883,
       "deftai/directive",
       fakeRunGh({
@@ -248,7 +300,7 @@ describe("computeGateResult #2260 reconciliation", () => {
 
   it("does not MERGE-READY an excluded-author skip when GitHub is not clean (#4883)", () => {
     const body = "<!-- greptile-status --> PR author is in the excluded authors list.";
-    const result = computeGateResult(
+    const result = computeGate(
       4883,
       "deftai/directive",
       fakeRunGh({ commentBody: body, mergeableState: "dirty", mergeable: false }),
@@ -261,7 +313,7 @@ describe("computeGateResult #2260 reconciliation", () => {
 
   it("reuses fetchMergeabilityFn on the empty-failure return (#4883)", () => {
     let called = false;
-    const result = computeGateResult(
+    const result = computeGate(
       4883,
       "deftai/directive",
       fakeRunGh({
@@ -289,7 +341,7 @@ describe("computeGateResult #2260 reconciliation", () => {
 
   it("does not read mergeability when CI already blocks an empty review list (#4883)", () => {
     let called = false;
-    const result = computeGateResult(
+    const result = computeGate(
       4883,
       "deftai/directive",
       fakeRunGh({
@@ -311,7 +363,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("fails closed on green observed CI when ruleset required context is absent (#3234)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       3234,
       "deftai/directive",
       fakeRunGh({ commentBody: cleanGreptileBody(HEAD), mergeableState: "clean", mergeable: true }),
@@ -337,7 +389,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("stays merge-ready when injected required contexts are all observed green (#3234)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       3234,
       "deftai/directive",
       fakeRunGh({ commentBody: cleanGreptileBody(HEAD), mergeableState: "clean", mergeable: true }),
@@ -353,7 +405,7 @@ describe("computeGateResult #2260 reconciliation", () => {
 
   it("resolves required contexts via fetchRequiredContextsFn seam (#3234)", () => {
     let branchSeen = "";
-    const result = computeGateResult(
+    const result = computeGate(
       3234,
       "deftai/directive",
       fakeRunGh({ commentBody: cleanGreptileBody(HEAD), mergeableState: "clean", mergeable: true }),
@@ -378,7 +430,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("does not discard ci_absent_required under soft-verdict CLEAN reconciliation (#3234)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       3234,
       "deftai/directive",
       // Absent Greptile verdict → soft block; GitHub CLEAN would previously
@@ -396,7 +448,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("fails closed when required-context inventory resolution fails (#3234)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       3234,
       "deftai/directive",
       fakeRunGh({ commentBody: cleanGreptileBody(HEAD), mergeableState: "clean", mergeable: true }),
@@ -418,7 +470,7 @@ describe("computeGateResult #2260 reconciliation", () => {
 
   it("uses injectable fetchMergeabilityFn seam", () => {
     let called = false;
-    const result = computeGateResult(
+    const result = computeGate(
       2258,
       "deftai/directive",
       fakeRunGh({ commentBody: "", mergeableState: "unstable", mergeable: false }),
@@ -450,10 +502,11 @@ describe("computeGateResult #2260 reconciliation", () => {
                   comments: {
                     nodes: [
                       {
-                        author: { login: "greptile-apps[bot]" },
+                        author: { login: "greptile-apps" },
                         body: inlineP1Body,
                         path: "server/src/register/github.ts",
                         commit: { oid: HEAD },
+                        originalCommit: { oid: HEAD },
                       },
                     ],
                   },
@@ -464,7 +517,7 @@ describe("computeGateResult #2260 reconciliation", () => {
         },
       },
     });
-    const result = computeGateResult(
+    const result = computeGate(
       120,
       "deftai/statusreport",
       fakeRunGh({
@@ -479,7 +532,7 @@ describe("computeGateResult #2260 reconciliation", () => {
   });
 
   it("fails closed when inline reviewThreads fetch errors on a clean summary (#2620)", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       120,
       "deftai/directive",
       fakeRunGh({
@@ -491,5 +544,73 @@ describe("computeGateResult #2260 reconciliation", () => {
       result.failures.some((f) => f.includes("Could not verify Greptile inline review comments")),
     ).toBe(true);
     expect((result.partialData as Record<string, unknown>).verdict_override).toBeUndefined();
+  });
+});
+
+describe("pr:merge-ready closeout invoker (#3875)", () => {
+  it("refuses a Greptile-clean verdict when closeout reports unattested criteria", () => {
+    const result = computeGateResult(
+      3875,
+      "deftai/directive",
+      fakeRunGh({
+        commentBody: cleanGreptileBody(HEAD),
+        mergeableState: "clean",
+        mergeable: true,
+      }),
+      {
+        skipCi: true,
+        skipSlizard: true,
+        closeoutAttestableFn: () => ({
+          code: 1,
+          message: "verify:pr-closeout-attestable: PR #3875 closes #3609, leaving 5 unattested",
+        }),
+      },
+    );
+    expect(isMergeReady(result.failures)).toBe(false);
+    expect(result.failures.some((f) => f.includes("unattested"))).toBe(true);
+    expect((result.partialData as Record<string, unknown>).closeout_attestable).toEqual({
+      code: 1,
+      message: "verify:pr-closeout-attestable: PR #3875 closes #3609, leaving 5 unattested",
+    });
+  });
+
+  it("surfaces closeout config errors as via=error", () => {
+    const result = computeGateResult(
+      3875,
+      "deftai/directive",
+      fakeRunGh({
+        commentBody: cleanGreptileBody(HEAD),
+        mergeableState: "clean",
+        mergeable: true,
+      }),
+      {
+        skipCi: true,
+        skipSlizard: true,
+        closeoutAttestableFn: () => ({
+          code: 2,
+          message: "verify:pr-closeout-attestable: working tree HEAD is not PR head",
+        }),
+      },
+    );
+    expect(result.via).toBe("error");
+    expect(result.error).toContain("not PR head");
+  });
+
+  it("keeps Greptile-clean when closeout is clean", () => {
+    const result = computeGateResult(
+      3875,
+      "deftai/directive",
+      fakeRunGh({
+        commentBody: cleanGreptileBody(HEAD),
+        mergeableState: "clean",
+        mergeable: true,
+      }),
+      {
+        skipCi: true,
+        skipSlizard: true,
+        closeoutAttestableFn: () => ({ code: 0, message: "ok" }),
+      },
+    );
+    expect(isMergeReady(result.failures)).toBe(true);
   });
 });

@@ -20,6 +20,11 @@ import { runningInsideDeftRepo } from "../doctor/paths.js";
 import { assertWriteTargetSafe, ProjectionContainmentError } from "../fs/projection-containment.js";
 import { hasArtifactSuffix } from "../layout/resolve.js";
 import {
+  defaultKillAttestationDir,
+  evaluateKillAttestation,
+  type KillHostStatus,
+} from "../orchestration/subagent-kill-attestation.js";
+import {
   detectDeftDirectiveDisable,
   formatDeftDirectiveDisableMessage,
   isDeftDirectiveDisableActive,
@@ -97,9 +102,20 @@ import {
   WRITE_GATED_REQUIRED_STEPS,
   writeGateRitualOptions,
 } from "../session/verify-session-ritual.js";
+import {
+  countModelFlagsInLauncherArgv,
+  evaluateSpawnRoutingHonor,
+  extractModelFromLauncherArgv,
+  extractRequestedModelFromPayload,
+  extractStructuralWorkerRole,
+  type RoutingHonorSurface,
+  type RoutingSpawnClass,
+} from "../swarm/routing-honor.js";
 import { uninspectableLifecycleDenyMessage } from "./classify/host-session-identity.js";
 import {
+  applyPatchHarvestedInputUnclassified,
   fieldString,
+  firstString,
   type HookPayloadContext,
   hintUninspectableLifecycleCommand,
   hookApplyPatchBodyPaths,
@@ -160,7 +176,9 @@ import {
 import { classifyShellWriteTargets, isInRepoShellWritePath } from "./shell-write-targets.js";
 import {
   effectiveHookToolName,
+  isApplyPatchTool,
   isDirectWriteTool,
+  isKillTool,
   isMcpTool,
   isMcpWriteShaped,
   isShellTool,
@@ -191,12 +209,16 @@ export {
   HOST_TOOL_SURFACE_AUDIT,
   type HostMutationToolCatalog,
   type HostToolSurfaceAudit,
+  isApplyPatchTool,
   isDirectWriteTool,
+  isKillTool,
   isMcpProxyWrapper,
   isMcpTool,
   isMcpWriteShaped,
   isShellTool,
   isSpawnTool,
+  KILL_HOOK_MATCHER,
+  KILL_TOOL_NAMES,
   MCP_HOOK_MATCHER,
   MCP_PUSH_MERGE_BARE_NAMES,
   matcherHasLiteralToken,
@@ -310,7 +332,15 @@ export type HookDecisionCode =
   | "plan-choice-ack-observed"
   | "plan-choice-ack-ignored"
   | "plan-choice-opt-out"
-  | "plan-choice-store-deny";
+  | "plan-choice-store-deny"
+  /** Still-running / status-unknown host kill without green attestation (#5281). */
+  | "kill-attestation-deny"
+  /** Green pre-cancel or equivalent kill attestation allowed host kill (#5281). */
+  | "kill-attestation-ready"
+  /** Explicit force + non-empty printed reason allowed host kill (#5281). */
+  | "kill-force-ready"
+  /** Host task status terminal — kill allowed without attestation (#5281). */
+  | "kill-terminal-ready";
 
 export interface HookDecision {
   readonly verdict: HookVerdict;
@@ -502,6 +532,29 @@ export interface HookPolicySeams {
   readonly prepareArcDest?: typeof prepareGithubOnlyDest;
   /** Test seam for Cursor planning-choice store/clock (#4973). */
   readonly cursorPlanChoice?: CursorPlanChoiceDeps;
+  /**
+   * Tip seam for #5278 `evaluatePreCancel` green (#5281 Prefer-A).
+   * When absent, equivalent `.deft-scratch/subagent-kill-attestation/` is required.
+   */
+  readonly evaluatePreCancelGreen?: (input: {
+    projectRoot: string;
+    agentId: string;
+    writerId: string;
+  }) => boolean;
+  /** Test / host seam for kill still-running oracle (not heartbeat STALE). */
+  readonly resolveKillHostStatus?: (input: {
+    projectRoot: string;
+    agentId: string;
+    payload: unknown;
+  }) => KillHostStatus;
+  /** Test seam for kill attestation directory. */
+  readonly killAttestationDir?: (projectRoot: string) => string;
+  /** Test seam for killer writer_id (defaults to DEFT_SESSION_ID / occupancy-unknown). */
+  readonly resolveKillWriterId?: (input: {
+    projectRoot: string;
+    payload: unknown;
+    environ: NodeJS.ProcessEnv;
+  }) => string;
 }
 
 /** POSIX-ish project-relative path for lifecycle matching. */
@@ -551,6 +604,9 @@ function applyPatchBodyUnclassified(payload: unknown): boolean {
   const text = hookApplyPatchBodyText(payload);
   return text !== null && hookApplyPatchBodyPaths(payload).length === 0;
 }
+
+const APPLY_PATCH_UNCLASSIFIED_BODY_MESSAGE =
+  "Directive denied this direct write: apply_patch body named no classifiable mutation target, so the write fence cannot authorize it.";
 
 /**
  * Lifecycle exemption is universally quantified over every mutated path, not
@@ -1135,8 +1191,7 @@ function runtimeAuthorityForDirectWrite(
       input,
       "runtime-policy-deny-path",
       toolName,
-      "Directive denied this direct write: apply_patch body named no classifiable mutation target, so the write fence cannot authorize it." +
-        fenceRootNote,
+      APPLY_PATCH_UNCLASSIFIED_BODY_MESSAGE + fenceRootNote,
       scopePath,
     );
   }
@@ -1486,6 +1541,12 @@ function inspectMutationGates(
   const environ = input.environ ?? process.env;
   const dispatchGit = memoizeGitRunner(seams.ritualRunGit ?? defaultGitRunner);
   const mutationTargets = isSpawnTool(toolName) ? [] : hookMutationTargetPaths(input.payload);
+  if (
+    isApplyPatchTool(toolName) &&
+    (mutationTargets.length === 0 || applyPatchHarvestedInputUnclassified(input.payload))
+  ) {
+    return deny(input, "runtime-policy-deny-path", toolName, APPLY_PATCH_UNCLASSIFIED_BODY_MESSAGE);
+  }
   if (!isSpawnTool(toolName)) {
     for (const target of mutationTargets) {
       if (isCursorPlanChoiceManagedPath(target, environ)) {
@@ -1865,8 +1926,12 @@ function inspectMutationGates(
   // the exact ritual owner above (never adopt a later ritual file here).
   // #3599: the owner's lease is only kept alive here, on the last evaluation
   // before an allowed write, so the stamp records a write that really happened.
+  // #5176 / #4544 Prefer-A: product allows opt into the durable marker; Process-only
+  // / proposed-lifecycle exempt renew lastWriteAt without arming first-ship refuse.
   let occupancyWarning: string | null = null;
-  const recheckOccupancyBeforeWriteAllow = (): HookDecision | null => {
+  const recheckOccupancyBeforeWriteAllow = (
+    persistProductMutationMarker: boolean,
+  ): HookDecision | null => {
     if (actor === null) return null;
     const finalOccupancy = applyCursorNurseryOccupancy(
       effectiveRoot,
@@ -1874,6 +1939,7 @@ function inspectMutationGates(
         sessionId: actor.sessionId,
         env: actor.hostAuthoritative ? {} : environ,
         refresh: true,
+        persistProductMutationMarker,
       }),
       actor.sessionId ?? "",
       undefined,
@@ -1958,7 +2024,8 @@ function inspectMutationGates(
         effectiveRoot,
       );
       if (runtimeDeny !== null) return runtimeDeny;
-      const occupancyDeny = recheckOccupancyBeforeWriteAllow();
+      // Process-only / lifecycle-exempt: renew lease, do not Prefer-A stamp (#5176).
+      const occupancyDeny = recheckOccupancyBeforeWriteAllow(false);
       if (occupancyDeny !== null) return occupancyDeny;
       return {
         verdict: "allow",
@@ -2117,7 +2184,8 @@ function inspectMutationGates(
       effectiveRoot,
     );
     if (runtimeDeny !== null) return runtimeDeny;
-    const occupancyDeny = recheckOccupancyBeforeWriteAllow();
+    // Intentional product-write allow: Prefer-A durable marker (#5176 / #4544).
+    const occupancyDeny = recheckOccupancyBeforeWriteAllow(true);
     if (occupancyDeny !== null) return occupancyDeny;
   }
   const allowMessage = withOccupancyWarning(
@@ -2187,17 +2255,35 @@ function inspectMutationGates(
         );
       }
     }
-    return {
-      verdict: "allow",
-      code: allowCode,
-      event: input.event,
-      host: input.host,
+    const routingDecision = applyRoutingConjunct(
+      input,
       toolName,
-      projectRoot,
-      message: `${allowMessage} ${spawnReservation.message}`,
-      scopePath: scope.path,
-      ...(updatedInput !== undefined ? { updatedInput } : {}),
-    };
+      {
+        verdict: "allow",
+        code: allowCode,
+        event: input.event,
+        host: input.host,
+        toolName,
+        projectRoot,
+        message: `${allowMessage} ${spawnReservation.message}`,
+        scopePath: scope.path,
+        ...(updatedInput !== undefined ? { updatedInput } : {}),
+      },
+      "implement",
+    );
+    // Routing deny after persist must release the dest-lock or a corrected
+    // retry is refused as already reserved (#3703 Greptile P1).
+    if (
+      persistThisHandler &&
+      routingDecision.verdict !== "allow" &&
+      reservation.worktreePath.trim().length > 0
+    ) {
+      const incarnation = reservation.incarnation?.trim() ?? "";
+      if (incarnation.length > 0) {
+        releaseLeftoverSpawnReservation(payloadRoot, reservation.worktreePath, incarnation);
+      }
+    }
+    return routingDecision;
   }
   return {
     verdict: "allow",
@@ -2416,6 +2502,145 @@ function decideShellWriteReissue(
     if (destDecision.verdict === "deny") return destDecision;
   }
   return null;
+}
+
+function killToolInput(payload: unknown): Record<string, unknown> | null {
+  const top = record(payload);
+  if (top === null) return null;
+  return toolInputRecord(top) ?? top;
+}
+
+function extractKillTargetId(payload: unknown): string | null {
+  const toolInput = killToolInput(payload);
+  if (toolInput === null) return null;
+  return firstString([
+    toolInput.task_id,
+    toolInput.taskId,
+    toolInput.agent_id,
+    toolInput.agentId,
+    toolInput.id,
+  ]);
+}
+
+function extractKillForce(payload: unknown): { force: boolean; reason: string | null } {
+  const toolInput = killToolInput(payload);
+  if (toolInput === null) return { force: false, reason: null };
+  const forceFlag =
+    toolInput.force === true ||
+    toolInput.force === "true" ||
+    toolInput.force === 1 ||
+    String(toolInput.force ?? "")
+      .trim()
+      .toLowerCase() === "true";
+  const reason = firstString([toolInput.reason, toolInput.force_reason, toolInput.forceReason]);
+  return { force: forceFlag, reason };
+}
+
+/**
+ * Killer identity comes from the hook environment only.
+ * Tool-input writer_id / parent_id is attacker-controlled and must not win (#5281).
+ */
+function defaultKillWriterId(_payload: unknown, environ: NodeJS.ProcessEnv): string {
+  const fromEnv = firstString([
+    environ.DEFT_SESSION_ID,
+    environ.DEFT_OCCUPANCY_OWNER,
+    environ.DEFT_AGENT_ID,
+    environ.GROK_SESSION_ID,
+    environ.GROK_AGENT_ID,
+  ]);
+  return fromEnv ?? "unknown-killer";
+}
+
+/**
+ * Dedicated deny-class path for host kill (#5281).
+ * Does not route through product-write inspectMutationGates.
+ */
+function decideKillAttestationGate(
+  input: HookDispatchInput,
+  toolName: string,
+  seams: HookPolicySeams,
+  environ: NodeJS.ProcessEnv,
+): HookDecision {
+  const projectRoot = resolve(input.projectRoot);
+  const agentId = extractKillTargetId(input.payload) ?? "";
+  const writerId =
+    seams.resolveKillWriterId?.({
+      projectRoot,
+      payload: input.payload,
+      environ,
+    }) ?? defaultKillWriterId(input.payload, environ);
+  const { force, reason: forceReason } = extractKillForce(input.payload);
+  // Host status must come from a host oracle seam — never from caller tool_input (#5281).
+  const hostStatus: KillHostStatus =
+    seams.resolveKillHostStatus?.({
+      projectRoot,
+      agentId,
+      payload: input.payload,
+    }) ?? "unknown";
+  const attestationDir =
+    seams.killAttestationDir?.(projectRoot) ?? defaultKillAttestationDir(projectRoot);
+  const verdict = evaluateKillAttestation({
+    agentId,
+    writerId,
+    attestationDir,
+    force,
+    forceReason,
+    hostStatus,
+    evaluatePreCancelGreen:
+      seams.evaluatePreCancelGreen === undefined
+        ? undefined
+        : () =>
+            seams.evaluatePreCancelGreen!({
+              projectRoot,
+              agentId,
+              writerId,
+            }),
+  });
+
+  if (!verdict.ok) {
+    return deny(input, "kill-attestation-deny", toolName, verdict.message);
+  }
+
+  if (verdict.clear_reason === "host-terminal") {
+    return {
+      verdict: "allow",
+      code: "kill-terminal-ready",
+      event: input.event,
+      host: input.host,
+      toolName,
+      projectRoot,
+      message: verdict.message,
+      scopePath: null,
+    };
+  }
+
+  if (verdict.clear_reason === "force") {
+    const printed = verdict.printed_force_reason ?? forceReason ?? "";
+    return {
+      verdict: "allow",
+      code: "kill-force-ready",
+      event: input.event,
+      host: input.host,
+      toolName,
+      projectRoot,
+      message:
+        printed.length > 0
+          ? `Directive allowed ${toolName} via force: ${printed}`
+          : verdict.message,
+      scopePath: null,
+    };
+  }
+
+  return {
+    verdict: "allow",
+    code: "kill-attestation-ready",
+    event: input.event,
+    host: input.host,
+    toolName,
+    projectRoot,
+    message: verdict.message,
+    scopePath: null,
+  };
 }
 
 /**
@@ -2650,6 +2875,7 @@ function attachLifecycleIdentityRewrite(
       uninspectableLifecycleDenyMessage(hinted, named, input.payload),
     );
   }
+  // #4660: non-claiming read-only session:start keeps the prior allow.
   if (!lifecycle.requiresOwner) return decision;
   type LifecycleIdentityCode = Extract<
     HookDecisionCode,
@@ -2870,6 +3096,68 @@ function prepareProcessOnlyCriticDest(
   return prepareProcessOnlyDestPath(cwd, projectRoot, seams, payload);
 }
 
+/**
+ * #3703 Prefer-A: routing conjunct ahead of every spawn-class allow.
+ * Runs honor-at-dispatch against the trusted route snapshot; denied when a
+ * gated pinned role would inherit or diverge. Carve-outs (explore /
+ * process-only / ephemeral without gated structural role) still pass through
+ * this helper so the allow path is never an unchecked early return.
+ */
+function applyRoutingConjunct(
+  input: HookDispatchInput,
+  toolName: string,
+  allow: HookDecision,
+  spawnClass: RoutingSpawnClass,
+  options: {
+    readonly requestedModel?: string | null;
+    readonly surface?: RoutingHonorSurface;
+  } = {},
+): HookDecision {
+  if (allow.verdict !== "allow") return allow;
+  const environ = input.environ ?? process.env;
+  const surface: RoutingHonorSurface =
+    options.surface ?? (hostAcceptsUpdatedInput(input.host) ? "payload-model" : "non-intercept");
+  const requestedModel =
+    options.requestedModel !== undefined
+      ? options.requestedModel
+      : extractRequestedModelFromPayload(input.payload);
+  const honor = evaluateSpawnRoutingHonor({
+    projectRoot: resolve(input.projectRoot),
+    environ,
+    spawnClass,
+    surface,
+    structuralWorkerRole: extractStructuralWorkerRole(input.payload),
+    requestedModel,
+    canRewriteRequest: surface === "payload-model" && hostAcceptsUpdatedInput(input.host),
+  });
+  if (!honor.ok) {
+    return deny(input, "spawn-not-ready", toolName, honor.message);
+  }
+  let next: HookDecision = {
+    ...allow,
+    message: `${allow.message} ${honor.message}`,
+  };
+  if (honor.rewriteRequest && honor.honoredModel !== null && hostAcceptsUpdatedInput(input.host)) {
+    const base =
+      next.updatedInput !== undefined
+        ? { ...next.updatedInput }
+        : { ...(record(input.payload) ?? {}) };
+    const toolInput = toolInputRecord(base) ?? {};
+    next = {
+      ...next,
+      updatedInput: {
+        ...base,
+        tool_input: {
+          ...toolInput,
+          model: honor.honoredModel,
+        },
+        model: honor.honoredModel,
+      },
+    };
+  }
+  return next;
+}
+
 function decideLauncherFamilyArgv(
   input: HookDispatchInput,
   toolName: string,
@@ -2898,19 +3186,39 @@ function decideLauncherFamilyArgv(
       ? prepareProcessOnlyDestPath(classified.dest, projectRoot, seams, input.payload)
       : null;
   if (prepared !== null && prepared.ok === true) {
-    return {
-      verdict: "allow",
-      code: "spawn-process-only-ready",
-      event: input.event,
-      host: input.host,
+    const command = hookShellCommand(input.payload) ?? "";
+    if (countModelFlagsInLauncherArgv(command) > 1) {
+      return deny(
+        input,
+        "spawn-not-ready",
+        toolName,
+        `Directive denied ${toolName}: launcher argv has duplicate --model flags; ` +
+          "honor join cannot pick which slug to compare (#3703).",
+      );
+    }
+    return applyRoutingConjunct(
+      input,
       toolName,
-      projectRoot,
-      message:
-        `Directive allowed process-only critic ${toolName} launcher argv (${classified.family}) ` +
-        "without dest occupancy or implementation gates (argv-reachable process-only skip). " +
-        prepared.record,
-      scopePath: null,
-    };
+      {
+        verdict: "allow",
+        code: "spawn-process-only-ready",
+        event: input.event,
+        host: input.host,
+        toolName,
+        projectRoot,
+        message:
+          `Directive allowed process-only critic ${toolName} launcher argv (${classified.family}) ` +
+          "without dest occupancy or implementation gates (argv-reachable process-only skip). " +
+          prepared.record,
+        scopePath: null,
+      },
+      // Critic CLI keep process-only carve-out; bare launcher-argv honors leaf (#3703).
+      "process-only",
+      {
+        surface: "launcher-argv",
+        requestedModel: extractModelFromLauncherArgv(command),
+      },
+    );
   }
   if (prepared !== null && prepared.ok === false) {
     return overlayGrokCriticSpawnNotReadyRecovery(
@@ -3170,16 +3478,21 @@ function routeHookDecision(
       );
     }
     if (isExploreSpawn(input.payload)) {
-      return {
-        verdict: "allow",
-        code: "spawn-explore-ready",
-        event: input.event,
-        host: input.host,
+      return applyRoutingConjunct(
+        input,
         toolName,
-        projectRoot,
-        message: `Directive allowed explore ${toolName} spawn without implementation gates.`,
-        scopePath: null,
-      };
+        {
+          verdict: "allow",
+          code: "spawn-explore-ready",
+          event: input.event,
+          host: input.host,
+          toolName,
+          projectRoot,
+          message: `Directive allowed explore ${toolName} spawn without implementation gates.`,
+          scopePath: null,
+        },
+        "explore",
+      );
     }
     // Process-only skip class (#4296): host-visible `plan` or `process_only` stdin marker.
     // Not dest-path. Not prompt. Not an implement-class gate bypass: implement-class
@@ -3221,34 +3534,44 @@ function routeHookDecision(
         );
       }
       const pin = destNote?.ok ? ` ${destNote.record}` : "";
-      return {
-        verdict: "allow",
-        code: "spawn-process-only-ready",
-        event: input.event,
-        host: input.host,
+      return applyRoutingConjunct(
+        input,
         toolName,
-        projectRoot,
-        message:
-          `Directive allowed process-only critic ${toolName} spawn without dest occupancy ` +
-          `or implementation gates (subagent_type plan or process_only).${pin}`,
-        scopePath: null,
-      };
+        {
+          verdict: "allow",
+          code: "spawn-process-only-ready",
+          event: input.event,
+          host: input.host,
+          toolName,
+          projectRoot,
+          message:
+            `Directive allowed process-only critic ${toolName} spawn without dest occupancy ` +
+            `or implementation gates (subagent_type plan or process_only).${pin}`,
+          scopePath: null,
+        },
+        "process-only",
+      );
     }
     // Ephemeral/docs/assist (+ session assist env #3259): non-lifecycle spawn;
     // no active xBRIEF. Does not authorize push/merge/deploy — shell/MCP matchers.
     if (isEphemeralSpawn(input.payload, environ)) {
-      return {
-        verdict: "allow",
-        code: "spawn-ephemeral-ready",
-        event: input.event,
-        host: input.host,
+      return applyRoutingConjunct(
+        input,
         toolName,
-        projectRoot,
-        message:
-          `Directive allowed ephemeral ${toolName} spawn without active-xBRIEF ` +
-          "implementation gates (non-lifecycle assist/docs posture).",
-        scopePath: null,
-      };
+        {
+          verdict: "allow",
+          code: "spawn-ephemeral-ready",
+          event: input.event,
+          host: input.host,
+          toolName,
+          projectRoot,
+          message:
+            `Directive allowed ephemeral ${toolName} spawn without active-xBRIEF ` +
+            "implementation gates (non-lifecycle assist/docs posture).",
+          scopePath: null,
+        },
+        "ephemeral",
+      );
     }
     return overlayGrokCriticSpawnNotReadyRecovery(
       input,
@@ -3288,6 +3611,12 @@ function routeHookDecision(
     }
     const decision = decideShellDestFormsThenRuntimeAuthority(input, toolName, seams, observation);
     return attachLifecycleIdentityRewrite(input, toolName, decision, seams);
+  }
+
+  // Host kill deny-class / attestation gate (#5281 Prefer-A Bound).
+  // Not product-write inspectMutationGates; matcher deposit selects this tool.
+  if (isKillTool(toolName)) {
+    return decideKillAttestationGate(input, toolName, seams, environ);
   }
 
   // #3593: dest-bearing write-shaped MCP / proxy wrappers share inspectMutationGates
@@ -3497,6 +3826,18 @@ export function renderHostDecision(host: HookHost, decision: HookDecision): stri
           additional_context: injected,
         });
       }
+    }
+    // Grok force-kill allow must print the reason (#5281 DCR iii) — empty allow hides it.
+    if (
+      host === "grok" &&
+      decision.event === "tool.before" &&
+      decision.code === "kill-force-ready" &&
+      decision.message.trim().length > 0
+    ) {
+      return JSON.stringify({
+        decision: "allow",
+        reason: decision.message,
+      });
     }
     return "";
   }

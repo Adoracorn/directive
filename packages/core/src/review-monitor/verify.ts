@@ -1,6 +1,8 @@
-import { existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { ContainedWriteError, containedWrite } from "../fs/contained-write.js";
 import { sweepScratchDirs } from "../orchestration/subagent-monitor.js";
+import { defaultRunGh, fetchPrHeadShaRest } from "../pr-merge-readiness/gh.js";
 import { resolveRepo } from "../triage/queue/repo.js";
 import {
   EXIT_CONFIG_ERROR,
@@ -17,7 +19,139 @@ import {
   readReviewMonitorFile,
   reviewMonitorPath,
 } from "./record.js";
-import { isTier1, type MonitoringTierProbe, probeMonitoringTier } from "./tier-detection.js";
+import {
+  isTier1,
+  isTier1PlatformPrimitive,
+  type MonitoringTierProbe,
+  OVERRIDE_TIER3_DESCRIPTOR,
+  type PlatformPrimitive,
+  probeMonitoringTier,
+} from "./tier-detection.js";
+
+/**
+ * Heartbeat `parent_id` written by post-CLEAN `pr:wait-mergeable-and-merge` (#5020).
+ * Identity join (#5219) accepts this closer path only with a local CLEAN attestation
+ * from `pr:watch` (premature closer must not arm --merge-path-arm --live-wait).
+ */
+export const POST_CLEAN_WAIT_PARENT_ID = "pr-wait-mergeable";
+
+/** Local CLEAN attestation sink for post-CLEAN closer arm (#5219 Greptile). */
+export function mergePathCleanAttestationRelPath(pr: number): string {
+  return [".deft-scratch", "merge-path-arm", `pr-${pr}.clean.json`].join("/");
+}
+
+export type MergePathCleanAttestationWriteResult =
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Record that `pr:watch` reached CLEAN for this PR HEAD. Closer
+ * `pr-wait-mergeable` heartbeats arm only when attestation SHA matches live HEAD.
+ */
+export function writeMergePathCleanAttestation(
+  projectRoot: string,
+  pr: number,
+  headSha: string | null = null,
+  now: Date = new Date(),
+): MergePathCleanAttestationWriteResult {
+  if (!Number.isInteger(pr) || pr <= 0) {
+    return { ok: false, reason: `invalid pr for CLEAN attestation: ${pr}` };
+  }
+  const sha = typeof headSha === "string" && headSha.trim().length > 0 ? headSha.trim() : null;
+  if (sha === null) {
+    return { ok: false, reason: `CLEAN attestation requires head SHA for PR #${pr}` };
+  }
+  const rootAbs = resolve(projectRoot);
+  const relTarget = mergePathCleanAttestationRelPath(pr);
+  const path = join(rootAbs, relTarget);
+  const escaped = relative(rootAbs, path);
+  if (escaped.startsWith("..") || escaped.length === 0) {
+    return { ok: false, reason: `CLEAN attestation path escapes project root: ${path}` };
+  }
+  const payload = {
+    pr_number: pr,
+    head_sha: sha,
+    cleaned_at: now.toISOString(),
+    source: "pr:watch",
+  };
+  try {
+    containedWrite({
+      root: rootAbs,
+      target: relTarget,
+      data: `${JSON.stringify(payload)}\n`,
+      mode: "replace",
+      mkdir: true,
+    });
+    return { ok: true, path };
+  } catch (err) {
+    const detail =
+      err instanceof ContainedWriteError
+        ? `${err.code}: ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ok: false, reason: `CLEAN attestation write failed: ${detail}` };
+  }
+}
+
+/**
+ * True when local CLEAN attestation SHA exactly matches expected HEAD.
+ * Omitting expected HEAD fails closed — stale tip A must not arm tip B (#5219).
+ */
+export function hasMergePathCleanAttestation(
+  projectRoot: string,
+  pr: number,
+  headSha: string | null = null,
+): boolean {
+  if (!Number.isInteger(pr) || pr <= 0) return false;
+  const want = typeof headSha === "string" && headSha.trim().length > 0 ? headSha.trim() : null;
+  if (want === null) return false;
+  const path = join(resolve(projectRoot), mergePathCleanAttestationRelPath(pr));
+  try {
+    const raw = readFileSync(path, "utf8");
+    const payload = JSON.parse(raw) as unknown;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+      return false;
+    }
+    const rec = payload as Record<string, unknown>;
+    if (rec.pr_number !== pr) return false;
+    const got = typeof rec.head_sha === "string" ? rec.head_sha.trim() : "";
+    return got.length > 0 && got === want;
+  } catch {
+    return false;
+  }
+} /** Default `parent_id` for a parent-owned / unbound native `pr:watch` (#5020 / #5219). */
+export const DEFAULT_PR_WATCH_PARENT_ID = "pr-watch";
+
+/** Same ESRCH/EPERM contract as authz / delivery-attempt claim locks. */
+export function isWaitHeartbeatProcessAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ESRCH → dead. EPERM → exists but unsignalable — treat as alive.
+    if (code === "EPERM") return true;
+    return false;
+  }
+}
+
+/** Optional `pid` on a subagent-status heartbeat (native wait identity, #5020). */
+export function readWaitHeartbeatPid(filePath: string): number | null {
+  try {
+    const raw = readFileSync(filePath, "utf8");
+    const payload = JSON.parse(raw) as unknown;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+      return null;
+    }
+    const pid = (payload as Record<string, unknown>).pid;
+    const n = typeof pid === "number" ? pid : Number(pid);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
 
 export type ReviewMonitorCallSite =
   | "solo"
@@ -37,8 +171,12 @@ export interface VerifyReviewMonitorArgs {
   readonly now?: Date;
   readonly environ?: NodeJS.ProcessEnv;
   readonly seams?: ReviewOwnerGithubSeams;
+  /**
+   * Resolve live PR HEAD when `--head-sha` omitted so CLEAN attestation cannot
+   * arm a newer tip from a stale tip-A file (#5219). Inject in tests.
+   */
+  readonly fetchPrHeadShaFn?: (pr: number, repo: string) => string | null;
 }
-
 export interface VerifyReviewMonitorResult {
   readonly exitCode: typeof EXIT_READY | typeof EXIT_NOT_READY | typeof EXIT_CONFIG_ERROR;
   readonly message: string;
@@ -48,7 +186,8 @@ export interface VerifyReviewMonitorResult {
   readonly callSite: ReviewMonitorCallSite;
 }
 
-function spawnRedirect(probe: MonitoringTierProbe): string {
+/** Approach 1 spawn + register redirect for Tier-1 hosts (#2655 / #5219). */
+export function spawnRedirect(probe: MonitoringTierProbe): string {
   const primitive = probe.primitive ?? "sub-agent";
   // Claude Code / Cursor nested-leaf boundary (#2797 / #3134): lead with leaf-safe
   // ownership so implementation leaves never treat nested Task/Agent spawn as the
@@ -88,7 +227,18 @@ function spawnRedirect(probe: MonitoringTierProbe): string {
 export function hasActivePollingHeartbeat(
   projectRoot: string,
   pr: number,
-  options: { now?: Date; staleMinutes?: number } = {},
+  options: {
+    now?: Date;
+    staleMinutes?: number;
+    /** Inject for tests; defaults to `isWaitHeartbeatProcessAlive`. */
+    isProcessAlive?: (pid: number) => boolean;
+    /**
+     * When non-empty, heartbeat `parent_id` MUST match one of these ids (#5219).
+     * Used to join a leased `monitor_agent_id` (and post-CLEAN wait-merge) to the
+     * live wait so a parent-shell `pr:watch` (`parent_id=pr-watch`) cannot arm.
+     */
+    expectedParentIds?: readonly string[];
+  } = {},
 ): boolean {
   const dir = defaultSubagentStatusDir(projectRoot);
   if (!existsSync(dir)) {
@@ -105,13 +255,117 @@ export function hasActivePollingHeartbeat(
     thresholdMinutes: options.staleMinutes ?? 30,
     now: options.now,
   });
-  return result.records.some(
-    (rec) =>
-      rec.pr_number === pr &&
-      rec.failures.length === 0 &&
-      !rec.is_stale &&
-      !rec.is_terminal &&
-      (rec.phase === "polling" || rec.phase === "starting"),
+  const alive = options.isProcessAlive ?? isWaitHeartbeatProcessAlive;
+  const expectedParentIds = options.expectedParentIds ?? [];
+  const requireParentJoin = expectedParentIds.length > 0;
+  return result.records.some((rec) => {
+    if (
+      rec.pr_number !== pr ||
+      rec.failures.length > 0 ||
+      rec.is_stale ||
+      rec.is_terminal ||
+      (rec.phase !== "polling" && rec.phase !== "starting")
+    ) {
+      return false;
+    }
+    if (requireParentJoin) {
+      const parentId = typeof rec.parent_id === "string" ? rec.parent_id : "";
+      if (!expectedParentIds.includes(parentId)) {
+        return false;
+      }
+    }
+    // When pid is published, it must still be alive — force-kill never runs finally (#5020).
+    const pid = readWaitHeartbeatPid(rec.path);
+    if (pid !== null && !alive(pid)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Merge-path live-wait heartbeat with Tier-1 `spawn_subagent` identity join (#5219).
+ *
+ * When the host primitive is `spawn_subagent` and a sticky lease exists:
+ * - lease `platform_primitive` MUST be `spawn_subagent`
+ * - live wait `parent_id` MUST be the lease `monitor_agent_id` (Approach 1 child), or
+ * - {@link POST_CLEAN_WAIT_PARENT_ID} **and** CLEAN attestation for the **live** PR HEAD
+ * Parent-shell native `pr:watch` (`parent_id=pr-watch`) does not count.
+ * Live HEAD is resolved only on the closer path (child heartbeat skips the lookup).
+ * Caller `--head-sha` cannot override a newer live tip (#5219 Greptile).
+ *
+ * Non-`spawn_subagent` tiers keep the unscoped #5020 heartbeat predicate.
+ */
+export function heartbeatActiveForMergePathArm(
+  projectRoot: string,
+  pr: number,
+  input: {
+    readonly tierPrimitive: PlatformPrimitive | null;
+    readonly lease: ReviewMonitorRecord | null;
+    now?: Date;
+    staleMinutes?: number;
+    isProcessAlive?: (pid: number) => boolean;
+    /** Hint only; live HEAD from {@link resolveLiveHeadSha} wins for attestation. */
+    headSha?: string | null;
+    /** Lazy live PR HEAD — invoked only when child heartbeat is absent (#5219 P2). */
+    resolveLiveHeadSha?: () => string | null;
+  },
+): boolean {
+  const base = {
+    now: input.now,
+    staleMinutes: input.staleMinutes,
+    isProcessAlive: input.isProcessAlive,
+  };
+  if (input.tierPrimitive === "spawn_subagent" && input.lease !== null) {
+    if (input.lease.platform_primitive !== "spawn_subagent") {
+      return false;
+    }
+    const monitorId = input.lease.monitor_agent_id.trim();
+    if (monitorId.length === 0) {
+      return false;
+    }
+    if (
+      hasActivePollingHeartbeat(projectRoot, pr, {
+        ...base,
+        expectedParentIds: [monitorId],
+      })
+    ) {
+      return true;
+    }
+    // Closer path requires a successful live HEAD lookup — never fall back to a
+    // caller --head-sha (stale tip-A must not arm when lookup fails) (#5219).
+    const liveRaw = input.resolveLiveHeadSha?.() ?? null;
+    const live = typeof liveRaw === "string" && liveRaw.trim().length > 0 ? liveRaw.trim() : null;
+    if (live === null) {
+      return false;
+    }
+    if (!hasMergePathCleanAttestation(projectRoot, pr, live)) {
+      return false;
+    }
+    return hasActivePollingHeartbeat(projectRoot, pr, {
+      ...base,
+      expectedParentIds: [POST_CLEAN_WAIT_PARENT_ID],
+    });
+  }
+  return hasActivePollingHeartbeat(projectRoot, pr, base);
+}
+
+/**
+ * Cheap Approach 1 babysitter one-liner (#5219 P3): child register + watch first
+ * (heartbeat live), then parent `verify --merge-path-arm --live-wait`.
+ */
+export function formatApproach1BabysitterOneLiner(
+  pr: number,
+  monitorAgentId: string,
+  platformPrimitive: PlatformPrimitive = "spawn_subagent",
+): string {
+  const id = monitorAgentId.trim().length > 0 ? monitorAgentId.trim() : "<id>";
+  return (
+    `task review-monitor:register -- --pr ${pr} --monitor-agent-id ${id} ` +
+    `--platform-primitive ${platformPrimitive}\n` +
+    `DEFT_MONITOR_AGENT_ID=${id} task pr:watch -- ${pr} --monitor-agent-id ${id}\n` +
+    `# parent after child watch is live:\n` +
+    `task verify:review-monitor -- --pr ${pr} --merge-path-arm --live-wait`
   );
 }
 
@@ -136,7 +390,8 @@ export function evaluateReviewMonitorGate(
     };
   }
 
-  const tier = probeMonitoringTier(args.environ);
+  // Stamp-aware probe so Grok Build CLI subprocesses stay Tier 1 (#5229).
+  let tier = probeMonitoringTier(args.environ, { projectRoot });
   const callSite = args.callSite ?? "unspecified";
   const staleMinutes = args.staleMinutes ?? 30;
   const now = args.now ?? new Date();
@@ -144,7 +399,40 @@ export function evaluateReviewMonitorGate(
   // Legacy `.deft/review-monitor.json` is obsolete (#2814); explicit no-op read documents migration.
   readReviewMonitorFile(reviewMonitorPath(projectRoot));
 
+  const repo = resolveRepo(args.repo ?? null, projectRoot);
+
+  // Approach 3: consult sticky lease BEFORE READY so a Tier-1 lease cannot be
+  // bypassed when the subprocess lacks host env (#5229 Greptile).
   if (args.approach3 === true) {
+    if (!isTier1(tier) && repo !== null) {
+      const leaseConsult = fetchActiveMonitorFromGithub(repo, args.pr, {
+        now,
+        headSha: args.headSha ?? null,
+        seams: args.seams,
+      });
+      if (leaseConsult !== null && typeof leaseConsult === "object" && "error" in leaseConsult) {
+        return {
+          exitCode: EXIT_CONFIG_ERROR,
+          message: `verify_review_monitor: ${leaseConsult.error}`,
+          tier,
+          monitorRecord: null,
+          heartbeatActive: false,
+          callSite,
+        };
+      }
+      if (
+        leaseConsult !== null &&
+        typeof leaseConsult === "object" &&
+        !("error" in leaseConsult) &&
+        isTier1PlatformPrimitive(leaseConsult.platform_primitive)
+      ) {
+        tier = {
+          tier: MONITORING_TIER_1,
+          primitive: leaseConsult.platform_primitive,
+          descriptor: "lease-elevated",
+        };
+      }
+    }
     if (isTier1(tier)) {
       return {
         exitCode: EXIT_NOT_READY,
@@ -170,9 +458,13 @@ export function evaluateReviewMonitorGate(
         callSite,
       };
     }
+    const approach3Label =
+      tier.descriptor === OVERRIDE_TIER3_DESCRIPTOR
+        ? `override Tier 3 (${OVERRIDE_TIER3_DESCRIPTOR})`
+        : `Tier ${tier.tier}`;
     return {
       exitCode: EXIT_READY,
-      message: `verify_review_monitor: Tier 3 Approach 3 path allowed (call-site=${callSite}).`,
+      message: `verify_review_monitor: ${approach3Label} Approach 3 path allowed (call-site=${callSite}).`,
       tier,
       monitorRecord: null,
       heartbeatActive: false,
@@ -180,12 +472,81 @@ export function evaluateReviewMonitorGate(
     };
   }
 
+  // !isTier1: consult sticky lease before READY (#5229 Prefer-A). Do not greenlight
+  // "no active review-monitor required" when a Tier-1 lease platform_primitive exists.
   if (!isTier1(tier)) {
+    if (repo !== null) {
+      const leaseConsult = fetchActiveMonitorFromGithub(repo, args.pr, {
+        now,
+        headSha: args.headSha ?? null,
+        seams: args.seams,
+      });
+      if (
+        leaseConsult !== null &&
+        typeof leaseConsult === "object" &&
+        !("error" in leaseConsult) &&
+        isTier1PlatformPrimitive(leaseConsult.platform_primitive)
+      ) {
+        // Elevate to Tier-1 path using lease evidence (stamp gap / mis-detect).
+        tier = {
+          tier: MONITORING_TIER_1,
+          primitive: leaseConsult.platform_primitive,
+          descriptor: "lease-elevated",
+        };
+        // Fall through with this lease as the monitor record below.
+        const heartbeatActive = heartbeatActiveForMergePathArm(projectRoot, args.pr, {
+          tierPrimitive: tier.primitive,
+          lease: leaseConsult,
+          now,
+          staleMinutes,
+          headSha: args.headSha ?? null,
+          resolveLiveHeadSha: () => {
+            const fetchHead =
+              args.fetchPrHeadShaFn ??
+              ((prNum: number, r: string) => {
+                const got = fetchPrHeadShaRest(prNum, r, defaultRunGh);
+                return got.sha;
+              });
+            return fetchHead(args.pr, repo);
+          },
+        });
+        return {
+          exitCode: EXIT_READY,
+          message:
+            `verify_review_monitor: elevated via sticky lease platform_primitive=` +
+            `${leaseConsult.platform_primitive} (probe was non-Tier-1; #5229).\n` +
+            `  active GitHub review-owner lease for PR #${args.pr} ` +
+            `(monitor_agent_id=${leaseConsult.monitor_agent_id}, owner=${leaseConsult.owner}, ` +
+            `call-site=${callSite}, descriptor=${tier.descriptor}).`,
+          tier,
+          monitorRecord: leaseConsult,
+          heartbeatActive,
+          callSite,
+        };
+      }
+      if (leaseConsult !== null && typeof leaseConsult === "object" && "error" in leaseConsult) {
+        return {
+          exitCode: EXIT_CONFIG_ERROR,
+          message: `verify_review_monitor: ${leaseConsult.error}`,
+          tier,
+          monitorRecord: null,
+          heartbeatActive: false,
+          callSite,
+        };
+      }
+    }
+
+    const isOverride = tier.descriptor === OVERRIDE_TIER3_DESCRIPTOR;
+    const tierLabel = isOverride
+      ? `override Tier 3 (${OVERRIDE_TIER3_DESCRIPTOR}; not honest generic-terminal)`
+      : `Tier ${tier.tier} (${tier.descriptor ?? "unknown"})`;
     return {
       exitCode: EXIT_READY,
       message:
-        `verify_review_monitor: Tier ${tier.tier} (${tier.descriptor ?? "unknown"}) — ` +
-        "no active review-monitor required (#2655).",
+        `verify_review_monitor: ${tierLabel} — ` +
+        "no active review-monitor required (#2655" +
+        (isOverride ? " / #5229 labeled override" : "") +
+        ").",
       tier,
       monitorRecord: null,
       heartbeatActive: false,
@@ -193,7 +554,6 @@ export function evaluateReviewMonitorGate(
     };
   }
 
-  const repo = resolveRepo(args.repo ?? null, projectRoot);
   if (repo === null) {
     return {
       exitCode: EXIT_CONFIG_ERROR,
@@ -223,9 +583,20 @@ export function evaluateReviewMonitorGate(
   }
 
   const monitorRecord = githubMonitor;
-  const heartbeatActive = hasActivePollingHeartbeat(projectRoot, args.pr, {
+  const fetchHead =
+    args.fetchPrHeadShaFn ??
+    ((prNum: number, r: string) => {
+      const got = fetchPrHeadShaRest(prNum, r, defaultRunGh);
+      return got.sha;
+    });
+  const heartbeatActive = heartbeatActiveForMergePathArm(projectRoot, args.pr, {
+    tierPrimitive: tier.primitive,
+    lease: monitorRecord,
     now,
     staleMinutes,
+    headSha: args.headSha ?? null,
+    // Lazy: only runs when Approach 1 child heartbeat is absent (#5219 P2).
+    resolveLiveHeadSha: () => fetchHead(args.pr, repo),
   });
 
   if (monitorRecord !== null) {
@@ -234,6 +605,7 @@ export function evaluateReviewMonitorGate(
       message:
         `verify_review_monitor: active GitHub review-owner lease for PR #${args.pr} ` +
         `(monitor_agent_id=${monitorRecord.monitor_agent_id}, owner=${monitorRecord.owner}, ` +
+        `platform_primitive=${monitorRecord.platform_primitive}, ` +
         `call-site=${callSite}, tier=1, descriptor=${tier.descriptor ?? "unknown"}).`,
       tier,
       monitorRecord,

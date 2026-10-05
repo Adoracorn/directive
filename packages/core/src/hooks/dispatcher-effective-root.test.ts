@@ -123,7 +123,7 @@ function nestedWorktreeFixture(): NestedFixture {
 beforeAll(() => {
   linkedFixture();
   nestedWorktreeFixture();
-});
+}, 60_000 /* #5084 suite-load hookTimeout */);
 
 /** Ready only for `readyRoot`; every other tree reports no active scope. */
 function scopeSeams(readyRoot: string | null): {
@@ -389,6 +389,32 @@ describe("direct-write occupancy/ritual follow the target worktree (#3794)", () 
     expect(ritualRoots).not.toContain(resolve(primary));
   });
 
+  it("refuses command-shaped apply_patch whose body lands in a foreign repository (#5094)", () => {
+    const { primary, foreign } = linkedFixture();
+    const { ritualRoots, seams } = recordingSeams("owner");
+    const decision = decideHook(
+      {
+        host: "codex",
+        event: "tool.before",
+        projectRoot: primary,
+        payload: {
+          tool_name: "apply_patch",
+          tool_input: {
+            command:
+              "*** Begin Patch\n*** Update File: " +
+              join(foreign, "src", "b.ts") +
+              "\n+x\n*** End Patch",
+          },
+        },
+        environ: { DEFT_SESSION_ID: "owner" },
+      },
+      seams,
+    );
+    expect(decision).toMatchObject({ verdict: "deny", code: "foreign-repository-deny" });
+    expect(decision.message).toContain("different Git repository");
+    expect(ritualRoots).toEqual([]);
+  });
+
   it("refuses ApplyPatch when declared path and patch body land in different worktrees", () => {
     const { primary, wtA, wtB } = linkedFixture();
     const { ritualRoots, seams } = recordingSeams("owner");
@@ -471,6 +497,83 @@ describe("direct-write occupancy/ritual follow the target worktree (#3794)", () 
     );
     expect(decision).toMatchObject({ verdict: "deny", code: "foreign-repository-deny" });
     expect(decision.message).toContain("different Git repository");
+    expect(ritualRoots).toEqual([]);
+  });
+
+  it("admits apply_patch string tool_input.input into a linked worktree (#5129)", () => {
+    const { primary, wtA } = linkedFixture();
+    applyWorktreeOccupancy(wtA, { sessionId: "wt-owner", intent: "mutation" });
+    const { ritualRoots, seams } = recordingSeams("wt-owner");
+    const target = join(wtA, "src", "b.ts");
+    const decision = decideHook(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: primary,
+        payload: {
+          tool_name: "apply_patch",
+          cwd: primary,
+          tool_input: {
+            input: "*** Begin Patch\n*** Update File: " + target + "\n+x\n*** End Patch",
+          },
+        },
+        environ: { DEFT_SESSION_ID: "wt-owner" },
+      },
+      seams,
+    );
+    expect(decision).toMatchObject({ verdict: "allow", code: "write-ready" });
+    expect(ritualRoots).toEqual([resolve(wtA)]);
+  });
+
+  it("keeps worktree-span for a two-file apply_patch input body (#5129)", () => {
+    const { primary, wtA, wtB } = linkedFixture();
+    const { ritualRoots, seams } = recordingSeams("owner");
+    const decision = decideHook(
+      {
+        host: "codex",
+        event: "tool.before",
+        projectRoot: primary,
+        payload: {
+          tool_name: "apply_patch",
+          tool_input: {
+            input:
+              "*** Begin Patch\n*** Update File: " +
+              join(wtA, "src", "a.ts") +
+              "\n*** Update File: " +
+              join(wtB, "src", "b.ts") +
+              "\n+x\n*** End Patch",
+          },
+        },
+        environ: { DEFT_SESSION_ID: "owner" },
+      },
+      seams,
+    );
+    expect(decision).toMatchObject({ verdict: "deny", code: "foreign-repository-deny" });
+    expect(decision.message).toContain("span more than one Git worktree");
+    expect(ritualRoots).toEqual([]);
+  });
+
+  it("header-looking apply_patch input without Begin/End does not select a linked root (#5129)", () => {
+    const { primary, wtA } = linkedFixture();
+    const { ritualRoots, seams } = recordingSeams("owner");
+    const decision = decideHook(
+      {
+        host: "codex",
+        event: "tool.before",
+        projectRoot: primary,
+        payload: {
+          tool_name: "apply_patch",
+          tool_input: {
+            path: join(primary, "src", "a.ts"),
+            input: "not a patch\n*** Update File: " + join(wtA, "src", "b.ts") + "\nnoise",
+          },
+        },
+        environ: { DEFT_SESSION_ID: "owner" },
+      },
+      seams,
+    );
+    expect(decision).toMatchObject({ verdict: "deny", code: "runtime-policy-deny-path" });
+    expect(decision.message).toContain("named no classifiable mutation target");
     expect(ritualRoots).toEqual([]);
   });
 

@@ -73,6 +73,17 @@ describe("registeredVerbs", () => {
     );
   });
 
+  it("registers migrate:clause-ids (#5011)", async () => {
+    expect(CORE_MODULE_VERBS).toContain("migrate-clause-ids");
+    expect(resolveCanonicalVerb("migrate:clause-ids")).toBe("migrate-clause-ids");
+    expect(VERB_ALIASES["migrate:clause-ids"]).toBe("migrate-clause-ids");
+    const code = await dispatch(["migrate:clause-ids", "--help"], {
+      writeOut: () => {},
+      writeErr: () => {},
+    });
+    expect(code).toBe(0);
+  });
+
   it("registers docs-impact with colon alias verify:docs-impact (#4356)", async () => {
     expect(CORE_MODULE_VERBS).toContain("docs-impact");
     expect(resolveCanonicalVerb("docs-impact")).toBe("docs-impact");
@@ -480,6 +491,7 @@ describe("dispatch", () => {
       ["review-monitor:register", "review-monitor-register"],
       ["review-monitor:release", "review-monitor-release"],
       ["verify:review-monitor", "verify-review-monitor"],
+      ["verify:cohort-review-monitors", "verify-cohort-review-monitors"],
       ["verify:l4-owner", "verify-l4-owner"],
     ] as const;
     for (const [alias, canonical] of reviewMonitorVerbs) {

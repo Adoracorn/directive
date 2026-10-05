@@ -1,7 +1,13 @@
 /**
  * Refuse newly added completed/ blobs that bypass runTransition (#3679),
  * and refuse a source D or rename-from of active/ with no paired stamped
- * destination (#3766).
+ * destination (#3766). Leftover park of still-open work pairs active/ to
+ * proposed/ when plan.status is proposed or draft, there is no cancel
+ * stamp, and no origin GitHub issue is closed. Parking an open issue off
+ * origin/master active/ is proposed/, not cancelled/. A closed origin
+ * issue refuses that park when current forge state confirms closure, or when
+ * a failed live lookup leaves a cached closure as the safest available state.
+ * A successful live lookup overrides cache state after an issue is reopened.
  *
  * A modification of an existing completed/ file can pair an active deletion
  * when the net tree against the merge base differs on that path, the plan
@@ -9,6 +15,11 @@
  * transitionWriteFitsFolder accepts completed (#4906). Merge-base presence
  * alone does not. A committed edit the worktree restores to the merge-base
  * blob does not. A D or R of that completed path does not.
+ *
+ * Present typed dispositions on new completed/ adds and mods are parsed with
+ * acceptance-evidence parseDisposition / isHumanOrigin (#3819). Bare-string
+ * provenance shapes are refused. Missing disposition records are not required.
+ * Historical corpus at the merge base is not re-audited.
  *
  * Historical corpus is advisory (doctor). New work in the change set is hard
  * (verify:completed-write-guard). Does not read completionProvenance and does
@@ -28,12 +39,15 @@ import {
   LEGACY_ARTIFACT_DIR,
   MIGRATED_ARTIFACT_DIR,
 } from "../layout/resolve.js";
+import { parseDisposition, readNamespacedAcceptanceFields } from "../scope/acceptance-evidence.js";
 import {
   hasTransitionWrite,
   LEFTOVER_LAND_PR_REMEDIATION,
   transitionWriteFitsFolder,
 } from "../scope/lifecycle-write.js";
 import { resolveDefaultBaseRef, unquoteGitPath } from "../scope-provenance/evaluate.js";
+import { CACHE_DIR_NAME, CACHE_SOURCE_GITHUB_ISSUE } from "../triage/queue/constants.js";
+import { parseGithubIssueUri } from "../triage/reconcile/parse-uri.js";
 
 export type CompletedWriteGuardCode = 0 | 1 | 2;
 
@@ -59,6 +73,16 @@ export interface CompletedWriteGuardOptions {
   readonly nameStatus?: string;
   /** Inject payloads: relPath -> raw JSON. */
   readonly payloads?: ReadonlyMap<string, string>;
+  /**
+   * Inject origin GitHub issue state keyed by lowercase URI.
+   * Overrides the on-disk github-issue cache for the same URI.
+   */
+  readonly issueStates?: ReadonlyMap<string, "open" | "closed">;
+  /** Resolve current issue state from the forge. Live state overrides cached state. */
+  readonly runGh?: (args: readonly string[]) => {
+    readonly returncode: number;
+    readonly stdout: string;
+  };
 }
 
 /**
@@ -71,10 +95,12 @@ export const COMPLETED_WRITE_GUARD_MAX_BYTES = 1_048_576;
 const COMPLETED_REL_RE = /^(?:xbrief|vbrief)\/completed\/[^/]+$/;
 const ACTIVE_REL_RE = /^(?:xbrief|vbrief)\/active\/[^/]+$/;
 const CANCELLED_REL_RE = /^(?:xbrief|vbrief)\/cancelled\/[^/]+$/;
+const PROPOSED_REL_RE = /^(?:xbrief|vbrief)\/proposed\/[^/]+$/;
 
 /** Halt copy for a true unpaired active/ D or rename-from (#3766). */
 export const UNPAIRED_ACTIVE_DELETE_REMEDIATION =
-  "Halt: run `task scope:complete` or `task scope:cancel` so the destination is stamped, or leave the brief untracked. " +
+  "Halt: run `task scope:complete` or `task scope:cancel` so the destination is stamped, " +
+  "park still-open leftover to proposed/ with plan.status proposed, or leave the brief untracked. " +
   "Lone-D untracking cleanup is not an authorization token (#3766).";
 
 /**
@@ -86,6 +112,15 @@ export const ACTIVE_TWIN_RESTAMP_REMEDIATION =
   "The admitted cleanup is that modification plus the deletion. " +
   "Do not point scope:complete at the leftover active file. " +
   "Lone-D untracking cleanup is not an authorization token (#3766).";
+
+/**
+ * Halt when leftover park would move a closed issue's active brief to
+ * proposed/. Closed work needs completed/ or cancelled/ plus evidence.
+ */
+export const CLOSED_ISSUE_PARK_REMEDIATION =
+  "Halt: a closed GitHub issue cannot park to proposed/. " +
+  "Move the brief to completed/ or cancelled/ with a runTransition stamp and evidence. " +
+  "Open-issue leftover park remains allowed.";
 
 interface NameStatusRecord {
   readonly status: "A" | "D" | "M" | "R";
@@ -131,10 +166,35 @@ function isCancelledArtifactRel(relPath: string): boolean {
   return hasArtifactSuffix(lastPathSegment(n));
 }
 
-function originIssueKey(plan: Record<string, unknown>): string {
+function isProposedArtifactRel(relPath: string): boolean {
+  const n = normalizeRepoRelPath(relPath);
+  if (!PROPOSED_REL_RE.test(n)) {
+    return false;
+  }
+  return hasArtifactSuffix(lastPathSegment(n));
+}
+
+/** Leftover park of still-open work: proposed/ dest, non-terminal, no cancel stamp. */
+function leftoverParkFitsProposed(plan: Record<string, unknown>): boolean {
+  const status = String(plan.status ?? "");
+  if (status !== "proposed" && status !== "draft") {
+    return false;
+  }
+  const meta = plan.metadata;
+  if (typeof meta !== "object" || meta === null || Array.isArray(meta)) {
+    return true;
+  }
+  const stamp = (meta as Record<string, unknown>).lifecycleWrite;
+  if (typeof stamp !== "object" || stamp === null || Array.isArray(stamp)) {
+    return true;
+  }
+  return (stamp as Record<string, unknown>).action !== "cancel";
+}
+
+function originIssueUris(plan: Record<string, unknown>): string[] {
   const refs = plan.references;
   if (!Array.isArray(refs)) {
-    return "";
+    return [];
   }
   const issues: string[] = [];
   for (const ref of refs) {
@@ -150,7 +210,114 @@ function originIssueKey(plan: Record<string, unknown>): string {
       issues.push(uri);
     }
   }
-  return issues.sort().join("|");
+  return issues.sort();
+}
+
+function originIssueKey(plan: Record<string, unknown>): string {
+  return originIssueUris(plan).join("|");
+}
+
+function readCachedGithubIssueState(projectRoot: string, uri: string): "open" | "closed" | null {
+  const [repo, number] = parseGithubIssueUri(uri);
+  if (repo === null || number === null) {
+    return null;
+  }
+  const [owner, name] = repo.split("/", 2);
+  if (!owner || !name) {
+    return null;
+  }
+  const rawPath = join(
+    projectRoot,
+    CACHE_DIR_NAME,
+    CACHE_SOURCE_GITHUB_ISSUE,
+    owner,
+    name,
+    String(number),
+    "raw.json",
+  );
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(rawPath, "utf8"));
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    const requestedHost = githubIssueHostname(uri);
+    if (requestedHost !== null && requestedHost !== "github.com") {
+      const cachedUrl = String(record.html_url ?? "");
+      let cachedHost: string | null = null;
+      try {
+        cachedHost = new URL(cachedUrl).host.toLowerCase();
+      } catch {
+        // Enterprise cache entries must carry a URL that binds them to the host.
+      }
+      if (cachedHost !== requestedHost) {
+        return null;
+      }
+    }
+    const state = String(record.state ?? "").toLowerCase();
+    return state === "open" || state === "closed" ? state : null;
+  } catch {
+    return null;
+  }
+}
+
+function githubIssueHostname(uri: string): string | null {
+  try {
+    const parsed = new URL(uri);
+    if ((parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.host.length > 0) {
+      return parsed.host.toLowerCase();
+    }
+  } catch {
+    // Non-URL reference forms have no explicit Enterprise host.
+  }
+  return null;
+}
+
+function resolveOriginIssueState(
+  uri: string,
+  projectRoot: string,
+  options: CompletedWriteGuardOptions,
+): "open" | "closed" | "unknown" {
+  const key = uri.trim().toLowerCase();
+  const injected = options.issueStates?.get(key);
+  if (injected === "open" || injected === "closed") {
+    return injected;
+  }
+  const [repo, number] = parseGithubIssueUri(key);
+  if (options.runGh !== undefined && repo !== null && number !== null) {
+    const hostname = githubIssueHostname(key);
+    const hostArgs = hostname !== null && hostname !== "github.com" ? ["--hostname", hostname] : [];
+    const live = options.runGh(["gh", "api", ...hostArgs, `repos/${repo}/issues/${number}`]);
+    if (live.returncode === 0) {
+      try {
+        const parsed: unknown = JSON.parse(live.stdout);
+        if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+          const state = String((parsed as Record<string, unknown>).state ?? "").toLowerCase();
+          if (state === "open" || state === "closed") {
+            return state;
+          }
+        }
+      } catch {
+        // Fall back to cache below. A successful live lookup is the only way
+        // to override a cached closure after an issue is reopened.
+      }
+    }
+  }
+  const cached = readCachedGithubIssueState(projectRoot, key);
+  return cached ?? "unknown";
+}
+
+function leftoverParkBlockedByClosedIssue(
+  plan: Record<string, unknown>,
+  projectRoot: string,
+  options: CompletedWriteGuardOptions,
+): boolean {
+  for (const uri of originIssueUris(plan)) {
+    if (resolveOriginIssueState(uri, projectRoot, options) === "closed") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function planIdentity(plan: Record<string, unknown>): string {
@@ -197,6 +364,68 @@ function hasCompleteLifecycleWrite(plan: Record<string, unknown>): boolean {
   const rec = stamp as Record<string, unknown>;
   const writtenAt = rec.writtenAt;
   return rec.action === "complete" && typeof writtenAt === "string" && writtenAt.trim().length > 0;
+}
+
+/** plan.status values that may land under completed/ (#3819 optional additive). */
+const RECOGNIZED_COMPLETED_PLAN_STATUSES = new Set(["completed", "complete", "failed"]);
+
+/**
+ * Validate-if-present: typed dispositions on a completed/ land must parse and
+ * carry human-origin provenance via shared parseDisposition / isHumanOrigin.
+ * Does not invent a parallel parser or extra eventRef limb (#3819 Prefer-A).
+ */
+function dispositionFindingForCompletedPlan(
+  plan: Record<string, unknown>,
+  relPath: string,
+): CompletedWriteGuardFinding | null {
+  const planStatus = String(plan.status ?? "").trim();
+  if (!RECOGNIZED_COMPLETED_PLAN_STATUSES.has(planStatus)) {
+    return {
+      relPath,
+      detail: sanitizeDetail(
+        `${relPath}: completed/ land with missing or unrecognized plan.status ` +
+          `${JSON.stringify(plan.status ?? null)} (#3819)`,
+      ),
+    };
+  }
+  return walkDispositionFindings(plan.items, "items", relPath);
+}
+
+function walkDispositionFindings(
+  items: unknown,
+  pathPrefix: string,
+  relPath: string,
+): CompletedWriteGuardFinding | null {
+  if (!Array.isArray(items)) {
+    return null;
+  }
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i];
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const obj = item as Record<string, unknown>;
+    const path = `${pathPrefix}[${i}]`;
+    const fields = readNamespacedAcceptanceFields(obj);
+    if (fields.hasDisposition) {
+      const parsed = parseDisposition(fields.disposition);
+      if (!parsed.ok) {
+        return {
+          relPath,
+          detail: sanitizeDetail(`${relPath}: ${path} ${parsed.message} (#3819)`),
+        };
+      }
+    }
+    const fromSub = walkDispositionFindings(obj.subItems, `${path}.subItems`, relPath);
+    if (fromSub !== null) {
+      return fromSub;
+    }
+    const fromNested = walkDispositionFindings(obj.items, `${path}.items`, relPath);
+    if (fromNested !== null) {
+      return fromNested;
+    }
+  }
+  return null;
 }
 
 function parsePlan(raw: string): Record<string, unknown> | null {
@@ -509,8 +738,13 @@ export function evaluateCompletedWriteGuard(
   ];
 
   const findings: CompletedWriteGuardFinding[] = [];
-  // Pairing: stamped completed/ or cancelled/ dest (#3766 / #4784). Cancel stamps
-  // lifecycleWrite action=cancel. Status-only cancelled dests do not pair.
+  // Pairing: stamped completed/ or cancelled/ dest (#3766 / #4784), or leftover
+  // park to proposed/ (plan.status proposed|draft, no cancel stamp, origin
+  // GitHub issue not closed). Cancel stamps lifecycleWrite action=cancel.
+  // Status-only cancelled dests do not pair. Closed origin issues refuse
+  // proposed/ pairing when live forge state confirms closure, or a failed
+  // live lookup leaves cached closure as the safest available state. A
+  // successful live lookup overrides cache after an issue is reopened.
   // R dests are git-bound to src. D+A also requires pairingKey plus dest
   // plan.title and origin issue refs to match the recovered source so a copied
   // stamp cannot authorize an unrelated deletion. Item titles and narratives
@@ -523,6 +757,7 @@ export function evaluateCompletedWriteGuard(
     readonly identity: string;
   }
   const authorizedDests: AuthDest[] = [];
+  const closedParkIdentities = new Set<string>();
 
   const removedSrc = new Set(
     records.filter((rec) => rec.status === "D" || rec.status === "R").map((rec) => rec.src),
@@ -540,6 +775,24 @@ export function evaluateCompletedWriteGuard(
   };
 
   for (const rel of added) {
+    if (isProposedArtifactRel(rel)) {
+      const payload = readPayload(root, rel, options.payloads);
+      if (payload.kind !== "ok") {
+        continue;
+      }
+      const plan = parsePlan(payload.raw);
+      if (plan !== null && leftoverParkFitsProposed(plan)) {
+        if (leftoverParkBlockedByClosedIssue(plan, root, options)) {
+          const identity = planIdentity(plan);
+          if (identity.length > 0) {
+            closedParkIdentities.add(identity);
+          }
+        } else {
+          rememberDest(rel, plan);
+        }
+      }
+      continue;
+    }
     if (isCancelledArtifactRel(rel)) {
       const payload = readPayload(root, rel, options.payloads);
       if (payload.kind !== "ok") {
@@ -584,6 +837,11 @@ export function evaluateCompletedWriteGuard(
       });
       continue;
     }
+    const dispositionFinding = dispositionFindingForCompletedPlan(plan, rel);
+    if (dispositionFinding !== null) {
+      findings.push(dispositionFinding);
+      continue;
+    }
     rememberDest(rel, plan);
   }
 
@@ -598,11 +856,11 @@ export function evaluateCompletedWriteGuard(
       continue;
     }
     const rel = rec.src;
-    const key = pairingKey(rel);
-    // Same capped read and completed-folder stamp check as an added dest (#4906).
-    if (key === null || !activePairKeys.has(key) || removedSrc.has(rel)) {
+    if (removedSrc.has(rel)) {
       continue;
     }
+    const key = pairingKey(rel);
+    const pairingCandidate = key !== null && activePairKeys.has(key);
     const payload = readPayload(root, rel, options.payloads);
     if (payload.kind === "missing") {
       findings.push({
@@ -624,6 +882,17 @@ export function evaluateCompletedWriteGuard(
         relPath: rel,
         detail: sanitizeDetail(`${rel}: modified under completed/ with unreadable plan`),
       });
+      continue;
+    }
+    // #3819: every completed/ mod in the change set validates present dispositions
+    // through the shared parser only (grandfather historical eventRef-less shapes).
+    const dispositionFinding = dispositionFindingForCompletedPlan(plan, rel);
+    if (dispositionFinding !== null) {
+      findings.push(dispositionFinding);
+      continue;
+    }
+    // Pairing authorization still needs the complete stamp (#4906).
+    if (!pairingCandidate) {
       continue;
     }
     if (!transitionWriteFitsFolder(plan, "completed")) {
@@ -677,6 +946,7 @@ export function evaluateCompletedWriteGuard(
 
   const seenActive = new Set<string>();
   const twinHalts = new Set<string>();
+  const closedParkHalts = new Set<string>();
   const survivingCompletedTwin = (activeSrc: string): boolean => {
     const twin = completedTwinRel(activeSrc);
     if (twin === null || removedSrc.has(twin)) {
@@ -725,10 +995,18 @@ export function evaluateCompletedWriteGuard(
     if (survivingCompletedTwin(rec.src)) {
       twinHalts.add(rec.src);
     }
+    const closedPark = srcId.length > 0 && closedParkIdentities.has(srcId);
+    if (closedPark) {
+      closedParkHalts.add(rec.src);
+    }
     const verb = rec.status === "R" ? "renamed away from" : "deleted from";
     findings.push({
       relPath: rec.src,
-      detail: sanitizeDetail(`${rec.src}: ${verb} active/ with no paired stamped destination`),
+      detail: sanitizeDetail(
+        closedPark
+          ? `${rec.src}: ${verb} active/ toward proposed/ but the origin GitHub issue is closed`
+          : `${rec.src}: ${verb} active/ with no paired stamped destination`,
+      ),
     });
   }
 
@@ -765,6 +1043,9 @@ export function evaluateCompletedWriteGuard(
   }
   if (deleteFindings.some((finding) => twinHalts.has(finding.relPath))) {
     parts.push(ACTIVE_TWIN_RESTAMP_REMEDIATION);
+  }
+  if (deleteFindings.some((finding) => closedParkHalts.has(finding.relPath))) {
+    parts.push(CLOSED_ISSUE_PARK_REMEDIATION);
   }
   return {
     code: 1,

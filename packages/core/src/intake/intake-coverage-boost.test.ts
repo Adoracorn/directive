@@ -13,7 +13,6 @@ import {
 } from "./candidates-log.js";
 import {
   FAILURE_API_UNREACHABLE,
-  FAILURE_GH_AUTH,
   FAILURE_MISSING_INJECTED_TOKEN,
   FAILURE_REPO_ACCESS,
   githubAuthModesMain,
@@ -287,7 +286,10 @@ describe("intake coverage boost", () => {
         },
       );
       expect(summary.total).toBe(1);
-      expect(summary.notices).toEqual([]);
+      expect(summary.notices).toHaveLength(1);
+      const notice = (summary.notices as string[])[0] ?? "";
+      // Path/issue label retained after stripping CREATED/DRY-RUN (#4671 bulk notices).
+      expect(notice).toMatch(/proposed\/.+\n[\s\S]*plan\.items is empty after body harvest/);
       rmSync(dir, { recursive: true, force: true });
     });
 
@@ -924,7 +926,7 @@ describe("intake coverage boost", () => {
         repo: completed("", "", 1),
       });
       expect(validateInjectedTokenMode({ GH_TOKEN: "x" }, { runGh: runner }).failureKind).toBe(
-        FAILURE_GH_AUTH,
+        FAILURE_API_UNREACHABLE,
       );
       const runner2 = ghRunner({
         auth: completed(),
@@ -949,11 +951,12 @@ describe("intake coverage boost", () => {
       const failAuth = validateHostGhMode(
         {},
         {
-          runGh: ghRunner({ auth: completed("", "nope", 1) }),
+          repo: "owner/name",
+          runGh: ghRunner({ auth: completed("", "nope", 1), user: completed("", "nope", 1) }),
           runtimeMode: RUNTIME_MODE_CURSOR_NATIVE_SANDBOX,
         },
       );
-      expect(failAuth.failureKind).toBe(FAILURE_GH_AUTH);
+      expect(failAuth.failureKind).toBe(FAILURE_API_UNREACHABLE);
       expect(failAuth.remediation).toContain("Remediation");
       const ok = validateHostGhMode(
         {},
@@ -967,7 +970,7 @@ describe("intake coverage boost", () => {
         },
       );
       expect(ok.ok).toBe(true);
-      expect(inferGithubAuthMode({ runtimeMode: RUNTIME_MODE_LOCAL_UNSANDBOXED })).toBe("host-gh");
+      expect(inferGithubAuthMode({})).toBe("host-gh");
     });
 
     it("validateGithubAuthForWorker and CLI output", () => {

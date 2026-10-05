@@ -31,6 +31,9 @@ const PROPAGATION_COMMAND_MARKERS: ReadonlyArray<readonly [string, string]> = [
   ["deft verify:cache-fresh", "task verify:cache-fresh"],
   ["deft codebase:map", "task codebase:map"],
   ["deft verify:codebase-map-fresh", "task verify:codebase-map-fresh"],
+  ["deft spec:reconstruct", "task spec:reconstruct"],
+  ["deft verify:spec-drift", "task verify:spec-drift"],
+  ["deft policy:show --field=specGuard", "task policy:show --field=specGuard"],
   ["deft verify:branch", "task verify:branch"],
   ["deft verify:forward-coverage", "task verify:forward-coverage"],
   ["deft verify:story-ready", "task verify:story-ready"],
@@ -44,6 +47,7 @@ const PROPAGATION_COMMAND_MARKERS: ReadonlyArray<readonly [string, string]> = [
   ["deft scope:complete -- <active-story-path>", "task scope:complete -- <active-story-path>"],
   ["deft umbrella:current-shape", "task umbrella:current-shape"],
   ["deft xbrief:preflight", "task xbrief:preflight"],
+  ["deft pre-pr:run", "deft pre-pr:run"],
   ["deft policy:enable-value-feedback", "task policy:enable-value-feedback"],
   ["deft policy:show --field=valueFeedback", "task policy:show --field=valueFeedback"],
   ["deft value:show", "task value:show"],
@@ -97,6 +101,7 @@ const PROPAGATION_POLICY_KEY_MARKERS = [
   "plan.policy.sessionRitualStalenessHours",
   "plan.policy.forgeOutageRetryMinutes",
   "plan.policy.valueFeedback",
+  "plan.policy.specGuard",
   "plan.policy.requireHumanMerge",
 ] as const;
 
@@ -117,6 +122,7 @@ const PROPAGATION_HEADER_MARKERS = [
   "## Parent-steer inbox (#4286)",
   "## WIP cap",
   "## Codebase MAP Projection (#1595 / #1498)",
+  "## Spec reconstruction + drift guard (#1589)",
   "### Story Start Gate",
   "## Contextual guardrails (runtime-detect lazy-load)",
   "## Content packs",
@@ -201,9 +207,10 @@ const THROUGH_MERGE_DISPATCH_MARKERS = [
   "Parent conversation implements or babysits",
 ] as const;
 
-/** Always-on Cursor dest-placing spawn dest (#4066 / #4295). */
+/** Always-on Grok/Cursor dest-placing spawn dest (#4066 / #4295 / #4575). */
 const SPAWN_DEST_PLACING_MARKERS = [
-  "Spawn dest (#4066 / #4295)",
+  "Spawn dest (#4066/#4295/#4575)",
+  "dest-place then cwd",
   "dest-placing",
   "Task dest keys",
   "Agent.create",
@@ -213,6 +220,14 @@ const SPAWN_DEST_PLACING_MARKERS = [
 const EVALUATOR_SURFACE_CONSUMER_LANE_MARKERS = [
   "verify:evaluator-surface",
   "verify:consumer-test-lane",
+] as const;
+
+/** Every-session already-installed skip (#4539 / #1309). */
+const ALREADY_INSTALLED_SKIP_MARKERS = [
+  "directive --version",
+  "evaluateSkew",
+  "reject-global",
+  "npx @deftai/directive init",
 ] as const;
 
 /** After-merge one-origin orphan-active DONE gate (#3429). */
@@ -240,6 +255,12 @@ const PROPAGATION_ACTION_VERBS = [
   "start agent",
 ] as const;
 
+const STICKY_TIP_ROT_MARKERS = [
+  "Sticky tip-rot (#5162)",
+  "GREPTILE_SHA_STALL",
+  "BLOCKED: greptile-sha-stall",
+] as const;
+
 const SKILLS_POINTER_MARKERS = ["## Skills", "Skills Index", "packs:slice skills list"] as const;
 
 const INDEXED_SKILL_IDS = [
@@ -263,6 +284,11 @@ const INDEXED_SKILL_IDS = [
   "deft-directive-write-skill",
   "deft-directive-article-review",
   "deft-directive-feedback",
+] as const;
+
+const CONTROLLER_INVOCATION_4912_MARKERS = [
+  "Controller invocation (#4912)",
+  "deft pre-pr:run",
 ] as const;
 
 const DEFAULT_ALWAYS_PIN_SKILL_IDS = [
@@ -834,6 +860,20 @@ describe("test_agents_entry_contract", () => {
     expect(template.indexOf(OPEN_MARKER)).toBeLessThan(template.indexOf(CLOSE_MARKER));
   });
 
+  it("session_routing_names_host_memory_external_context_family (#5321)", () => {
+    const start = templateManaged.indexOf("## Session routing (#2176)");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rest = templateManaged.slice(start);
+    const next = rest.indexOf("\n## ", 3);
+    const section = next === -1 ? rest : rest.slice(0, next);
+    expect(section).toContain("Warp Drive / MCP / prompt-injected / host agent memory");
+    expect(section).toContain("sole Personal SoT");
+    expect(section).toContain("zero Personal authority");
+    expect(section).toContain("disclose once");
+    expect(section).toContain("\u2297 treat host-memory prefs as USER.md");
+    expect(section).toContain("\u2297 auto-sync or delete-all host memory");
+  });
+
   it("xbrief_layout_pins_completed_record_not_next (#3383)", () => {
     expect(templateManaged).toContain("zero authority over");
     expect(templateManaged).toContain("what to build next");
@@ -912,6 +952,10 @@ describe("test_agents_entry_contract", () => {
     expect(missingMarkers(template, EVALUATOR_SURFACE_CONSUMER_LANE_MARKERS)).toEqual([]);
     expect(missingMarkers(agents, EVALUATOR_SURFACE_CONSUMER_LANE_MARKERS)).toEqual([]);
   });
+  it("already_installed_skip_markers_present_in_both_files (#4539 / #1309)", () => {
+    expect(missingMarkers(template, ALREADY_INSTALLED_SKIP_MARKERS)).toEqual([]);
+    expect(missingMarkers(agents, ALREADY_INSTALLED_SKIP_MARKERS)).toEqual([]);
+  });
 
   it("after_merge_completed_tracked_markers_present_in_both_files", () => {
     expect(missingMarkers(template, AFTER_MERGE_COMPLETED_TRACKED_MARKERS)).toEqual([]);
@@ -926,6 +970,11 @@ describe("test_agents_entry_contract", () => {
   it("deft_directive_disable_markers_present_in_both_files", () => {
     expect(missingMarkers(template, DEFT_DIRECTIVE_DISABLE_MARKERS)).toEqual([]);
     expect(missingMarkers(agents, DEFT_DIRECTIVE_DISABLE_MARKERS)).toEqual([]);
+  });
+
+  it("controller_invocation_pre_pr_run_pointer_present (#4912 / #1309)", () => {
+    expect(missingMarkers(templateManaged, CONTROLLER_INVOCATION_4912_MARKERS)).toEqual([]);
+    expect(missingMarkers(agentsManaged, CONTROLLER_INVOCATION_4912_MARKERS)).toEqual([]);
   });
 
   it("stamp_retirement_markers_present_in_both_files (#4271)", () => {
@@ -1025,6 +1074,8 @@ describe("test_agents_entry_contract", () => {
   it("skill_pin_policy_anti_pattern_present_in_both_files", () => {
     expect(missingMarkers(template, SKILL_PIN_ANTI_PATTERN_MARKERS)).toEqual([]);
     expect(missingMarkers(agents, SKILL_PIN_ANTI_PATTERN_MARKERS)).toEqual([]);
+    expect(missingMarkers(template, STICKY_TIP_ROT_MARKERS)).toEqual([]);
+    expect(missingMarkers(agents, STICKY_TIP_ROT_MARKERS)).toEqual([]);
   });
 
   it("references_md_documents_pin_tiers", () => {

@@ -5,10 +5,6 @@
 
 # Roadmap
 
-## Active
-
-- **#5022** -- bug(release): Windows Step 5 hang detector kills ts:check-lane at 52/1284 files during v0.119.9 cut -- `[running]`
-
 ## Proposed
 
 _Scopes not yet promoted to pending. Orientation only — not a substitute for `task triage:queue`._
@@ -26,10 +22,6 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 - **#628** -- chore(sync): complete Phase 6c LegacyArtifacts review for v0.20.0 self-migration (120 sections deferred) -- `[proposed]`
 - **#629** -- chore(conventions): document migration-artifact exclusion pattern for consumer content-linting tests -- `[proposed]`
 - **#630** -- migrator: auto-invoke render tasks at end of task migrate:xbrief -- `[proposed]`
-- **#635** -- Events: behavioral wiring (3 items: session interrupt/resume pair, plan:approved, legacy:detected) -- `[proposed]`
-- **#635** -- Events: detection-bound wiring (5 events with existing detectors) -- `[proposed]`
-- **#635** -- RFC: Phase 0 spec scaffolding -- generated per-phase task gates (needs-discussion) -- `[proposed]`
-- **#635** -- Rule Ownership Map: data file + lint enforcement (replaces REFERENCES.md prose section) -- `[proposed]`
 - **#762** -- feat(vbrief): centralize phase taxonomy in PROJECT-DEFINITION.xbrief.json; renderer reads from there -- `[proposed]`
 - **#1084** -- chore(security): PyPI OIDC trusted-publishing workflow (blocked-by #11) -- `[proposed]`
 - **#1293** -- scripts/vbrief_crud.py -- typed CRUD tool for vBRIEF JSON -- `[proposed]`
@@ -38,37 +30,34 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 - **#1299** -- When to use CRUD tool vs direct vBRIEF authoring (contributor doc) -- `[proposed]`
 - **#2651** -- ADR-002: Forge-provider Azure DevOps adoption gate (proposed) -- `[proposed]`
 - **#3014** -- research(deposit): opt-in minimal consumer AGENTS profile for app-bank / greenfield -- `[proposed]`
-- **#3718** -- bug(swarm): swarm:launch is unreachable for a freshly-triaged story -- readiness needs 15 hand-authored fields and file_scope collides with the provenance gate -- `[proposed]`
-- **#3729** -- bug(session): the occupancy lease is exclusion-only -- an agent that never claims is never gated -- `[proposed]`
-- **#3739** -- bug(hooks): nested hosts get a 5s budget the framework itself calls too small, and a killed hook renders identically to an allow -- `[proposed]`
 
 ## Completed
 
-_Showing 25 of 1637 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1752 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
-- **#4882** -- Parent-retained merge babysit stands down with no live wait -- `[completed]`
-- **#3858** -- bug(scm): the enforcing SCM readiness gate never invokes the worker-principal validator -- `[completed]`
-- **#5010** -- design(verify): retire TTY intent-constraint and observable-scope mint mid-build — detect + in-harness ask, returned failures free -- `[completed]`
-- **#3663** -- bug(swarm): worker github_auth_mode is stamped from the parent process and never re-validated in the worker envelope -- `[completed]`
-- **#4973** -- leftover(#1708): recorded planning choice before the first Cursor Plan prompt -- `[completed]`
-- **#4970** -- Previously accepted critiques retain ingest-ready after stricter gates invalidate their records -- `[completed]`
-- **#1708** -- Cursor Plan Mode silently bypasses directive planning; needs host-UI planning bridge + visibility -- `[completed]`
-- **#4986** -- bug(scope): derived clauses never get test evidence, so through-merge cannot complete the brief -- `[completed]`
-- **#4980** -- feat(verify): class checks fail closed regardless of file_scope or digest — test artifact under production root, production reference to test root, test identity in infra, protected globs (#3145 class) -- `[completed]`
-- **#4988** -- feat(setup): write swarm.file_scope at authoring for every setup-created scope and show the paths at the confirmation gate — declaration only, no approval verb (supersedes #4383) -- `[completed]`
-- **#4956** -- bug(swarm,scope): operator proceed still forces leave-harness multi-stop scope:record-approved-scope ("mint") mid-cohort — not the intended run-with-it flow -- `[completed]`
-- **#4290** -- bug(session,hooks): compaction staleness on the primary checkout has no recovery -- both printed remedies refuse as occupancy claims, and the gate denies paths outside the repo -- `[completed]`
-- **#4884** -- Kill-switch is doctor-true and the agent is never told to stop -- `[completed]`
-- **#4963** -- BLOCKER: xbrief:verify passes a brief that scope:activate rejects on plan.id, and remediation names an internal function -- `[completed]`
-- **#4543** -- Forward-coverage gate is satisfied by placeholder tests (string-search / typeof) -- `[completed]`
-- **#4768** -- [UAT Tester 4] Active xBRIEFs can be created without acceptance commands -- `[completed]`
-- **#4654** -- [UAT Tester 1] Windows PowerShell blocks npx/directive/deft via .ps1 execution policy -- `[completed]`
-- **#3550** -- bug(intake,verify-ac): #3398 attestation enforcement absent in the field and noun-traceability admits behavior-free clauses - two existence greps + zero commands = verified-pass -- `[completed]`
-- **#4947** -- bug(doctor,setup): existing root check can stay green without Directive, and setup still says task check -- `[completed]`
-- **#4544** -- Setup leaves AGENTS.md header at "edit me" and planning layer unused on a single-prompt greenfield build -- `[completed]`
-- **#4384** -- design(scm,setup): the first push to a new repository must create the default branch, the gate has no bootstrap exemption, and the only documented path is the "emergency" bypass — so day one teaches the bypass -- `[completed]`
-- **#4950** -- BLOCKER: one-PR-unit story-readiness cannot resolve durable grants (0.119.7) -- `[completed]`
-- **#4773** -- [UAT Tester 4] Dirty-tree update reports writes while refusing before writes -- `[completed]`
-- **#4766** -- [UAT Tester 4] Older Directive package resolves to a different engine version -- `[completed]`
-- **#4937** -- bug(swarm): through-merge should complete the xbrief for the issue it was given -- `[completed]`
+- **#5355** -- [framework-gap] Interview regression coverage does not exercise phase drift and proposal growth across turns -- `[completed]`
+- **#5354** -- [framework-gap] Canonical interview strategy contradicts setup on PRD authority and scope promotion -- `[completed]`
+- **#5353** -- [framework-gap] Interview progress rules hide remaining scope while enforcing one-question-at-a-time interaction -- `[completed]`
+- **#5352** -- [framework-gap] Design interview revisions and handoffs do not preserve a bounded phase and approval scope -- `[completed]`
+- **#5351** -- [framework-gap] Full interview completion has no bounded material-decision contract -- `[completed]`
+- **#1589** -- epic: spec reconstruction + drift guard - Prefer-A Bound leftover after #5315 -- `[completed]`
+- **#5318** -- fix(swarm): fail closed when cohort PRs lack live Approach 1 babysitters -- `[completed]`
+- **#3739** -- bug(hooks): nested hosts get a 5s budget the framework itself calls too small, and a killed hook renders identically to an allow -- `[completed]`
+- **#5233** -- ARC ingest-ready can pass adverse pain audits without required follow-through -- `[completed]`
+- **#5326** -- feat(design-critique): ensure consumer catalog chip labels and judgmentGates (skill soft-misses today) -- `[completed]`
+- **#5321** -- bug(harness): host agent memory must not override Directive process SoT without USER.md consent -- `[completed]`
+- **#1164** -- feat(coding): two testing rules missing from coding/testing.md — test integrity + mock boundary -- `[completed]`
+- **#1511** -- Flip #1419 agentic-prioritization gates from advisory to enforce mode (advise -> observe -> block) -- `[completed]`
+- **#1492** -- RFC: promote the system-of-record gate from advisory to wired (schema home, gate tier, sentinel integration) -- `[completed]`
+- **#3675** -- fix(scope): delivery gate accepts any delivery-branch ancestor as merge evidence -- `[completed]`
+- **#1613** -- feat(vbrief,build): STOP conditions on vBRIEF task items — halt and report when preconditions fail -- `[completed]`
+- **#5278** -- bug(swarm,grok-build): parent-steer inbox exists but cancel/kill has no query-first preflight (#4286 leftover) -- `[completed]`
+- **#5281** -- policy(swarm,grok-build): gate host kill_command_or_subagent behind pre-cancel attestation (#5278 leftover) -- `[completed]`
+- **#3703** -- bug(swarm): verify:routing is a fail-closed pre-dispatch gate that nothing invokes -- `[completed]`
+- **#5284** -- bug(design-critique): SUPERSEDES_RE misses bold Recut-supersedes; bindLeanPredecessorValid blocks legitimate harvest Recuts (#5278 leftover) -- `[completed]`
+- **#3729** -- bug(session): the occupancy lease is exclusion-only -- an agent that never claims is never gated -- `[completed]`
+- **#5285** -- bug(release): v0.120.0 Windows Step 5 fail — presentation-coverage snapshot symlink EPERM -- `[completed]`
+- **#3715** -- leftover-complete: Prefer-A Bound #3715 after #5289 -- `[completed]`
+- **#4912** -- leftover(#633): pre-PR skill skip and omitted checklist stay undetectable -- `[completed]`
+- **#479** -- feat(vbrief,resilience): prevent false memory propagation and context rot in agent sessions -- `[completed]`
 

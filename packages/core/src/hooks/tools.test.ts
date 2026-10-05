@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   DIRECT_WRITE_HOOK_MATCHER,
+  HOST_TOOL_SURFACE_AUDIT,
+  isApplyPatchTool,
   isDirectWriteTool,
+  isKillTool,
   isMcpTool,
   isShellTool,
   isSpawnTool,
+  KILL_HOOK_MATCHER,
   MCP_HOOK_MATCHER,
   MCP_PUSH_MERGE_BARE_NAMES,
   SHELL_HOOK_MATCHER,
@@ -47,6 +51,19 @@ describe("hooks tools classifiers (#2711 / #2952)", () => {
     expect(isDirectWriteTool("Shell")).toBe(false);
     expect(isSpawnTool("Task")).toBe(true);
     expect(isSpawnTool("Shell")).toBe(false);
+    expect(isApplyPatchTool("ApplyPatch")).toBe(true);
+    expect(isApplyPatchTool("apply_patch")).toBe(true);
+    expect(isApplyPatchTool("apply-patch")).toBe(true);
+    expect(isApplyPatchTool("Write")).toBe(false);
+    expect(isApplyPatchTool("Bash")).toBe(false);
+  });
+
+  it("downgrades Codex apply_patch write-form until a live payload is observed (#5094)", () => {
+    expect(HOST_TOOL_SURFACE_AUDIT.codex.mutation.directWrite).toEqual([]);
+    expect(HOST_TOOL_SURFACE_AUDIT.codex.mutation.shell).toContain("shell");
+    expect(HOST_TOOL_SURFACE_AUDIT.codex.unobservedReason).toMatch(/apply_patch/i);
+    expect(HOST_TOOL_SURFACE_AUDIT.codex.unobservedReason).toMatch(/#5094/);
+    expect(HOST_TOOL_SURFACE_AUDIT.codex.unobservedReason).toMatch(/#5129/);
   });
 
   it("SHELL / MCP hook matchers include expected tokens", () => {
@@ -60,5 +77,14 @@ describe("hooks tools classifiers (#2711 / #2952)", () => {
     expect(MCP_HOOK_MATCHER).toContain("git[_-]?push");
     expect(MCP_HOOK_MATCHER).toContain("CallMcpTool");
     expect(MCP_HOOK_MATCHER).toContain("use_tool");
+  });
+
+  it("isKillTool and KILL_HOOK_MATCHER cover Grok kill (#5281)", () => {
+    expect(isKillTool("kill_command_or_subagent")).toBe(true);
+    expect(isKillTool("Kill_Command_Or_Subagent")).toBe(true);
+    expect(isKillTool("Write")).toBe(false);
+    expect(KILL_HOOK_MATCHER).toBe("kill_command_or_subagent");
+    expect(HOST_TOOL_SURFACE_AUDIT.grok.mutation.kill).toContain("kill_command_or_subagent");
+    expect(HOST_TOOL_SURFACE_AUDIT.grok.nonMutation.kill_command_or_subagent).toBeUndefined();
   });
 });

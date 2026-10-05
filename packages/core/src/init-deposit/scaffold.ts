@@ -11,6 +11,10 @@ import { readdir, stat } from "node:fs/promises";
 import { platform } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
+  agentsRefreshPlanWithInstalledTemplate,
+  readAgentsTemplateFromContentTree,
+} from "../doctor/agents-md.js";
+import {
   containedChmod,
   containedDestExec,
   containedMkdir,
@@ -21,7 +25,6 @@ import {
   assertDestinationNotSymlink,
   ProjectionContainmentError,
 } from "../fs/projection-containment.js";
-import { agentsRefreshPlan } from "../platform/agents-md.js";
 import { renderCoreGuardBranchSyncIfBlock } from "../policy/branch-sync.js";
 import { MIGRATED_ARTIFACT_DIR } from "../xbrief-migrate/constants.js";
 import { CANONICAL_INSTALL_ROOT, type InitDepositIo } from "./constants.js";
@@ -29,6 +32,22 @@ import { CORE_GUARD_PIN_CONTENT_PYTHON } from "./core-guard-pin-content.js";
 import { assertInstallerAllowlistHonors1430, installerManagedGuardErePatterns } from "./hygiene.js";
 import { writeAgentsSkillsFromInventory } from "./skill-discovery-deposit.js";
 import { syncConsumerXbriefSchemas } from "./xbrief-projections.js";
+
+/** package.json version for the content tree used as the AGENTS render root (#5013). */
+function readContentTreeVersion(contentTreeRoot: string): string | null {
+  try {
+    const pkgPath = join(contentTreeRoot, "package.json");
+    if (!existsSync(pkgPath)) return null;
+    const parsed: unknown = JSON.parse(readFileSync(pkgPath, "utf8"));
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const version = (parsed as { version?: unknown }).version;
+    if (typeof version !== "string") return null;
+    const trimmed = version.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  } catch {
+    return null;
+  }
+}
 
 export type { InitDepositIo };
 export { CANONICAL_INSTALL_ROOT };
@@ -66,11 +85,15 @@ const VENDORED_TS_PACKAGES_REL = ".deft/core/packages";
 
 const VENDORED_TS_TEST_RE = /\.(test|spec)\.(c|m)?[jt]sx?$/i;
 
+/** Desired core attribute lines (#5245). `text=auto` keeps binary PNG bytes intact. */
 const CORE_GITATTRIBUTES_LINES = [
-  `${CORE_GLOB} text eol=lf`,
+  `${CORE_GLOB} text=auto eol=lf`,
   `${CORE_GLOB} linguist-generated=true`,
   `${CORE_GLOB} linguist-vendored=true`,
 ];
+
+/** Exact legacy forced-text line removed on refresh (#5245 / #1430). */
+export const LEGACY_CORE_TEXT_EOL_LF = `${CORE_GLOB} text eol=lf` as const;
 
 const VBRIEF_LIFECYCLE_DIRS = ["proposed", "pending", "active", "completed", "cancelled"] as const;
 
@@ -273,7 +296,20 @@ export function ensurePackageJsonPin(
 }
 
 export function writeAgentsMd(projectDir: string, deftDir: string, io: InitDepositIo): boolean {
-  const plan = agentsRefreshPlan(projectDir, { frameworkRoot: deftDir }) as Record<string, unknown>;
+  // #5013: same-root — read templates/agents-entry.md from deftDir (deposit /
+  // engine content tree just reconciled). Do not bare frameworkRoot:deftDir
+  // through agentsRefreshPlan; contentRoot() prefer-package can hijack to a
+  // stale project node_modules/@deftai/directive-content (#4706 helpers).
+  const templateText = readAgentsTemplateFromContentTree(deftDir);
+  if (templateText === null) {
+    io.printf("AGENTS.md render refused: template-missing in content tree.\n");
+    return false;
+  }
+  const treeVersion = readContentTreeVersion(deftDir);
+  const plan = agentsRefreshPlanWithInstalledTemplate(projectDir, deftDir, {
+    readTemplate: () => templateText,
+    ...(treeVersion !== null ? { resolveSha: () => treeVersion } : {}),
+  }) as Record<string, unknown>;
   const state = plan.state;
   if (state === "current") {
     io.printf(`AGENTS.md already advertises install root ${CANONICAL_INSTALL_ROOT} — skipping.\n`);
@@ -697,6 +733,59 @@ export function assertCoreGuardWorkflowLoadable(content: string): void {
  * `run: |` block stays intact (#3345). After GHA strips the common indent, the
  * shell heredoc body reaches python3 with correct relative indentation.
  */
+
+const CORE_GUARD_GENERATION_PYTHON = [
+  "import json, subprocess, sys",
+  "base_ref, head_sha = sys.argv[1], sys.argv[2]",
+  'path = ".deft/GENERATION.json"',
+  "def run(args):",
+  "    p = subprocess.run(args, capture_output=True, text=True)",
+  "    return p.returncode, p.stdout",
+  "def ls(tree):",
+  '    return run(["git", "--no-replace-objects", "ls-tree", tree, "--", path])',
+  "def show(spec):",
+  '    return run(["git", "--no-replace-objects", "show", spec])',
+  "if not base_ref:",
+  '    print("::error::BASE_REF missing for GENERATION.json monotonic check (#4120)")',
+  "    sys.exit(1)",
+  'code, out = ls("origin/" + base_ref)',
+  "if code != 0:",
+  '    print("::error::origin/$BASE_REF unreadable for GENERATION.json (#4120)")',
+  "    sys.exit(1)",
+  "base = None",
+  "if out.strip():",
+  '    code, blob = show("origin/" + base_ref + ":" + path)',
+  "    if code != 0:",
+  '        print("::error::cannot show origin base GENERATION.json (#4120)")',
+  "        sys.exit(1)",
+  '    base = json.loads(blob).get("generation")',
+  'code, blob = show(head_sha + ":" + path)',
+  "if code != 0:",
+  '    print("::error::cannot show head GENERATION.json (#4120)")',
+  "    sys.exit(1)",
+  'head = json.loads(blob).get("generation")',
+  "if type(head) is not int or head < 1:",
+  '    print("::error::head generation is not an int >= 1 (#4120)")',
+  "    sys.exit(1)",
+  "if base is not None:",
+  "    if type(base) is not int or base < 1 or not (head > base):",
+  '        print("::error::GENERATION.json must increase vs origin/$BASE_REF (#4120)")',
+  "        sys.exit(1)",
+  'print("OK: GENERATION.json monotonic vs origin/$BASE_REF")',
+].join("\n");
+
+function coreGuardGenerationPython(): string {
+  const run = CORE_GUARD_RUN_INDENT;
+  const pyBody = CORE_GUARD_GENERATION_PYTHON.replace(/\n$/, "").split("\n");
+  return [
+    `${run}if printf '%s\\n' "$changed" | grep -qx '.deft/GENERATION.json'; then`,
+    `${run}python3 - "$BASE_REF" "$HEAD_SHA" <<'PY'`,
+    ...pyBody.map((line) => `${run}${line}`),
+    `${run}PY`,
+    `${run}fi`,
+  ].join("\n");
+}
+
 function coreGuardPinContentPython(): string {
   // Shared SoT with cmd/deft-install/core_guard_pin_content.embed (#3427).
   // Consumer deposit stays a python3 heredoc; this repo has no .py file.
@@ -779,6 +868,7 @@ function coreGuardWorkflowContent(): string {
     '          if [ -n "$core" ]; then\n' +
     `${coreGuardPinContentPython()}\n` +
     "          fi\n" +
+    `${coreGuardGenerationPython()}\n` +
     '          echo "OK: no mixed framework + app changes."\n'
   );
 }
@@ -786,26 +876,41 @@ function coreGuardWorkflowContent(): string {
 export function ensureGitattributes(projectDir: string, io: InitDepositIo): boolean {
   const path = projectionTarget(projectDir, ".gitattributes");
   const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-  const present = new Set(existing.split("\n").map((line) => line.trim()));
+  const lines = existing.length > 0 ? existing.split("\n") : [];
+  // Targeted removal of legacy forced-text, independent of additions short-circuit (#5245).
+  const withoutLegacy = lines.filter((line) => line.trim() !== LEGACY_CORE_TEXT_EOL_LF);
+  const removedLegacy = withoutLegacy.length !== lines.length;
+  const present = new Set(
+    withoutLegacy.map((line) => line.trim()).filter((line) => line.length > 0),
+  );
   const additions = CORE_GITATTRIBUTES_LINES.filter((line) => !present.has(line));
-  if (additions.length === 0) {
+  if (additions.length === 0 && !removedLegacy) {
     io.printf(
-      `.gitattributes already marks ${CORE_GLOB} as LF-pinned/generated/vendored — skipping.\n`,
+      `.gitattributes already marks ${CORE_GLOB} as text=auto/generated/vendored — skipping.\n`,
     );
     return false;
   }
-  let body = existing;
+  let body = withoutLegacy.join("\n");
+  // Drop trailing empty lines left by filter so we can append cleanly.
+  while (body.endsWith("\n\n")) body = body.slice(0, -1);
   if (body && !body.endsWith("\n")) body += "\n";
-  if (body && !body.endsWith("\n\n")) body += "\n";
-  body +=
-    "# Deft framework: the vendored payload is packaged framework code, not\n" +
-    "# consumer source. Pin LF endings and mark it generated + vendored so\n" +
-    "# Git does not rewrite it and diffs treat .deft/core/** as machine-managed (#1430, #2118).\n";
-  for (const add of additions) {
-    body += `${add}\n`;
+  if (additions.length > 0) {
+    if (body && !body.endsWith("\n\n")) body += "\n";
+    body +=
+      "# Deft framework: the vendored payload is packaged framework code, not\n" +
+      "# consumer source. text=auto + eol=lf normalizes text only; binaries keep\n" +
+      "# byte identity. Mark generated + vendored (#1430, #2118, #5245).\n";
+    for (const add of additions) {
+      body += `${add}\n`;
+    }
+  } else if (removedLegacy && body && !body.endsWith("\n")) {
+    body += "\n";
   }
   containedProjectWrite(projectDir, path, body);
-  io.printf(`.gitattributes updated with Deft core markers: ${additions.join(", ")}\n`);
+  const parts: string[] = [];
+  if (removedLegacy) parts.push(`removed ${LEGACY_CORE_TEXT_EOL_LF}`);
+  if (additions.length > 0) parts.push(`added ${additions.join(", ")}`);
+  io.printf(`.gitattributes updated with Deft core markers: ${parts.join("; ")}\n`);
   return true;
 }
 

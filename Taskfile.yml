@@ -103,6 +103,9 @@ includes:
   agent:
     taskfile: ./tasks/agent.yml
     optional: true
+  subagent:
+    taskfile: ./tasks/subagent.yml
+    optional: true
   architecture:
     taskfile: ./tasks/architecture.yml
     optional: true
@@ -180,6 +183,9 @@ includes:
     optional: true
   occupancy:
     taskfile: ./tasks/occupancy.yml
+    optional: true
+  ownership:
+    taskfile: ./tasks/ownership.yml
     optional: true
   lifecycle:
     taskfile: ./tasks/lifecycle.yml
@@ -423,6 +429,12 @@ tasks:
     deps:
       - ts:check-lane
       - toolchain:check
+      # #5176 Prefer-A: Taskfile-safe check conjunct (marker + empty → refuse;
+      # missing PD / no marker → pass). Unconditional setup verify stays out —
+      # that exits 2 on missing PD. Mirrors in-process deft check gate.
+      - task: verify:persisted-planning-narratives
+        vars:
+          CLI_ARGS: "--check-conjunct"
       - verify:stubs
       - verify:links
       - verify:rule-ownership
@@ -441,6 +453,7 @@ tasks:
       - verify:encoding
       - verify:closing-keywords
       - verify:forward-coverage
+      - verify:changelog-unreleased
       - verify:test-boundary
       - verify:class-checks
       - verify:scope-provenance
@@ -454,6 +467,9 @@ tasks:
           CLI_ARGS: "--base-ref origin/master"
       - verify:observable-scope
       - verify:intent-constraint
+      - verify:presentation-ceiling
+      - verify:durable-effect-acquisition
+      - verify:presentation-coverage
       - verify:telemetry-coverage
       - verify:vbrief-conformance
       - verify:destructive-gh-verbs
@@ -503,6 +519,12 @@ tasks:
     deps:
       - doctor
       - toolchain:check-consumer
+      # #5176 Prefer-A: Taskfile-safe check conjunct (marker + empty → refuse;
+      # missing PD / no marker → pass). Unconditional setup verify stays out.
+      - task: verify:persisted-planning-narratives
+        vars:
+          CLI_ARGS: "--check-conjunct"
+      - verify:consumer-header-placeholder
       - verify:branch
       - verify:cache-fresh
       - verify:wip-cap
@@ -519,6 +541,9 @@ tasks:
       - verify:evaluator-surface
       - verify:observable-scope
       - verify:intent-constraint
+      - verify:presentation-ceiling
+      - verify:durable-effect-acquisition
+      - verify:presentation-coverage
       - vbrief:validate
       - verify-strategy-output
       - verify:consumer-test-lane

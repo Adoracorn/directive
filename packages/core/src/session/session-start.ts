@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { resolveFrameworkRootForProject, runningInsideDeftRepo } from "../doctor/paths.js";
 import { emitSessionEvalReadback } from "../eval/readback.js";
 import { bindSessionGeneration } from "../freshness/bind.js";
@@ -17,6 +18,10 @@ import {
   hostContentSurfaceToDict,
   maybeFormatHostContentSurfaceLines,
 } from "../platform/host-content-surface.js";
+import {
+  evaluateWslOwnershipGuard,
+  ownershipGuardToDict,
+} from "../platform/platform-capabilities.js";
 import {
   detectEnvironmentContext,
   type EnvironmentContext,
@@ -49,6 +54,7 @@ import {
   formatDeftDirectiveDisableMessage,
   isDeftDirectiveDisableActive,
 } from "../policy/deft-directive-disable.js";
+import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
 import { disclosureLine } from "../policy/disclosure.js";
 import {
   detectNoDeftDirective,
@@ -65,6 +71,7 @@ import { resolvePolicy } from "../policy/resolve.js";
 import { maybeFormatProductSignalConsentPrompt } from "../product-signal/consent-prompt.js";
 import { formatFrameworkCommand } from "../render/framework-commands.js";
 import { RunSummaryEmitter } from "../run-summary/emit.js";
+import type { SessionStartTrigger } from "../run-summary/types.js";
 import {
   formatScmReadinessLines,
   type ProbeScmReadinessOptions,
@@ -74,6 +81,13 @@ import {
 } from "../scm/readiness.js";
 import { workClaimSessionScanLines } from "../scm/work-claim.js";
 import { maybeRunStalenessTickler } from "../staleness-tickler/run.js";
+import {
+  discoverFinalizeOwed,
+  fetchDeliveryTipPrivate,
+  formatFinalizeOwedInventoryLines,
+  inventoryHasBlockingOwed,
+} from "../swarm/finalize-owed.js";
+import { parseGitHubRemoteRepo } from "../text/redos-safe.js";
 import { runDefaultMode } from "../triage/welcome/default-mode.js";
 import { type ResolveUserMdResult, resolveUserMdPath } from "../user-config/resolve-user-md.js";
 import { emitSessionValueReadback } from "../value/readback.js";
@@ -93,9 +107,11 @@ import {
 } from "./effort-budget.js";
 import type { GitRunner } from "./git.js";
 import { defaultGitRunner, gitHead, gitIsAncestor, worktreePath } from "./git.js";
+import { isLinkedWorktreePath, mainWorktreeRoot } from "./main-worktree.js";
 import {
   type ApplyOccupancyInput,
   applyWorktreeOccupancy,
+  evaluateOccupancyCeremonyEligibility,
   type OccupancyDecision,
   type OccupancyIdentityProvenance,
   type PrimaryClaimException,
@@ -126,6 +142,7 @@ import {
   ritualStep,
   writeRitualState,
 } from "./ritual-sentinel.js";
+import { resolveSessionRitualStalenessHours } from "./staleness.js";
 import { timestampIso } from "./time.js";
 import {
   runToolchainPreflight,
@@ -329,6 +346,25 @@ export interface SessionStartOptions {
    * Ignored on re-arm tier (always skips optional network).
    */
   readonly allowOptionalNetwork?: boolean;
+  /**
+   * #4919: recorded deferral for finalize-owed gate (`--defer-owed <reason>`).
+   * When set, blocking owed/close-owed/stale inventory does not refuse mutation.
+   */
+  readonly deferOwedReason?: string | null;
+  /**
+   * #5145: test seam for linked-worktree dest-default defer. Production uses
+   * `isLinkedWorktreePath`; linked dest leaves Prefer-A without a CLI flag.
+   */
+  readonly isLinkedWorktree?: (projectRoot: string) => boolean;
+  /**
+   * #4919: test/prod seam for owed inventory. Default runs private tip fetch + discover.
+   * Read-only / requirements postures never call this.
+   */
+  readonly probeFinalizeOwed?: (projectRoot: string) => {
+    readonly lines: readonly string[];
+    readonly blocks: boolean;
+    readonly unknown: boolean;
+  };
   /** Process env for network opt-in resolution (tests inject). */
   readonly env?: NodeJS.ProcessEnv;
   /**
@@ -443,13 +479,95 @@ export type RearmEligibility =
   | { eligible: false; reason: string };
 
 /**
+ * Live occupancy already admits this ritual session as owner (#3884).
+ * Absent / residue / foreign / member cases stay false — only live-same-owner.
+ */
+export function liveSameOwnerOccupancyAdmits(
+  projectRoot: string,
+  sessionId: string | undefined,
+  input: Omit<ApplyOccupancyInput, "sessionId"> = {},
+): boolean {
+  if (sessionId === undefined || sessionId.trim().length === 0) return false;
+  const eligibility = evaluateOccupancyCeremonyEligibility(projectRoot, {
+    ...input,
+    sessionId,
+  });
+  return eligibility.occupancyCase === "live-same-owner";
+}
+
+/**
+ * Same-owner discontinuous HEAD continuity for rebase tip moves (#3884 / #2782).
+ * Live-same-owner alone is not enough: branch-switch, amend, and soft/hard reset
+ * to unrelated history stay fail-closed. Admit only a same-branch rebase tip
+ * rewrite: walking the current branch reflog from tip back to the ritual SHA
+ * must see a rebase subject and must not see reset/checkout/amend before the
+ * ritual. Mere reflog membership is not enough (soft-reset keeps the old SHA
+ * in the reflog). Amend after rebase must not skip past the amend to an earlier
+ * rebase subject. Backup branches that still contain the old SHA must not
+ * block; dangling ritual on an unrelated checkout must not admit. FF continuity
+ * is handled by the caller via ancestor checks before this helper runs.
+ */
+export function sameOwnerRebaseHeadContinuity(
+  projectRoot: string,
+  sessionId: string | undefined,
+  ritualHead: string,
+  currentHead: string,
+  input: { now?: Date; runGit?: GitRunner } = {},
+): boolean {
+  if (!liveSameOwnerOccupancyAdmits(projectRoot, sessionId, { now: input.now })) {
+    return false;
+  }
+  const runGit = input.runGit ?? defaultGitRunner;
+  const branch = runGit(projectRoot, ["symbolic-ref", "--short", "HEAD"]);
+  if (branch.code !== 0) return false;
+  const branchName = branch.stdout.trim();
+  if (branchName.length === 0) return false;
+  // Same-branch rebase path only — ignores backup branches; rejects switches /
+  // reset-to-unrelated / amend-after-rebase that still leave ritual SHA in the
+  // reflog.
+  const reflog = runGit(projectRoot, ["reflog", "show", branchName, "--format=%H %gs"]);
+  if (reflog.code !== 0) return false;
+  let seenRebase = false;
+  let foundRitual = false;
+  for (const raw of reflog.stdout.split(/[\r\n]+/)) {
+    const line = raw.trim();
+    if (line.length === 0) continue;
+    const sp = line.indexOf(" ");
+    const sha = sp === -1 ? line : line.slice(0, sp);
+    const subject = sp === -1 ? "" : line.slice(sp + 1);
+    // Amend after rebase must fail closed — do not walk past amend to an
+    // earlier rebase subject (#3884 Greptile residual). Branch creation at the
+    // ritual tip (`branch: Created from …`) is a switch, not same-branch rebase
+    // (#1617 / PR #5217 Greptile outside-diff). Check before ritual-SHA match:
+    // the create subject often sits on the ritual line itself.
+    if (/^(reset|checkout|branch)(:|\s)/i.test(subject) || /^commit \(amend\)/i.test(subject)) {
+      return false;
+    }
+    if (sha === ritualHead) {
+      foundRitual = true;
+      break;
+    }
+    if (/rebase/i.test(subject)) seenRebase = true;
+  }
+  if (!foundRitual || !seenRebase) return false;
+  const ritualParent = runGit(projectRoot, ["rev-parse", "--verify", `${ritualHead}^`]);
+  const currentParent = runGit(projectRoot, ["rev-parse", "--verify", `${currentHead}^`]);
+  // Fail closed when parents cannot be resolved (root / error).
+  if (ritualParent.code !== 0 || currentParent.code !== 0) return false;
+  // Amend keeps the same first parent; rebase onto a moved base does not.
+  if (ritualParent.stdout.trim() === currentParent.stdout.trim()) return false;
+  return true;
+}
+
+/**
  * Whether a prior ritual can be re-armed without a full cold ceremony (#2992).
- * Requires valid state, same worktree, continuous (or identical) HEAD, and
- * previously-passing quick steps.
+ * Requires valid state, same worktree, continuous (or identical) HEAD — or
+ * same-owner rebase tip rewrite under a live lease (#3884) — and
+ * previously-passing quick steps. Branch-switch / amend stay fail-closed (#2782).
  */
 export function assessRearmEligibility(
   projectRoot: string,
-  options: { runGit?: GitRunner } = {},
+  options: { runGit?: GitRunner; now?: Date } = {},
 ): RearmEligibility {
   const runGit = options.runGit ?? defaultGitRunner;
   const [state, err] = readRitualState(projectRoot);
@@ -475,7 +593,13 @@ export function assessRearmEligibility(
     if (forward === null) {
       return { eligible: false, reason: "could not verify git history for session re-arm" };
     }
-    if (!forward) {
+    if (
+      !forward &&
+      !sameOwnerRebaseHeadContinuity(projectRoot, state.sessionId, state.gitHead, currentHead, {
+        now: options.now,
+        runGit,
+      })
+    ) {
       return {
         eligible: false,
         reason: "git HEAD changed discontinuously (full cold session:start required)",
@@ -511,6 +635,206 @@ function restampSteps(
     };
   }
   return out;
+}
+
+/**
+ * Finalize-owed session gate (#4919 Recut item 7).
+ * Private tip fetch (not allowOptionalNetwork). Prints full inventory on any
+ * non-backlog hit; blocks mutation on owed/close-owed/stale/stale-unverified
+ * unless deferred.
+ */
+function resolveFinalizeOwedRepo(
+  projectRoot: string,
+  env: NodeJS.ProcessEnv,
+  runGit: GitRunner,
+): string {
+  const fromEnv = (env.GH_REPO ?? env.GITHUB_REPOSITORY ?? "").trim();
+  if (fromEnv.length > 0) {
+    return fromEnv;
+  }
+  const remote = runGit(projectRoot, ["remote", "get-url", "origin"]);
+  if (remote.code !== 0 || remote.stdout.trim().length === 0) {
+    return "";
+  }
+  return parseGitHubRemoteRepo(remote.stdout.trim()) ?? "";
+}
+
+/** #5145/#5171: defer reason when dest inherits a primary finalize-owed record (block-suppress only). */
+export const PRIMARY_INHERITED_DEFER_OWED_REASON = "primary-finalize-owed";
+
+function inheritDeferOwedFromPrimary(
+  projectRoot: string,
+  options: Pick<SessionStartOptions, "runGit" | "isLinkedWorktree">,
+): string | null {
+  const linkedProbe = options.isLinkedWorktree ?? isLinkedWorktreePath;
+  if (!linkedProbe(projectRoot)) {
+    return null;
+  }
+  const primary = mainWorktreeRoot(projectRoot, options.runGit ?? undefined);
+  if (primary === null) {
+    return null;
+  }
+  try {
+    if (resolve(primary) === resolve(projectRoot)) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const [state] = readRitualState(primary);
+  if (state === null) {
+    return null;
+  }
+  // Refuse stale primary ritual: HEAD drift or age beyond sessionRitualStalenessHours.
+  const runGit = options.runGit ?? defaultGitRunner;
+  const headResult = gitHead(primary, runGit);
+  const primaryHead = (headResult.head ?? "").trim();
+  if (primaryHead.length === 0 || state.gitHead !== primaryHead) {
+    return null;
+  }
+  const staleness = resolveSessionRitualStalenessHours(primary);
+  // Invalid sessionRitualStalenessHours must not soft-fallback into Prefer-A inherit.
+  if (staleness.source === "default-on-error") {
+    return null;
+  }
+  const { hours } = staleness;
+  const ageMs = Date.now() - state.startedAt.getTime();
+  if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > hours * 60 * 60 * 1000) {
+    return null;
+  }
+  // session:start writes finalize_owed at ritual-state top level (not gated_steps).
+  const step = state.raw.finalize_owed;
+  if (step === undefined || step === null || typeof step !== "object" || Array.isArray(step)) {
+    return null;
+  }
+  const rec = step as Record<string, unknown>;
+  const deferred = rec.deferred_reason;
+  if (typeof deferred === "string" && deferred.trim().length > 0) {
+    return `primary:${deferred.trim()}`;
+  }
+  if (rec.ok === true) {
+    return PRIMARY_INHERITED_DEFER_OWED_REASON;
+  }
+  return null;
+}
+
+function resolveEffectiveDeferOwedReason(
+  projectRoot: string,
+  options: Pick<SessionStartOptions, "deferOwedReason" | "isLinkedWorktree" | "runGit">,
+): string | null {
+  if (typeof options.deferOwedReason === "string" && options.deferOwedReason.trim().length > 0) {
+    return options.deferOwedReason.trim();
+  }
+  // Dest may inherit defer reason from primary finalize_owed (deferred or ok).
+  // Inheritance suppresses blocks only; inventory still runs (#5171).
+  return inheritDeferOwedFromPrimary(projectRoot, options);
+}
+
+export function evaluateFinalizeOwedSessionGate(
+  projectRoot: string,
+  options: Pick<
+    SessionStartOptions,
+    "probeFinalizeOwed" | "runGit" | "env" | "deferOwedReason" | "isLinkedWorktree"
+  >,
+): {
+  lines: string[];
+  blocks: boolean;
+  unknown: boolean;
+  deferred: boolean;
+  deferReason: string | null;
+} {
+  const deferReason = resolveEffectiveDeferOwedReason(projectRoot, options);
+  const deferred = deferReason !== null;
+  // #5171: reverse Prefer-A #5145 inventory skip. Defer / dest-inherit only clear
+  // blocks after a real inventory (blocks: blocking && !deferred). Inventory stays
+  // on every mutation session:start / --rearm; no first-ship day-cache.
+  if (options.probeFinalizeOwed !== undefined) {
+    const probed = options.probeFinalizeOwed(projectRoot);
+    const lines = [...probed.lines];
+    if (probed.blocks && deferred && deferReason !== null) {
+      lines.push(`finalize owed deferred: ${deferReason}`);
+    }
+    if (probed.blocks && !deferred) {
+      lines.push(
+        "finalize owed blocks mutation: run `task swarm:finalize-owed` or pass --defer-owed <reason>",
+      );
+    }
+    return {
+      lines,
+      blocks: probed.blocks && !deferred,
+      unknown: probed.unknown,
+      deferred,
+      deferReason: deferred ? deferReason : null,
+    };
+  }
+  const runGit = options.runGit ?? defaultGitRunner;
+  const env = options.env ?? process.env;
+  const delivery = resolveDeliveryBranch(projectRoot, runGit).branch;
+  const fetched = fetchDeliveryTipPrivate(projectRoot, delivery, runGit);
+  if (fetched.tip === null) {
+    // Preserve operator deferral so linked dests can inherit it (#5172 P1 / #5171).
+    const lines = ["finalize owed: unknown"];
+    if (deferred && deferReason !== null) {
+      lines.push(`finalize owed deferred: ${deferReason}`);
+    }
+    return {
+      lines,
+      blocks: false,
+      unknown: true,
+      deferred,
+      deferReason: deferred ? deferReason : null,
+    };
+  }
+  const repo = resolveFinalizeOwedRepo(projectRoot, env, runGit);
+  if (repo.length === 0) {
+    // Fail closed: tip is known but mutation cannot inventory owed without a repo (#4919).
+    const lines = [
+      "finalize owed: repo required (set GH_REPO / GITHUB_REPOSITORY or configure origin)",
+      "finalize owed blocks mutation: run `task swarm:finalize-owed` or pass --defer-owed <reason>",
+    ];
+    if (deferred && deferReason !== null) {
+      return {
+        lines: [
+          "finalize owed: repo required (set GH_REPO / GITHUB_REPOSITORY or configure origin)",
+          `finalize owed deferred: ${deferReason}`,
+        ],
+        blocks: false,
+        unknown: true,
+        deferred: true,
+        deferReason,
+      };
+    }
+    return {
+      lines,
+      blocks: true,
+      unknown: true,
+      deferred: false,
+      deferReason: null,
+    };
+  }
+  const inventory = discoverFinalizeOwed(projectRoot, {
+    repo,
+    deliveryBranch: delivery,
+    tip: fetched.tip,
+    runGit,
+  });
+  const lines = formatFinalizeOwedInventoryLines(inventory);
+  const blocking = inventoryHasBlockingOwed(inventory);
+  if (blocking && deferred && deferReason !== null) {
+    lines.push(`finalize owed deferred: ${deferReason}`);
+  }
+  if (blocking && !deferred) {
+    lines.push(
+      "finalize owed blocks mutation: run `task swarm:finalize-owed` or pass --defer-owed <reason>",
+    );
+  }
+  return {
+    lines,
+    blocks: blocking && !deferred,
+    unknown: false,
+    deferred,
+    deferReason: deferred ? deferReason : null,
+  };
 }
 
 /** Resolve whether optional session:start network work is enabled (#2991). */
@@ -921,6 +1245,47 @@ function occupancyReport(occupancy: OccupancyDecision): {
   };
 }
 
+function priorRitualSessionId(prior: RitualState | null | undefined): string | null {
+  if (prior == null) return null;
+  if (typeof prior.sessionId === "string" && prior.sessionId.length > 0) {
+    return prior.sessionId;
+  }
+  const rawId = prior.raw?.session_id;
+  return typeof rawId === "string" && rawId.length > 0 ? rawId : null;
+}
+
+function priorRitualBelongsToAdmittedSession(
+  prior: RitualState | null | undefined,
+  sessionId: string | undefined,
+): boolean {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return false;
+  const priorId = priorRitualSessionId(prior);
+  return priorId !== null && priorId === sessionId;
+}
+
+/**
+ * Closed `trigger` for a cold `session_start` JSONL line (#3921).
+ * Resolve from occupancy + the ritual that existed *before* writeRitualState
+ * (the write clears compact_resume_at). Orthogonal to ceremony_tier.
+ * Compact / re-arm markers apply only when that prior ritual belongs to the
+ * admitted sessionId; a leftover marker after lease expiry is `cold`.
+ */
+export function resolveSessionStartTrigger(input: {
+  readonly occupancyAction?: OccupancyDecision["action"];
+  readonly priorRitual?: RitualState | null;
+  readonly sessionId?: string;
+}): SessionStartTrigger {
+  if (input.occupancyAction === "stolen") return "steal-recover";
+  const raw = input.priorRitual?.raw;
+  const sameSession = priorRitualBelongsToAdmittedSession(input.priorRitual, input.sessionId);
+  if (sameSession && typeof raw?.compact_resume_at === "string") return "post-compact";
+  if (input.occupancyAction === "heartbeat" && input.priorRitual != null) {
+    return "mutation-intent";
+  }
+  if (sameSession && raw?.rearm_needed === true) return "rearm-forced-cold";
+  return "cold";
+}
+
 function occupancyDeniedResult(
   occupancy: OccupancyDecision,
   environment: EnvironmentContext,
@@ -979,6 +1344,8 @@ function runReadOnlySessionStart(
   lines.push(READ_ONLY_ALIGNMENT_MESSAGE);
   lines.push(userMdLine);
   lines.push(formatEnvironmentContext(environment));
+  const readOnlyOwnership = evaluateWslOwnershipGuard({ projectRoot });
+  lines.push(...readOnlyOwnership.sessionWarnLines);
   lines.push(...formatScmReadinessLines(scm));
   lines.push(...hostSurface.lines);
   lines.push(...effortBudget.lines);
@@ -1005,6 +1372,7 @@ function runReadOnlySessionStart(
       diagnostic: userMd.diagnostic,
     },
     environment: environmentContextToDict(environment),
+    wsl_ownership_guard: ownershipGuardToDict(readOnlyOwnership),
     scm: scmReadinessToDict(scm),
     host_content_surface: hostContentSurfaceToDict(hostSurface.report),
     effort_budget: effortBudgetToDict(effortBudget.budget),
@@ -1187,6 +1555,34 @@ function runSessionRearm(
   ];
   pushLifecycleVisibleAdvisory(lines, projectRoot, options, runGit);
 
+  // #4919: re-arm also runs the finalize-owed gate (private tip fetch).
+  const owedGate = evaluateFinalizeOwedSessionGate(projectRoot, options);
+  lines.push(...owedGate.lines);
+  if (owedGate.blocks) {
+    emitSessionStartProcessCost(
+      {
+        ceremonyTier: REARM_CEREMONY_TIER,
+        durationMs: elapsedMs(overallStarted),
+        exitCode: 1,
+        ready: false,
+        optionalNetwork: false,
+      },
+      { projectRoot },
+    );
+    return {
+      code: 1,
+      payload: {
+        ready: false,
+        exit_code: 1,
+        ceremony_tier: REARM_CEREMONY_TIER,
+        environment: environmentContextToDict(environment),
+        finalize_owed_blocked: true,
+        message: "finalize owed blocks mutation",
+      },
+      lines,
+    };
+  }
+
   // Light branch-policy disclosure (local only) so re-arm still surfaces policy state.
   const policyResult = resolvePolicy(projectRoot);
   const policyMessage = disclosureLine(policyResult);
@@ -1290,6 +1686,15 @@ function runSessionRearm(
       gatedSteps,
     }),
     ceremony_tier: REARM_CEREMONY_TIER,
+    ...(owedGate.deferReason !== null
+      ? {
+          finalize_owed: ritualStep({
+            ok: true,
+            deferredReason: owedGate.deferReason,
+            message: `finalize owed deferred: ${owedGate.deferReason}`,
+          }),
+        }
+      : {}),
   };
   let statePath: string;
   try {
@@ -1703,6 +2108,16 @@ export function runSessionStart(
   }
   lines.push(formatEnvironmentContext(environment));
 
+  // #1617: WSL root-runtime ownership soft warn (never blocks session:start).
+  // Emits resolved intended filesystem project-owner (uid:gid + account).
+  const ownershipStepStarted = performance.now();
+  const ownershipVerdict = evaluateWslOwnershipGuard({ projectRoot });
+  lines.push(...ownershipVerdict.sessionWarnLines);
+  stepTimings.push({
+    name: "wsl_ownership_guard",
+    duration_ms: elapsedMs(ownershipStepStarted),
+  });
+
   // #2275: SCM tooling + auth readiness — shallow on hot path, deep with --with-network.
   // Never fails session:start; reports which SCM-dependent gates are skipped.
   const scmStepStarted = performance.now();
@@ -2035,6 +2450,36 @@ export function runSessionStart(
     lines.push(consentPrompt.trimEnd());
   }
 
+  // #4919: finalize-owed gate (private tip fetch; not allowOptionalNetwork).
+  const owedGate = evaluateFinalizeOwedSessionGate(projectRoot, options);
+  lines.push(...owedGate.lines);
+  if (owedGate.blocks) {
+    emitSessionStartProcessCost(
+      {
+        ceremonyTier: COLD_CEREMONY_TIER,
+        durationMs: elapsedMs(overallStarted),
+        exitCode: 1,
+        ready: false,
+        optionalNetwork: allowOptionalNetwork,
+        steps: stepTimings,
+      },
+      { projectRoot },
+    );
+    return {
+      code: 1,
+      payload: {
+        ready: false,
+        exit_code: 1,
+        posture: MUTATION_POSTURE,
+        ceremony_tier: COLD_CEREMONY_TIER,
+        environment: environmentContextToDict(environment),
+        finalize_owed_blocked: true,
+        message: "finalize owed blocks mutation",
+      },
+      lines,
+    };
+  }
+
   const writeStarted = performance.now();
   const persistedOccupancy = persistOccupancyOrDeny(
     projectRoot,
@@ -2076,7 +2521,18 @@ export function runSessionStart(
     ceremony_dial: dialDict,
     // #3282: durable preflight snapshot for harness / later check degraded mode.
     ...(preflightDict !== null ? { toolchain_preflight: preflightDict } : {}),
+    ...(owedGate.deferReason !== null
+      ? {
+          finalize_owed: ritualStep({
+            ok: true,
+            deferredReason: owedGate.deferReason,
+            message: `finalize owed deferred: ${owedGate.deferReason}`,
+          }),
+        }
+      : {}),
   };
+  // Capture prior ritual before writeRitualState clears compact_resume_at (#3921).
+  const [priorRitual] = readRitualState(projectRoot);
   let statePath: string;
   try {
     statePath = (options.writeRitualState ?? writeRitualState)(projectRoot, payload);
@@ -2127,6 +2583,11 @@ export function runSessionStart(
         env: options.env,
       });
       emitter.emitSessionStart({
+        trigger: resolveSessionStartTrigger({
+          occupancyAction: persistedOccupancy.action,
+          priorRitual,
+          sessionId: coldSessionId,
+        }),
         ceremony_dial: dialDict,
         preflight: preflightDict ?? undefined,
         ceremony_tier: COLD_CEREMONY_TIER,
@@ -2237,6 +2698,7 @@ export function runSessionStart(
       diagnostic: userMd.diagnostic,
     },
     environment: environmentContextToDict(environment),
+    wsl_ownership_guard: ownershipGuardToDict(ownershipVerdict),
     scm: scmReadinessToDict(scm),
     host_content_surface: hostContentSurfaceToDict(hostSurface.report),
     effort_budget: effortBudgetToDict(effortBudget.budget),

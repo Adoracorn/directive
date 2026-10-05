@@ -25,6 +25,18 @@ export {
   taskDefinedInTaskfileYaml,
 } from "./consumer-gate-integrity.js";
 export {
+  type AgentsMdReadResult,
+  CONSUMER_HEADER_COMPLETION_CHOKEPOINT_ID,
+  CONSUMER_HEADER_COMPLETION_CHOKEPOINT_REMEDY,
+  CONSUMER_HEADER_PLACEHOLDER_GATE_ID,
+  type CompletionChokepointSeams,
+  type ConsumerHeaderCompletionChokepointResult,
+  type ConsumerHeaderPlaceholderSeams,
+  enforceConsumerHeaderPlaceholderAtCompletionChokepoint,
+  evaluateConsumerHeaderPlaceholderAtRoot,
+  readConfirmedOverviewAtRoot,
+} from "./consumer-header-placeholder.js";
+export {
   type CheckGateSpec,
   CONSUMER_CHECK_GATES,
   checkGateId,
@@ -54,6 +66,22 @@ export {
   isFrameworkSourceContext,
   resolveCheckTarget,
 } from "./orchestrator.js";
+export {
+  CHECK_EMPTY_PLANNING_NARRATIVES_GATE_ID,
+  type CheckPersistedPlanningNarrativesSeams,
+  checkRejectsEmptyPlanningNarratives,
+  evaluateCheckPersistedPlanningNarratives,
+} from "./persisted-planning-narratives-gate.js";
+export {
+  lookupProductMutationCompletion,
+  PRODUCT_MUTATION_COMPLETION_MARKER_REL,
+  type ProductMutationCompletionLookup,
+  type ProductMutationCompletionMarker,
+  productMutationCompletionAtRoot,
+  productMutationCompletionMarkerPath,
+  type RecordProductMutationCompletionResult,
+  recordProductMutationCompletion,
+} from "./product-mutation-completion.js";
 export {
   detectTestRunner,
   type RunnerDetectResult,

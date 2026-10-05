@@ -13,10 +13,15 @@ export {
 export {
   type EngineInfo,
   PLAN_ITEM_EFFORTS,
+  PLAN_ITEM_STOP_CONDITION_KINDS,
+  PLAN_ITEM_STOP_CONDITION_OBSERVE_AT,
   type Plan,
   type PlanArchitecture,
   type PlanItem,
   type PlanItemEffort,
+  type PlanItemStopConditionAnchor,
+  type PlanItemStopConditionKind,
+  type PlanItemStopConditionObserveAt,
   type VBriefDocument,
   type VBriefInfo,
 } from "./document.js";
@@ -51,6 +56,7 @@ export {
   type KnownReferenceType,
   RESERVED_REFERENCE_TYPE_ALIASES,
   referenceTypeMatches,
+  TRUST_LEVELS,
   type TrustLevel,
   type UnknownReservedReferenceType,
   type VBriefReference,

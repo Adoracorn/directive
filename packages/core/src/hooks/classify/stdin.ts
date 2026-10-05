@@ -3,11 +3,19 @@
  * No process I/O — operates on an already-read string.
  */
 
-import { firstString, landProcessOnlyFlagOnToolInput, record, toolInputRecord } from "./payload.js";
+import { isApplyPatchTool } from "../tools.js";
+import {
+  fieldString,
+  firstString,
+  landProcessOnlyFlagOnToolInput,
+  record,
+  toolInputRecord,
+} from "./payload.js";
 import type { ParsedHookPayload } from "./types.js";
 
 const UTF8_BOM = "\uFEFF";
 const APPLY_PATCH_BEGIN_MARKER = "*** Begin Patch";
+const APPLY_PATCH_END_MARKER = "*** End Patch";
 /** Single-file Add/Update only — other *** … File: ops must fail closed (#2738 Greptile). */
 const APPLY_PATCH_MUTATION_LINE_RE =
   /^\*\*\* (Add File|Update File|Delete File|Move File|Rename File): (.+)$/gm;
@@ -42,8 +50,16 @@ export function applyPatchMutationPaths(text: string): string[] {
   return paths;
 }
 
+/** Canonical apply_patch envelope: Begin marker, then End marker (#5129). */
+export function applyPatchHasCanonicalEnvelope(text: string): boolean {
+  const begin = text.indexOf(APPLY_PATCH_BEGIN_MARKER);
+  if (begin < 0) return false;
+  const end = text.indexOf(APPLY_PATCH_END_MARKER, begin + APPLY_PATCH_BEGIN_MARKER.length);
+  return end >= 0;
+}
+
 function trySynthesizeFreeFormApplyPatch(normalized: string): ParsedHookPayload | null {
-  if (!normalized.includes(APPLY_PATCH_BEGIN_MARKER)) return null;
+  if (!applyPatchHasCanonicalEnvelope(normalized)) return null;
   const mutations: { op: string; path: string }[] = [];
   for (const match of normalized.matchAll(APPLY_PATCH_MUTATION_LINE_RE)) {
     const op = match[1];
@@ -83,18 +99,92 @@ function declaredWritePathFromParsed(payload: unknown): string | null {
   ]);
 }
 
-function applyPatchBodyTextFromParsed(payload: unknown): string | null {
+const APPLY_PATCH_BODY_KEYS = ["patch", "unified_diff", "diff"] as const;
+
+/**
+ * Declared ApplyPatch tool name — not inferred from command text.
+ * Same normalizer as dispatcher `isApplyPatchTool` so `apply-patch` admits
+ * command-body harvest (#5094 Greptile).
+ */
+function payloadDeclaresApplyPatchTool(payload: Record<string, unknown>): boolean {
+  const toolObject = record(payload.tool);
+  const toolCall = record(payload.tool_call) ?? record(payload.toolCall);
+  const name =
+    fieldString(payload, "tool_name") ??
+    fieldString(payload, "toolName") ??
+    fieldString(payload, "tool") ??
+    (toolObject !== null ? fieldString(toolObject, "name") : null) ??
+    (toolCall !== null ? fieldString(toolCall, "name") : null);
+  return name !== null && isApplyPatchTool(name);
+}
+
+function pushUniqueBodyText(into: string[], value: unknown): void {
+  if (typeof value !== "string") return;
+  const text = value.trim();
+  if (text.length === 0 || into.includes(text)) return;
+  into.push(text);
+}
+
+/**
+ * Declared-ApplyPatch freeform `input` strings: nested `tool_input.input` and
+ * top-level string `payload.input`. Not raw-string `tool_input` (#5129).
+ */
+function harvestedDeclaredApplyPatchInputTexts(payload: unknown): string[] {
   const input = record(payload);
-  if (input === null) return null;
+  if (input === null || !payloadDeclaresApplyPatchTool(input)) return [];
   const toolInput = toolInputRecord(input);
-  return firstString([
-    toolInput?.patch,
-    toolInput?.unified_diff,
-    toolInput?.diff,
-    input.patch,
-    input.unified_diff,
-    input.diff,
-  ]);
+  const texts: string[] = [];
+  if (toolInput !== null) pushUniqueBodyText(texts, toolInput.input);
+  pushUniqueBodyText(texts, input.input);
+  return texts;
+}
+
+/**
+ * True when a declared ApplyPatch harvested an `input` shape that is not a
+ * canonical envelope with at least one mutation target (#5129). Scoped to those
+ * shapes so declared-path-only and patch/unified_diff/diff stay as landed.
+ */
+export function applyPatchHarvestedInputUnclassified(payload: unknown): boolean {
+  const texts = harvestedDeclaredApplyPatchInputTexts(payload);
+  if (texts.length === 0) return false;
+  for (const text of texts) {
+    if (!applyPatchHasCanonicalEnvelope(text)) return true;
+    if (applyPatchMutationPaths(text).length === 0) return true;
+  }
+  return false;
+}
+
+/**
+ * ApplyPatch body field texts. `command` is admitted only when the payload
+ * declares an ApplyPatch tool (`isApplyPatchTool`) — never via host-agnostic
+ * firstString, and never for Shell/Bash command strings (#5094). String
+ * `tool_input.input` / top-level `input` join the same declared-tool branch
+ * when they carry a canonical Begin/End envelope (#5129).
+ */
+export function applyPatchBodyFieldTexts(payload: unknown): string[] {
+  const input = record(payload);
+  if (input === null) return [];
+  const toolInput = toolInputRecord(input);
+  const texts: string[] = [];
+  for (const key of APPLY_PATCH_BODY_KEYS) {
+    if (toolInput !== null) pushUniqueBodyText(texts, toolInput[key]);
+    pushUniqueBodyText(texts, input[key]);
+  }
+  if (payloadDeclaresApplyPatchTool(input)) {
+    if (toolInput !== null) pushUniqueBodyText(texts, toolInput.command);
+    pushUniqueBodyText(texts, input.command);
+    for (const text of harvestedDeclaredApplyPatchInputTexts(input)) {
+      if (applyPatchHasCanonicalEnvelope(text)) pushUniqueBodyText(texts, text);
+    }
+  }
+  return texts;
+}
+
+/** Union of present ApplyPatch body fields as one parseable blob. */
+export function applyPatchBodyTextFromParsed(payload: unknown): string | null {
+  const texts = applyPatchBodyFieldTexts(payload);
+  if (texts.length === 0) return null;
+  return texts.join("\n");
 }
 
 function withToolInputPath(parsed: unknown, path: string): unknown {

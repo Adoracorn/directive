@@ -5,7 +5,10 @@ import { containedRemove, containedRename, containedWrite } from "../fs/containe
 import type { HookEvent, HookHost } from "../hooks/dispatcher.js";
 import {
   DIRECT_WRITE_HOOK_MATCHER,
+  GROK_MUTATION_TOOL_CATALOG,
+  KILL_HOOK_MATCHER,
   MCP_HOOK_MATCHER,
+  matcherHasLiteralToken,
   SHELL_HOOK_MATCHER,
   SPAWN_HOOK_MATCHER,
 } from "../hooks/tools.js";
@@ -53,16 +56,39 @@ export const CURSOR_SESSION_HOOK_TIMEOUT_SECONDS = 5;
  */
 export const CURSOR_TOOL_BEFORE_TIMEOUT_SECONDS = 30;
 
-/** Nested Claude/Grok/Codex command-hook default timeout (seconds). */
+/**
+ * Nested Claude/Grok/Codex tool.before deposit timeout (seconds).
+ *
+ * Same readiness ceiling as CURSOR_TOOL_BEFORE_TIMEOUT_SECONDS: mutation
+ * tool.before re-runs gated ritual + live agent-hook readiness (~24s fixture
+ * ceiling). Nested hosts were left at 5s after #3246 raised Cursor, so a
+ * post-ritual deny rendered after the host kill (#3739).
+ */
+export const NESTED_TOOL_BEFORE_TIMEOUT_SECONDS = CURSOR_TOOL_BEFORE_TIMEOUT_SECONDS;
+
+/** Nested Claude/Grok/Codex session.start / session.compact timeout (seconds). */
 export const NESTED_HOOK_TIMEOUT_SECONDS = 5;
 
 export type AgentHookPath = (typeof AGENT_HOOK_PATHS)[number];
 
-/** Matchers write merge and inspect valid() share so they cannot drift (#4692). */
+/**
+ * Matchers write merge and non-grok inspect valid() share so they cannot drift (#4692).
+ * Grok direct-write registration is the deliberate host===grok exception (#4574):
+ * token presence over GROK_MUTATION_TOOL_CATALOG.directWrite, not exact-equality.
+ */
 const NESTED_PRE_TOOL_MATCHERS = [
   DIRECT_WRITE_HOOK_MATCHER,
   SPAWN_HOOK_MATCHER,
   SHELL_HOOK_MATCHER,
+  KILL_HOOK_MATCHER,
+  MCP_HOOK_MATCHER,
+] as const;
+
+/** Spawn/shell/kill/MCP stay on exact-equality for every nested host, including grok. */
+const NESTED_NON_DIRECT_WRITE_MATCHERS = [
+  SPAWN_HOOK_MATCHER,
+  SHELL_HOOK_MATCHER,
+  KILL_HOOK_MATCHER,
   MCP_HOOK_MATCHER,
 ] as const;
 
@@ -104,6 +130,7 @@ function object(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+/** Bare PATH name hosts invoke; Windows .cmd reachability is #4654/#4659, not Bypass. */
 function command(host: HookHost, event: HookEvent): string {
   return `${DEFT_HOOK_COMMAND_MARKER} --host ${host} --event ${event}`;
 }
@@ -191,7 +218,10 @@ function nestedGroup(host: NestedHookHost, event: HookEvent, matcher?: string) {
       {
         type: "command",
         command: command(host, event),
-        timeout: NESTED_HOOK_TIMEOUT_SECONDS,
+        timeout:
+          event === "tool.before"
+            ? NESTED_TOOL_BEFORE_TIMEOUT_SECONDS
+            : NESTED_HOOK_TIMEOUT_SECONDS,
       },
     ],
   };
@@ -520,6 +550,57 @@ function hasSessionStartRegistration(config: Record<string, unknown>, host: Hook
   return host === "cursor" ? hasCursorSessionStart(config) : hasNestedSessionStart(config, host);
 }
 
+/** #3739: nested tool.before health must require the readiness timeout, like Cursor. */
+function nestedToolBeforeTimeoutOk(entry: unknown, toolCommand: string): boolean {
+  const group = object(entry);
+  if (group === null || !Array.isArray(group.hooks)) return false;
+  return group.hooks.some((candidate) => {
+    const hook = object(candidate);
+    return (
+      typeof hook?.command === "string" &&
+      hook.command === toolCommand &&
+      hook.timeout === NESTED_TOOL_BEFORE_TIMEOUT_SECONDS
+    );
+  });
+}
+
+function hasExactPreToolMatchers(
+  preTool: readonly unknown[],
+  toolCommand: string,
+  matchers: readonly string[],
+): boolean {
+  return matchers.every((matcher) =>
+    preTool.some((entry) => {
+      const group = object(entry);
+      return (
+        group?.matcher === matcher &&
+        nestedCommands(entry).includes(toolCommand) &&
+        nestedToolBeforeTimeoutOk(entry, toolCommand)
+      );
+    }),
+  );
+}
+
+/**
+ * Grok direct-write health (#4574): managed tool.before matcher must carry each
+ * GROK_MUTATION_TOOL_CATALOG.directWrite token. Not exact-equality on
+ * DIRECT_WRITE_HOOK_MATCHER, and not matcher === "write|search_replace".
+ */
+function hasGrokDirectWriteRegistration(preTool: readonly unknown[], toolCommand: string): boolean {
+  return GROK_MUTATION_TOOL_CATALOG.directWrite.every((token) =>
+    preTool.some((entry) => {
+      const group = object(entry);
+      const matcher = group?.matcher;
+      return (
+        typeof matcher === "string" &&
+        nestedCommands(entry).includes(toolCommand) &&
+        matcherHasLiteralToken(matcher, token) &&
+        nestedToolBeforeTimeoutOk(entry, toolCommand)
+      );
+    }),
+  );
+}
+
 function hasNestedRegistration(
   config: Record<string, unknown>,
   host: NestedHookHost,
@@ -530,14 +611,12 @@ function hasNestedRegistration(
   const preTool = Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [];
   const toolCommand = command(host, "tool.before");
   const compactCommand = command(host, "session.compact");
-  const base =
-    hasNestedSessionStart(config, host) &&
-    NESTED_PRE_TOOL_MATCHERS.every((matcher) =>
-      preTool.some((entry) => {
-        const group = object(entry);
-        return group?.matcher === matcher && nestedCommands(entry).includes(toolCommand);
-      }),
-    );
+  const preToolOk =
+    host === "grok"
+      ? hasGrokDirectWriteRegistration(preTool, toolCommand) &&
+        hasExactPreToolMatchers(preTool, toolCommand, NESTED_NON_DIRECT_WRITE_MATCHERS)
+      : hasExactPreToolMatchers(preTool, toolCommand, NESTED_PRE_TOOL_MATCHERS);
+  const base = hasNestedSessionStart(config, host) && preToolOk;
   if (!base) return false;
   if (!options.compact) return true;
   const preCompact = Array.isArray(hooks.PreCompact) ? hooks.PreCompact : [];

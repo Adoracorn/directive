@@ -11,6 +11,10 @@ export interface GitRunResult {
 
 export type GitRunner = (projectRoot: string, args: readonly string[]) => GitRunResult;
 
+/** Recovery copy when spawnSync git fails with EPERM under a host sandbox (#4664). */
+export const CODEX_RITUAL_GIT_EPERM_TIP =
+  "git spawn EPERM (Codex sandbox?): approve outside-sandbox for ritual git once via Codex TUI /approvals; see README Codex ritual git";
+
 function coerceGitBytes(value: unknown): Buffer {
   if (Buffer.isBuffer(value)) return value;
   if (typeof value === "string") return Buffer.from(value, "utf8");
@@ -44,6 +48,24 @@ function execGit(projectRoot: string, args: readonly string[], timeoutMs?: numbe
     };
     if (e.code === "ENOENT") {
       return { code: 127, stdout: "", stderr: "git executable not found on PATH" };
+    }
+    // #4664: spawn EPERM is not a git exit. Always code 2 — never 0
+    // (false ancestry) or 1 (false history drift for gitIsAncestor).
+    // Keep original diagnostic and point at the Codex ritual-git tip.
+    if (e.code === "EPERM") {
+      const detail = resolveCaptureFailureStderr({
+        captured: coerceGitBytes(e.stderr).toString("utf8").trimEnd(),
+        status: e.status,
+        message: e.message,
+      });
+      return {
+        code: 2,
+        stdout: gitStdoutString(coerceGitBytes(e.stdout), args),
+        stderr:
+          detail.length > 0
+            ? `${detail}\n${CODEX_RITUAL_GIT_EPERM_TIP}`
+            : CODEX_RITUAL_GIT_EPERM_TIP,
+      };
     }
     return {
       code: typeof e.status === "number" ? e.status : 2,
@@ -310,21 +332,30 @@ function showBlobViaRunner(
 }
 
 /**
- * Read many `tip:path` blobs in one `git cat-file --batch` process.
- * Falls back to per-path `git show` only when the batch stream cannot be
- * parsed, so verdicts stay content-authoritative.
+ * How `showBlobsBatch` recovers when `git cat-file --batch` misses.
+ * - `legacy-fallback`: per-path `git show` for every requested path (historical).
+ * - `chunk-retry`: bisect the path list and retry; only a size-1 miss may
+ *   use one `git show`. Whole-N show fallback is forbidden (#5171).
  */
-export function showBlobsBatch(
+export type ShowBlobsBatchOnMiss = "legacy-fallback" | "chunk-retry";
+
+export interface ShowBlobsBatchOptions {
+  readonly onBatchMiss?: ShowBlobsBatchOnMiss;
+}
+
+type CatFileBatchAttempt =
+  | { readonly kind: "ok"; readonly map: Map<string, string | null> }
+  | { readonly kind: "spawn-fail" }
+  | { readonly kind: "parse-fail" };
+
+function tryCatFileBatch(
   projectRoot: string,
   tip: string,
   paths: readonly string[],
-  runGit: GitRunner = defaultGitRunner,
-): Map<string, string | null> {
-  const out = new Map<string, string | null>();
+): CatFileBatchAttempt {
   if (paths.length === 0) {
-    return out;
+    return { kind: "ok", map: new Map() };
   }
-
   const input = Buffer.from(`${paths.map((path) => `${tip}:${path}`).join("\n")}\n`, "utf8");
   const result = spawnSync("git", ["cat-file", "--batch"], {
     cwd: projectRoot,
@@ -332,11 +363,89 @@ export function showBlobsBatch(
     maxBuffer: GIT_CAT_FILE_BATCH_MAX_BUFFER,
     windowsHide: true,
   });
-  if (result.error === undefined && result.status === 0 && result.stdout !== undefined) {
-    const parsed = parseGitCatFileBatch(coerceGitBytes(result.stdout), paths);
-    if (parsed !== null) {
-      return parsed;
+  if (result.error !== undefined) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    // maxBuffer / ENOBUFS is a size truncate signal — bisect, do not treat as hard spawn death.
+    if (code === "ENOBUFS" || /maxBuffer/i.test(result.error.message)) {
+      return { kind: "parse-fail" };
     }
+    return { kind: "spawn-fail" };
+  }
+  if (result.status !== 0 || result.stdout === undefined) {
+    return { kind: "spawn-fail" };
+  }
+  const parsed = parseGitCatFileBatch(coerceGitBytes(result.stdout), paths);
+  if (parsed === null) {
+    return { kind: "parse-fail" };
+  }
+  return { kind: "ok", map: parsed };
+}
+
+function showBlobsBatchChunkRetry(
+  projectRoot: string,
+  tip: string,
+  paths: readonly string[],
+  runGit: GitRunner,
+): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  if (paths.length === 0) {
+    return out;
+  }
+  const attempt = tryCatFileBatch(projectRoot, tip, paths);
+  if (attempt.kind === "ok") {
+    return attempt.map;
+  }
+  // Persistent cat-file spawn failure: one flat show layer — never bisect into 2N-1 batches (#5172 P2).
+  if (attempt.kind === "spawn-fail") {
+    for (const path of paths) {
+      out.set(path, showBlobViaRunner(projectRoot, tip, path, runGit));
+    }
+    return out;
+  }
+  // Truncate/parse miss only: bisect. Size-1 may use one git show.
+  if (paths.length === 1) {
+    const only = paths[0]!;
+    out.set(only, showBlobViaRunner(projectRoot, tip, only, runGit));
+    return out;
+  }
+  const mid = Math.floor(paths.length / 2);
+  const left = showBlobsBatchChunkRetry(projectRoot, tip, paths.slice(0, mid), runGit);
+  const right = showBlobsBatchChunkRetry(projectRoot, tip, paths.slice(mid), runGit);
+  for (const [path, body] of left) {
+    out.set(path, body);
+  }
+  for (const [path, body] of right) {
+    out.set(path, body);
+  }
+  return out;
+}
+
+/**
+ * Read many `tip:path` blobs in one `git cat-file --batch` process.
+ * Default recovers with per-path `git show` when the batch stream cannot be
+ * parsed. Pass `onBatchMiss: "chunk-retry"` for finalize-owed inventory so a
+ * truncate/parse miss bisects instead of silently reintroducing O(n) show (#5171).
+ */
+export function showBlobsBatch(
+  projectRoot: string,
+  tip: string,
+  paths: readonly string[],
+  runGit: GitRunner = defaultGitRunner,
+  options: ShowBlobsBatchOptions = {},
+): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  if (paths.length === 0) {
+    return out;
+  }
+
+  const onMiss: ShowBlobsBatchOnMiss = options.onBatchMiss ?? "legacy-fallback";
+  if (onMiss === "chunk-retry") {
+    return showBlobsBatchChunkRetry(projectRoot, tip, paths, runGit);
+  }
+
+  const attempt = tryCatFileBatch(projectRoot, tip, paths);
+  if (attempt.kind === "ok") {
+    return attempt.map;
   }
 
   for (const path of paths) {

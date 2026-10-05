@@ -11,6 +11,7 @@ import {
   resolveShaCurrency,
 } from "../content-contracts/skills/greptile-detector.js";
 import { resolveMinGreptileConfidence } from "../policy/min-greptile-confidence.js";
+import { resolveReviewers } from "../policy/reviewers.js";
 import { evaluateCiGate } from "../pr-merge-readiness/ci-gate.js";
 import { GREPTILE_ERRORED_SENTINEL } from "../pr-merge-readiness/constants.js";
 import {
@@ -22,9 +23,65 @@ import {
   fetchPrHeadShaRest,
   resolveRepo,
 } from "../pr-merge-readiness/gh.js";
-import { loadThinHtmlInlineFindings } from "../pr-merge-readiness/greptile-inline.js";
+import {
+  fetchUnresolvedGreptileInlineFindings,
+  type InlineGreptileFindings,
+  loadThinHtmlInlineFindings,
+} from "../pr-merge-readiness/greptile-inline.js";
+import {
+  botReviewCheckPresent,
+  evaluateReviewerExpectation,
+  reviewerConfigPresent,
+} from "../pr-merge-readiness/reviewer-presence.js";
 import type { RunGhFn } from "../pr-merge-readiness/types.js";
+import { isGreptileReviewInFlight } from "./greptile-sha-stall.js";
 import type { WatchProbe } from "./types.js";
+
+/** REST pulls lifecycle fields (#4288) — same `/pulls/<N>` surface as HEAD/mergeability. */
+export interface PrLifecycleRest {
+  readonly state: string | null;
+  readonly merged: boolean | null;
+  readonly error: string | null;
+}
+
+/**
+ * Fetch PR `state` / `merged` via REST `repos/.../pulls/<N>` (#4288).
+ * Returned failures only (no throw). Reuses the existing pulls REST path —
+ * not GraphQL `gh pr view --json`.
+ */
+export function fetchPrLifecycleRest(
+  prNumber: number,
+  repo: string,
+  runGh: RunGhFn,
+): PrLifecycleRest {
+  const rc = runGh(["gh", "api", `repos/${repo}/pulls/${prNumber}`]);
+  if (rc.returncode !== 0) {
+    return {
+      state: null,
+      merged: null,
+      error: `gh api /pulls/${prNumber} failed: ${rc.stderr.trim()}`,
+    };
+  }
+  if (!rc.stdout.trim()) {
+    return { state: null, merged: null, error: "empty body from gh api /pulls/<N>" };
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(rc.stdout) as unknown;
+  } catch (exc: unknown) {
+    const message = exc instanceof Error ? exc.message : String(exc);
+    return { state: null, merged: null, error: `could not parse PR JSON: ${message}` };
+  }
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return { state: null, merged: null, error: "unexpected PR JSON shape (not a dict)" };
+  }
+  const pr = payload as Record<string, unknown>;
+  const rawState = pr.state;
+  const state = typeof rawState === "string" ? rawState : null;
+  // GitHub emits boolean `merged`; coerce only when the key is present as boolean.
+  const merged = typeof pr.merged === "boolean" ? pr.merged : null;
+  return { state, merged, error: null };
+}
 
 function errorProbe(headSha: string | null, message: string): WatchProbe {
   return {
@@ -44,7 +101,42 @@ function errorProbe(headSha: string | null, message: string): WatchProbe {
     terminalCheckRun: false,
     isClean: false,
     cleanGateHoldout: null,
+    reviewerReadyState: null,
+    reviewCycleHandback: null,
+    prState: null,
+    prMerged: null,
     error: message,
+  };
+}
+
+/** Lifecycle-terminal probe: skip Greptile body / SHA-match holdout (#4288). */
+function lifecycleProbe(
+  headSha: string | null,
+  state: string | null,
+  merged: boolean | null,
+): WatchProbe {
+  return {
+    found: false,
+    headSha,
+    lastReviewedSha: null,
+    shaMatch: false,
+    confidence: null,
+    p0Count: 0,
+    p1Count: 0,
+    hasBlocking: false,
+    errored: false,
+    ciFailures: 0,
+    ciFailedChecks: [],
+    ciReadyState: null,
+    ciCapacityStalledChecks: [],
+    terminalCheckRun: false,
+    isClean: false,
+    cleanGateHoldout: null,
+    reviewerReadyState: null,
+    reviewCycleHandback: null,
+    prState: state,
+    prMerged: merged,
+    error: null,
   };
 }
 
@@ -80,6 +172,32 @@ export function probeOnce(
     return errorProbe(null, detail);
   }
 
+  // 1b. PR lifecycle short-circuit (#4288) — ahead of Greptile body / SHA-match.
+  // merged=true → MERGED (exit 0); closed+!merged → CLOSED_UNMERGED (exit 2).
+  // Open PRs (or unresolved lifecycle) fall through to today's Greptile path.
+  let prState: string | null = null;
+  let prMerged: boolean | null = null;
+  if (repo !== null) {
+    const lifecycle = fetchPrLifecycleRest(prNumber, repo, runGh);
+    if (lifecycle.error !== null) {
+      // Soft fail-closed (#4288): do not fall through to Greptile CLEAN, and do
+      // not terminal CONFIG on transient REST (429/503). Keep polling.
+      return {
+        ...lifecycleProbe(headSha, null, null),
+        cleanGateHoldout: "lifecycle_unknown",
+        error: null,
+      };
+    }
+    prState = lifecycle.state;
+    prMerged = lifecycle.merged;
+    if (prMerged === true) {
+      return lifecycleProbe(headSha, prState ?? "closed", true);
+    }
+    if (prState === "closed" && prMerged === false) {
+      return lifecycleProbe(headSha, "closed", false);
+    }
+  }
+
   // 2. Latest Greptile body -- primary jq path, then REST fallback.
   let body = fetchGreptileCommentBody(prNumber, repo, runGh);
   if (body === null && repo !== null) {
@@ -112,10 +230,17 @@ export function probeOnce(
   let ciCapacityStalledChecks: readonly string[] = [];
   let terminalCheckRun = true;
   let greptileReviewTerminal = false;
+  // Fail-closed (#5162 P1): unknown/unreachable check-run inventory is treated as
+  // in-flight so sticky tip-rot cannot false-escalate to GREPTILE_SHA_STALL.
+  let greptileReviewInFlight = repo !== null;
   let commentsAdded: number | null = null;
+  let checkRunsUnknown = true;
+  let botCheckPresent = false;
   if (repo !== null) {
     const check = fetchCheckRunsRest(headSha, repo, runGh);
     if (check.summary !== null) {
+      checkRunsUnknown = false;
+      botCheckPresent = botReviewCheckPresent(check.checkRuns);
       const ci = evaluateCiGate(check.checkRuns, {});
       ciFailedChecks = ci.summary.failed_required;
       ciFailures = ciFailedChecks.length;
@@ -127,16 +252,23 @@ export function probeOnce(
         greptileRun?.status,
         greptileRun?.conclusion,
       );
+      greptileReviewInFlight = isGreptileReviewInFlight(greptileRun?.status);
       commentsAdded = parseCommentsAdded(greptileRun?.summary);
     }
+    // summary === null → leave greptileReviewInFlight true (inventory unknown).
   }
 
+  // #3944: ordinary probes must load inline (not thin-HTML-only). Repo miss /
+  // lookup error is distinguishable non-clean — not a silent summary CLEAN.
+  let inlineFindings: InlineGreptileFindings | null = null;
+  if (repo !== null) {
+    inlineFindings = thinHtmlSummary
+      ? loadThinHtmlInlineFindings(prNumber, repo, headSha, runGh)
+      : fetchUnresolvedGreptileInlineFindings(prNumber, repo, headSha, runGh);
+  }
   let restPullComments: { p0Count: number; p1Count: number } | null = null;
-  if (thinHtmlSummary && repo !== null) {
-    const inline = loadThinHtmlInlineFindings(prNumber, repo, headSha, runGh);
-    if (inline.error === null) {
-      restPullComments = { p0Count: inline.p0Count, p1Count: inline.p1Count };
-    }
+  if (inlineFindings !== null && inlineFindings.error === null) {
+    restPullComments = { p0Count: inlineFindings.p0Count, p1Count: inlineFindings.p1Count };
   }
 
   const sha = resolveShaCurrency({
@@ -152,11 +284,34 @@ export function probeOnce(
     commentsAdded,
     restPullComments,
   });
-  const shaMatch = lastReviewedSha !== null && lastReviewedSha === headSha;
+  // Report counts must not read as a total that excludes inline (#3944).
+  let p0Count = channel.p0Count;
+  let p1Count = channel.p1Count;
+  let hasBlocking = channel.hasBlocking;
+  if (!thinHtmlSummary && inlineFindings !== null && inlineFindings.error === null) {
+    p0Count = Math.max(p0Count, inlineFindings.p0Count);
+    p1Count = Math.max(p1Count, inlineFindings.p1Count);
+    if (inlineFindings.p0Count + inlineFindings.p1Count > 0) {
+      hasBlocking = true;
+    }
+  }
+  // Inline fetch already filters on originalCommit vs HEAD. When those counts
+  // are > 0 and resolution is known (GraphQL), shaMatch the finding commit —
+  // not only the rolling summary SHA — so watch can emit NEW_P0_P1 instead of
+  // pending / SHA-stall. REST-only thin-HTML lacks isResolved: do not shaMatch
+  // from that path when the summary SHA is stale (#3944).
+  const inlineHeadBlocking =
+    inlineFindings !== null &&
+    inlineFindings.error === null &&
+    inlineFindings.resolutionKnown &&
+    inlineFindings.p0Count + inlineFindings.p1Count > 0;
+  const shaMatch = (lastReviewedSha !== null && lastReviewedSha === headSha) || inlineHeadBlocking;
   let [isClean, cleanGateHoldout] = evaluateCleanGate({
-    lastReviewedSha,
+    // Currency from HEAD-anchored inline: gate on headSha so holdout is
+    // has_blocking, not sha_match, while lastReviewedSha stays the summary.
+    lastReviewedSha: inlineHeadBlocking ? headSha : lastReviewedSha,
     headSha,
-    hasBlocking: channel.hasBlocking,
+    hasBlocking,
     confidence,
     ciFailures,
     errored,
@@ -180,15 +335,52 @@ export function probeOnce(
     cleanGateHoldout = ciReadyState === "not_ready_yet" ? "terminal_check_run" : ciReadyState;
   }
 
+  const root = projectRoot ?? process.cwd();
+  const expectation = evaluateReviewerExpectation({
+    policyReviewers: resolveReviewers(root).reviewers,
+    reviewCommentPresent: found && shaMatch,
+    botReviewCheckPresent: botCheckPresent,
+    reviewerConfigPresent: reviewerConfigPresent(root),
+    checkRunsUnknown,
+    ciReadyState,
+  });
+  if (expectation.state === "no_reviewer_installed") {
+    isClean = false;
+    cleanGateHoldout = "no_reviewer_installed";
+  }
+
+  // #3944 Bound item 3: unresolved repo / inline lookup → non-clean on pr:watch.
+  if (repo === null) {
+    if (isClean) {
+      isClean = false;
+      cleanGateHoldout = "inline_repo_unresolved";
+    }
+  } else if (inlineFindings !== null && inlineFindings.error !== null) {
+    isClean = false;
+    if (cleanGateHoldout === null || cleanGateHoldout === "findings_channel") {
+      cleanGateHoldout = "inline_lookup_error";
+    }
+  } else if (
+    inlineFindings !== null &&
+    inlineFindings.error === null &&
+    (inlineFindings.p0Count > 0 || inlineFindings.p1Count > 0)
+  ) {
+    isClean = false;
+    hasBlocking = true;
+    if (cleanGateHoldout === null) {
+      cleanGateHoldout = "has_blocking";
+    }
+  }
+
   return {
     found,
     headSha,
     lastReviewedSha,
     shaMatch,
     confidence,
-    p0Count: channel.p0Count,
-    p1Count: channel.p1Count,
-    hasBlocking: channel.hasBlocking,
+    p0Count,
+    p1Count,
+    hasBlocking,
     errored,
     ciFailures,
     ciFailedChecks,
@@ -196,8 +388,13 @@ export function probeOnce(
     ciCapacityStalledChecks,
     terminalCheckRun,
     greptileReviewTerminal,
+    greptileReviewInFlight,
     isClean,
     cleanGateHoldout,
+    reviewerReadyState: expectation.state,
+    reviewCycleHandback: expectation.handback,
+    prState,
+    prMerged,
     error: null,
   };
 }

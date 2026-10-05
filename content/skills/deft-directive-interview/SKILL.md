@@ -34,6 +34,7 @@ Legend (from RFC2119): !=MUST, ~=SHOULD, ≉=SHOULD NOT, ⊗=MUST NOT, ?=MAY.
 - ⊗ Include two or more questions in the same message under any circumstances
 - ⊗ List upcoming questions -- only show the current one
 - ⊗ Combine the current question with a summary of previous answers unless explicitly at the confirmation gate
+- ! Progress checkpoints (#5353) coexist with these forbids: emit them as Rule 2 agent-initiated non-choice status updates (see Progress Checkpoints). Inventory labels are allowed; concrete upcoming question text is not. A status statement is not a prior-answer summary.
 
 ### Rule 2: Numbered Options with Stated Default
 
@@ -106,6 +107,55 @@ Click-commit options block shape:
 
 - ⊗ Render a user-facing question as plain-text because you wanted to include preamble -- preamble belongs above the tool call, not instead of it.
 
+### Progress Checkpoints (#5353)
+
+! Require appropriately timed, concise progress checkpoints during multi-topic and adaptive interviews. Each checkpoint MUST cover: current phase, remaining material decision areas, accepted deferrals, and reasons for runtime additions. A status statement is not a batch of questions and is not a prior-answer summary.
+
+#### Coexistence with Rule 1
+
+! Emit checkpoints as Rule 2 Always-Structured **agent-initiated status updates that do NOT ask the user to choose anything**. Do not invent a third plain-text emission class.
+
+! **Turn shape:** Prefer a separate status message immediately before the next structured question. If a checkpoint shares a turn with a question, it MUST be non-choice status prose ABOVE the structured-tool call (outside the tool `question` field), with exactly one structured question inside the tool (no second question; no upcoming concrete question list).
+
+! **Inventory labels vs upcoming questions:** Remaining-scope text MAY name decision-area / inventory labels. It MUST NOT enumerate concrete upcoming question text. Rule 1 `⊗ List upcoming questions` stays.
+
+#### Decision inventory + closed triggers
+
+! Maintain a session-local decision inventory = calling-skill required/optional fields plus runtime deferred/added entries. Each runtime addition carries a reason; each accepted deferral is recorded.
+
+! Emit a progress checkpoint at these closed triggers only (no every-turn default):
+- phase entry / phase exit (including setup Phase 1/2/3 boundaries when those skills own the loop)
+- after a material decision-area is **added** to the inventory (runtime append of a new decision-area with reason — distinct from ordinary fill of an existing calling-skill field)
+- after an accepted deferral is recorded
+- before Rule 6 confirmation gate
+- on operator how-much-is-left (below)
+
+! Do not invent a fixed total before adaptive questions are known. Short interviews keep proportionate cost (no every-turn full recap).
+- ⊗ Emit a checkpoint on ordinary field-fill alone
+- ⊗ Invent a fixed question census before adaptive branching is known
+- ⊗ Default to an every-turn full recap
+
+#### How-much-is-left interrupt
+
+! When the operator asks how much remains / remaining scope, answer as a Rule 2 status-only emission grounded in the decision inventory; then re-render the same pending question. Do not advance to the next material decision on that interrupt. Do not open Discuss unless the operator chose Discuss.
+
+#### Preserve interaction constraints
+
+! Keep one-question interaction where required, Discuss/Back, and explicit confirmation semantics (including Rule 8). Compatible with #4377 adaptive branching / sizing / confirmation; independent of #4535 menu-shape mismatch.
+- ⊗ Remove Rule 8 or switch to yolo as the remedy for progress visibility
+
+#### Acceptance / regression fixture (#5353)
+
+! A multi-topic fixture MUST assert:
+- status-only checkpoint at each closed trigger
+- no upcoming concrete question list
+- addition-with-reason visible on runtime inventory append
+- no checkpoint on ordinary field-fill alone
+- how-much-is-left → status then same-question re-render
+- short path has no every-turn recap
+- accepted deferrals visible
+- shared-turn checkpoint prose stays outside the structured tool `question` field
+
 ### Rule 3: Explicit "Other / I Don't Know" Escape
 
 ! Every question MUST include an escape option. The last numbered option MUST be either:
@@ -120,11 +170,44 @@ Click-commit options block shape:
 
 ### Rule 4: Depth Gate
 
-! Keep asking until no material ambiguity remains before artifact generation. The interview is NOT complete until the calling skill's required inputs are all captured with sufficient specificity to generate the target artifact.
+! Keep asking until the calling skill's required inputs are captured with sufficient specificity to generate the target artifact. On the **Full material-decision contract** path (#5351), "sufficient specificity" is the operator-confirmed **material-decision inventory** — not an open-ended "no material ambiguity remains" judgment.
 
-- ! If an answer introduces new ambiguity (e.g. user selects "Other" and describes something that requires follow-up), ask clarifying questions before moving on
-- ! Do not truncate the interview to save time -- completeness takes priority over brevity
-- ~ The calling skill defines what "sufficient specificity" means by providing a list of required fields in the handoff contract
+#### Material-decision contract (#5351)
+
+! Apply this contract when any of:
+- Sizing-Gate outcome is **Full** (greenfield Full, or brownfield Replace that reached Sizing after confirmed scrap), or
+- an operator-directed interview that has already entered Full-depth questioning (including a brownfield session that skipped Chaining but is already behaving as Full — treat as conformance debt; still apply the bound rather than invent a "Full/brownfield" compound state), or
+- **reopen / continuation that enters or remains in Full depth** after a declared-ready state or after Rule 6 confirmation (operator explicitly escalates into Full, or the prior path was already Full).
+
+Out of scope: Light sizing; Add-scope short path; Update/delta interview that stays delta — including short-path reopen/correction that stays on that short path. ⊗ Apply the Full material-decision inventory contract to a Light / Add-scope / delta correction solely because Rule 6 ran.
+
+! The material-decision inventory **is** the depth-bound handoff surface for when questioning may stop. It carries: target deliverable, material required decisions (each with a **resolution condition**), approved constraints, accepted deferrals, and completion conditions. Reuse Delegation Mode required-field semantics without forcing a sub-skill invoke.
+
+! Relation to the seven-key Full Path Output set (`ProblemStatement` … `Overview`):
+- Seven-key set = **output-shape** narratives that must be filled for Full artifact write.
+- Material-decision inventory = **depth-bound** for when questioning may stop.
+- Rule 4 completeness reads the inventory for ask-set sufficiency; Rule 7 answers-map completeness still requires values for every caller-required key that is **not** legitimately deferred for this phase.
+- ⊗ Ship a competing undefined second required-field list. ⊗ Reframe the existing seven-key MUST as "only SHOULD."
+
+! Authorship / confirm / freeze:
+- Agent MAY draft the inventory from conversation + pack defaults.
+- Operator MUST explicitly confirm the inventory **before** depth-gate completion pressure applies (and before treating the ask-set as closed).
+- Each inventory member is marked operator-named vs agent-derived; ⊗ invent approved constraints or accepted deferrals as if operator-approved.
+- After confirm, inventory mutation uses an operator-visible boundary-change path (diff + re-confirm). ⊗ Silent agent-maximal or silent thin-then-widen inventories.
+
+! Phase-relative sufficiency + follow-up cites:
+- A decision is mandatory for this phase when leaving it unresolved would change the current deliverable's required behavior, constraints, acceptance, or feasibility.
+- A choice among implementations that already satisfy those conditions need not block this phase.
+- Newly discovered questions MUST (a) cite an outstanding material requirement and stay within its resolution condition, or (b) revisit an accepted deferral with operator-visible boundary change, or (c) on **operator-raised or agent-discovered gap / inventory defect** after declared-ready: operator-visible inventory amendment (diff) then re-confirm (agent may propose the amendment; operator MUST re-confirm before the ask-set widens).
+- Routine clarification inside an existing resolution condition needs no extra approval.
+
+! Deferrals vs handoff: Resolved / legitimately deferred-for-this-phase / still-blocking are distinct. A deferral records the unresolved decision, why it does not block this deliverable, and the later trigger — not a fabricated answers-map value. Represent deferrals in the existing handoff / working artifact. Required values remain enforced where the caller needs them now.
+
+! Persistence on continuation: Carry target deliverable, inventory dispositions, and accepted boundary changes in the caller's working artifact / answers handoff and reload them on continuation. Requirements-phase completion and implementation readiness stay separate claims. ⊗ Reconstruct a fresh maximal inventory from "comprehensive enough to implement" on resume.
+
+- ! If an answer introduces new ambiguity within an outstanding resolution condition, ask clarifying questions before moving on
+- ! Do not truncate the interview to save time when inventory items remain unresolved or still-blocking
+- ! On non-Full paths (Light / Add-scope / delta that stays delta), the calling skill still defines sufficient specificity via its required-field handoff; the Full material-decision contract does not apply unless reopened into Full depth
 
 ### Rule 5: Default Acceptance
 
@@ -158,6 +241,8 @@ Confirm these values? (yes / no)
 - ! Accept only explicit affirmative responses (`yes`, `confirmed`, `approve`) -- reject vague responses (`proceed`, `do it`, `go ahead`)
 - ~ Note: The confirmation gate is intentionally stricter than Rule 5 (default-acceptance). Rule 5 accepts casual responses like `ok` for individual question defaults because the cost of a wrong default is low (one field, correctable at the confirmation gate). The confirmation gate guards the entire artifact -- accepting `ok` here risks generating artifacts from auto-filled or misunderstood values. This asymmetry is by design.
 - ! If the user says `no`: ask which values to correct, re-ask those specific questions only (do not restart the full interview), then re-display the updated summary and re-confirm
+- ! On the Full material-decision contract path (#5351): the confirmation summary MUST list each inventory item as decided / deferred-with-permit / out-of-phase; require explicit affirm; ⊗ treat artifact write success alone as completion
+- ! Post-gate reopen / continuation after declared-ready uses the same re-ask-those-specific-questions bound, extended by Rule 4 inventory cite/amend branch (c) for operator-raised or agent-discovered gaps — ⊗ reopen unbounded Full questioning from a declared-ready state without inventory amendment + re-confirm
 - ! If any value appears to be auto-generated filler (repeated default text, placeholder strings, or values that echo the question prompt), warn the user explicitly before confirming
 - ⊗ Proceed to artifact generation without displaying the summary and receiving explicit confirmation
 
@@ -190,9 +275,10 @@ The answers map format:
 ```
 
 - ! The calling skill defines the expected keys in its invocation of deft-directive-interview
-- ! The answers map MUST contain a value for every required key defined by the calling skill
+- ! The answers map MUST contain a value for every required key defined by the calling skill that is **not** legitimately deferred for this phase under the Full material-decision contract (#5351)
+- ! Keys legitimately deferred for this phase MUST NOT be fabricated as placeholder answers-map values; record them as accepted deferrals in the inventory / working-artifact handoff instead
 - ! Optional keys may be omitted if the user did not provide input and no default was applicable
-- ~ The calling skill is responsible for validating the answers map against its own schema and requesting re-interview for any missing or invalid fields
+- ~ The calling skill is responsible for validating the answers map against its own schema and requesting re-interview for any missing or invalid (non-deferred) fields
 
 ## Output Targets
 
@@ -221,6 +307,8 @@ When the interview captures origin provenance (e.g. the user links to a GitHub i
 - `SuccessMetrics`: Measurable success criteria
 - `Architecture`: System design and technical architecture
 - `Overview`: Brief project summary
+
+! These seven keys are the **output-shape** narratives for Full artifact write. Under the Full material-decision contract (#5351), the material-decision inventory is the separate **depth-bound** for when questioning may stop — not a competing second required-field list, and not a demotion of this seven-key MUST to SHOULD.
 
 ! All narrative values MUST be plain strings — never objects or arrays.
 
@@ -251,6 +339,8 @@ deft-directive-interview supports two usage modes:
 ### Embedded Mode
 
 The calling skill references deft-directive-interview rules inline (e.g. "this phase follows the deterministic interview loop defined in `skills/deft-directive-interview/SKILL.md`") and applies the rules directly within its own question sequence. No formal contract object is needed -- the calling skill embeds the question definitions and field requirements in its own SKILL.md. This is the current approach used by `skills/deft-directive-setup/SKILL.md` Phase 1 and Phase 2.
+
+! When the calling skill is on the Full material-decision contract path (#5351), the material-decision inventory is the embedded required-field handoff (Delegation Mode semantics without a formal contract object). ⊗ Rely on open-ended "little ambiguity remains" / "no material ambiguity remains" as the Full depth gate.
 
 ### Delegation Mode
 
@@ -502,6 +592,81 @@ for it.
 - ⊗ Show a red/green diff at first review without a non-alarming
   preface.
 
+
+
+### Rule 12: Durable Interview Continuation (#5352 Prefer-A Bound)
+
+! After a planning draft is approved, mid-interview corrections, gap reviews, and cross-session handoffs MUST preserve a bounded phase and approval scope on one durable carrier. Do not treat Rule-8 numeric confirm as the workflow unit for artifact or build authority.
+
+#### Durable carrier (S1)
+
+! The sole durable interview-continuation record is `plan["x-directive/interviewContinuation"]` on `./xbrief/plan.xbrief.json` (namespaced plan field; plan-owned; durable across sessions).
+
+Required fields when the carrier is in force:
+
+| Field | Shape |
+|-------|--------|
+| `targetDeliverable` | string — what is under review (e.g. PROJECT-DEFINITION narratives, scope set, SPEC) |
+| `phase` | closed enum (below) |
+| `reopenableDecisionSet` | string[] — operator-enumerated keys that may be reopened |
+| `acceptedDeferrals` | string[] — deferred items; non-blocking unless explicitly reopened |
+| `confirmations` | array of `{ scope: "answer" \| "artifact" \| "phase", target, revisionId?, at? }` — **artifact** and **phase** entries MUST include `target` + `revisionId` so multiple approvals retain distinct identities |
+| `deltaUnderReview` | `{ keys: string[], dependencyReasons?: Record<string,string> }` — limited delta |
+| *(no single `approval` object)* | Artifact/phase approval identity lives only on `confirmations[]` entries; a later edit invalidates matching `target`+`revisionId` only |
+| `operatorAdoptionMarkers` | optional string[] — explicit operator adoption of agent workflow conventions |
+
+! A resume that continues a post-draft design interview MUST load this durable record (same MUST-load posture as other plan artifacts on pin). Incomplete orientation (next-question-only / Resume-point-only without the required fields) is a fail-closed refuse: skill ⊗ halt (skill-exit) — not agent self-attestation. Content-contract carrier-assert posture (dual pack+rendered pins) asserts the carrier still names deliverable, phase, remaining set, deferrals, confirmation scopes, and delta after resume (#5176-shaped; S3). ⊗ Invent a CLI `verify:interview-continuation` verb in this Prefer-A Bound land — leftover optional harness may add one later.
+
+! When the carrier is **absent** on first brownfield Update / first post-draft delta, initialize it per `strategies/interview.md` First-delta initialize before asking the next question. Absent means initialize; a **present but incomplete** carrier still fails closed above.
+
+⊗ Use ephemeral `xbrief/continue.xbrief.json` / continue-here as this phase/approval-scope carrier. Checkpoints remain consumed-on-resume and MUST NOT own phase or approval scope. Silence on continue-here is forbidden — Prefer-A Bound explicitly excludes it.
+
+#### Closed phase vocabulary
+
+! `phase` MUST be one of:
+
+- `planning-draft-approved` — first planning draft accepted; correction/gap work may begin
+- `correction-or-gap-review` — bounded delta under review
+- `artifact-approved` — named artifact approval recorded with target + revision identity
+- `deferred-resume` — accepted deferrals; waiting to resume without reopening the full interview
+
+⊗ Free-text phase labels. Map these onto setup Phase 1/2/3 vocabulary in prose without colliding names (do not rename setup phases; say e.g. "interview continuation phase `artifact-approved` after setup Phase 3 Post-Interview write").
+
+#### Approval taxonomy + gate bind-map (S2)
+
+! Approval scope comes from the explicitly presented gate and its target, never from numeric syntax alone.
+
+| Moment | Gate | Carrier scope tag |
+|--------|------|-------------------|
+| Ordinary design-answer number confirm | Interview Rule 8 echo + confirm; Rule 6 answer-path summary | `answer` — records the choice only |
+| First write after interview answers (any setup phase) | Setup **Post-Interview Confirmation Gate** ("Write files? (yes/no)"; affirmative-only) | `artifact` when files are the target |
+| Full Path narrative / proposed-scope human review | Setup **Output — Full Path** human approval gate | `artifact` with target + revisionId |
+| Brownfield / strategy SPEC or PRD approve menu | Strategy approval menu (see strategies/interview.md); planning-only constraint wins | `artifact` only when that gate was deliberately presented for an artifact |
+| Bounded delta review finished | **Phase completion** = durable-record write closing the review when required decisions + review condition are satisfied | `phase` — not a new permission prompt that re-asks already-granted authorization |
+
+! Ordinary design-answer numerics confer no artifact/build authority. A deliberately presented artifact gate must still work. When a planning-only constraint is in force, artifact-approve/build labels (including SPEC "Approve and continue … proceed to implementation") MUST NOT silently override it — route/refuse with explicit precedence on the existing approve menu.
+
+#### Operator-enumerated delta reopen
+
+! Changing a decision reopens only operator-enumerated keys in `reopenableDecisionSet` / `deltaUnderReview.keys` (Rule 6 L160 shape: those specific questions/decisions). Default refuse-to-widen. Additions require an explicit operator widen of the delta plus a recorded concrete dependency reason on the carrier. Agent-inferred "demonstrable dependents" are not a widening path. Accepted deferrals stay non-blocking unless explicitly reopened. Stop when the bounded delta's required decisions and review condition are satisfied. A plausible unrelated backend improvement offered as an addition MUST be refused.
+
+! Editing an approved artifact invalidates only the matching `confirmations[]` entry (`scope: "artifact"` with that `target`+`revisionId`); other artifact confirmation entries remain valid. Do not collapse multiple artifact approvals into one `approval` object.
+
+#### Handoff authority split (read-side refuse)
+
+! Mid-review / cross-session handoffs that carry continuation state MUST use the durable carrier (or a structured export of it), not unlabeled chat prose as SoT. Human-authorized constraints require a reference or faithful bounded excerpt of the actual operator grant; an agent label alone is insufficient. Agent workflow conventions are non-binding by default unless the operator adopts them via an explicit adoption marker on the durable record (`operatorAdoptionMarkers`). Unlabeled / unsupported authorization labels do not generate new proposals or restart a full-depth interview. Incomplete-handoff remediation recovers missing orientation only and does not re-ask established grants. Framework obligations stay distinct from discretionary agent conventions.
+
+#### Authorized incremental recordkeeping
+
+! Confirmed state MAY be recorded under an existing grant without another permission prompt. That grant does not authorize synchronizing unrelated scopes or generating an artifact alongside the next interview question. Keep Anti-Patterns ⊗ combining interview questions with artifact generation.
+
+#### Named limits
+
+- ⊗ Rewrite #4668 Depth-preference persistence or #5176 narrative-persistence residual (orthogonal).
+- ⊗ Add repeated permission prompts that re-ask already-granted authorization.
+- ⊗ Excuse questions+artifact generation in the same message.
+- ⊗ Select continue-here as the durable carrier or weaken its consume-on-resume semantics for unrelated uses.
+
 ## Anti-Patterns
 
 - ⊗ Ask multiple questions in a single message -- one question per turn, always
@@ -526,3 +691,14 @@ for it.
 - ⊗ Render the Rule 6 Confirmation Gate via a click-commit structured tool on a click-commit host -- the gate MUST be plain-text with a typed `yes` commit (Rule 6 Click-Commit Hosts, #477)
 - ⊗ Render the next user-facing question as plain-text conversational prose because the Rule 6 Gate was just rendered in plain-text -- plain-text mode is released after the typed commit (Rule 6 Mode Restore, #478)
 - ⊗ Render a user-facing question as plain-text because you wanted to include a long preamble -- preamble belongs above the tool call, not instead of it (Rule 2 Preamble Placement, #478)
+- ⊗ Use ephemeral continue-here / `xbrief/continue.xbrief.json` as the durable interview phase/approval-scope carrier (#5352) — load `plan["x-directive/interviewContinuation"]` on `./xbrief/plan.xbrief.json` instead
+- ⊗ Treat ordinary design-answer numerics (Rule 8) as artifact or build approval (#5352)
+- ⊗ Widen a post-draft correction delta beyond operator-enumerated keys without an explicit operator widen + recorded dependency reason (#5352)
+- ⊗ Treat unlabeled agent handoff conventions as Deft authorization or restart a full-depth interview from them (#5352)
+- ⊗ Resume a post-draft design interview from next-question-only / Resume-point-only orientation without the durable carrier's required fields (#5352)
+- ⊗ Treat a progress checkpoint as a second question, an upcoming-question list, or a prior-answer summary -- checkpoints are Rule 2 non-choice status updates (#5353)
+- ⊗ Emit an every-turn full recap or invent a fixed question census before adaptive branching is known (#5353)
+- ⊗ Emit a checkpoint on ordinary field-fill alone -- "added" means runtime append of a new decision-area with reason (#5353)
+- ⊗ Answer how-much-is-left by advancing to the next material decision or by opening Discuss unless the operator chose Discuss -- status then same-question re-render (#5353)
+- ⊗ Stuff shared-turn checkpoint prose into the structured tool `question` field -- status stays above the tool call (#5353)
+

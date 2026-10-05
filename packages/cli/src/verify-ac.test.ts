@@ -1,7 +1,8 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { destContentionItTimeout } from "../../core/src/vitest-runner/dest-contention-it-timeout.helper.test.js";
 import { clampVerifyAcExit, parseArgs, run } from "./verify-ac.js";
 
 describe("clampVerifyAcExit (#3449)", () => {
@@ -121,25 +122,131 @@ describe("verify:ac run (#3284)", () => {
     }
   });
 
-  it("evaluates ALL active xbriefs under soft-missing multi-active (#3284)", () => {
+  it("fail-closes soft-missing multi-active without pin (#4285)", () => {
     const root = mkdtempSync(join(tmpdir(), "verify-ac-multi-"));
     const active = join(root, "xbrief", "active");
     mkdirSync(active, { recursive: true });
     const body = JSON.stringify({
       plan: {
+        status: "running",
         acceptance: { commands: [], none_stated: true, source_rung: "project_floor" },
         items: [],
+        metadata: {
+          intended_placement: {
+            schema: "deft.scope.intended_placement.v1",
+            files: ["src/a.ts"],
+            module_boundary: "a",
+          },
+        },
       },
     });
     writeFileSync(join(active, "a.xbrief.json"), body, "utf8");
     writeFileSync(join(active, "b.xbrief.json"), body, "utf8");
-    // Consumer temp root has no suite floor: empty resolution is not green (#3334).
+    const err: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((c) => {
+      err.push(String(c));
+      return true;
+    });
     expect(run(["--project-root", root, "--soft-missing-xbrief", "--quiet"])).toBe(1);
+    expect(err.join("")).toMatch(/DEFT_ACTIVE_SCOPE|#4285/);
     // Standalone without soft-missing still requires an explicit path.
     expect(run(["--project-root", root])).toBe(1);
   });
 
-  it("scans both xbrief and vbrief active roots (#3284 conf residual)", () => {
+  it("capture-only + soft-missing multi-active lists every artifact (#4285)", () => {
+    const root = mkdtempSync(join(tmpdir(), "verify-ac-capture-multi-"));
+    const active = join(root, "xbrief", "active");
+    mkdirSync(active, { recursive: true });
+    const body = JSON.stringify({
+      plan: {
+        status: "running",
+        acceptance: { commands: [], none_stated: true, source_rung: "project_floor" },
+        items: [],
+        metadata: {
+          intended_placement: {
+            schema: "deft.scope.intended_placement.v1",
+            files: ["src/a.ts"],
+            module_boundary: "a",
+          },
+        },
+      },
+    });
+    writeFileSync(join(active, "a.xbrief.json"), body, "utf8");
+    writeFileSync(join(active, "b.xbrief.json"), body, "utf8");
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((c) => {
+      chunks.push(String(c));
+      return true;
+    });
+    expect(run(["--project-root", root, "--soft-missing-xbrief", "--capture-only"])).toBe(0);
+    const out = chunks.join("");
+    expect(out).toMatch(/capture-only multi-active: listing 2 scopes/);
+    expect(out).toMatch(/a\.xbrief\.json/);
+    expect(out).toMatch(/b\.xbrief\.json/);
+  });
+
+  it("soft-missing multi-active runs only the pinned story (#4285)", () => {
+    const root = mkdtempSync(join(tmpdir(), "verify-ac-pin-"));
+    const active = join(root, "xbrief", "active");
+    mkdirSync(active, { recursive: true });
+    const marker = join(root, "FOREIGN_RAN");
+    const placement = {
+      schema: "deft.scope.intended_placement.v1",
+      files: ["src/a.ts"],
+      module_boundary: "a",
+    };
+    const foreignCmd = `node -e "require('fs').writeFileSync(${JSON.stringify(marker)},'1')"`;
+    writeFileSync(
+      join(active, "foreign.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          status: "running",
+          acceptance: {
+            commands: [{ command: foreignCmd }],
+            none_stated: false,
+            source_rung: "stated",
+          },
+          items: [],
+          metadata: { intended_placement: placement },
+        },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      join(active, "dispatched.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          status: "running",
+          acceptance: {
+            commands: [],
+            none_stated: true,
+            source_rung: "project_floor",
+          },
+          items: [],
+          metadata: { intended_placement: placement },
+        },
+      }),
+      "utf8",
+    );
+    const prev = process.env.DEFT_ACTIVE_SCOPE;
+    process.env.DEFT_ACTIVE_SCOPE = "xbrief/active/dispatched.xbrief.json";
+    const chunks: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((c) => {
+      chunks.push(String(c));
+      return true;
+    });
+    try {
+      // Pinned empty project_floor fails soft_empty (exit 1); foreign marker never written.
+      expect(run(["--project-root", root, "--soft-missing-xbrief"])).toBe(1);
+      expect(chunks.join("")).toMatch(/dispatched\.xbrief\.json/);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      if (prev === undefined) delete process.env.DEFT_ACTIVE_SCOPE;
+      else process.env.DEFT_ACTIVE_SCOPE = prev;
+    }
+  });
+
+  it("scans both xbrief and vbrief active roots for multi-active pin ask (#4285)", () => {
     const root = mkdtempSync(join(tmpdir(), "verify-ac-dual-root-"));
     const xa = join(root, "xbrief", "active");
     const va = join(root, "vbrief", "active");
@@ -147,14 +254,28 @@ describe("verify:ac run (#3284)", () => {
     mkdirSync(va, { recursive: true });
     const body = JSON.stringify({
       plan: {
+        status: "running",
         acceptance: { commands: [], none_stated: true, source_rung: "project_floor" },
         items: [],
+        metadata: {
+          intended_placement: {
+            schema: "deft.scope.intended_placement.v1",
+            files: ["src/a.ts"],
+            module_boundary: "a",
+          },
+        },
       },
     });
     writeFileSync(join(xa, "x.xbrief.json"), body, "utf8");
     writeFileSync(join(va, "v.vbrief.json"), body, "utf8");
-    // Both roots must be evaluated under check composition (not stop at xbrief only).
+    const err: string[] = [];
+    vi.spyOn(process.stderr, "write").mockImplementation((c) => {
+      err.push(String(c));
+      return true;
+    });
+    // Dual-root many-active asks for pin rather than evaluating both.
     expect(run(["--project-root", root, "--soft-missing-xbrief", "--quiet"])).toBe(1);
+    expect(err.join("")).toMatch(/DEFT_ACTIVE_SCOPE|#4285/);
   });
 
   it("exits 2 when no xbrief and soft-missing off", () => {
@@ -283,37 +404,41 @@ describe("verify:ac run (#3284)", () => {
     expect(parsed.commands[0]?.command).toBe("pnpm --version");
   });
 
-  it("runs stated plan.acceptance.commands and exits 0 on pass (#3449)", () => {
-    const root = mkdtempSync(join(tmpdir(), "verify-ac-stated-run-"));
-    const active = join(root, "xbrief", "active");
-    mkdirSync(active, { recursive: true });
-    writeFileSync(
-      join(active, "story.xbrief.json"),
-      JSON.stringify({
-        xBRIEFInfo: { version: "0.8" },
-        plan: {
-          title: "t",
-          acceptance: {
-            commands: [{ command: "pnpm --version" }],
-            none_stated: false,
-            source_rung: "stated",
+  it(
+    "runs stated plan.acceptance.commands and exits 0 on pass (#3449)",
+    destContentionItTimeout(),
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "verify-ac-stated-run-"));
+      const active = join(root, "xbrief", "active");
+      mkdirSync(active, { recursive: true });
+      writeFileSync(
+        join(active, "story.xbrief.json"),
+        JSON.stringify({
+          xBRIEFInfo: { version: "0.8" },
+          plan: {
+            title: "t",
+            acceptance: {
+              commands: [{ command: "pnpm --version" }],
+              none_stated: false,
+              source_rung: "stated",
+            },
+            metadata: {},
+            items: [],
           },
-          metadata: {},
-          items: [],
-        },
-      }),
-      "utf8",
-    );
-    const prevSummary = process.env.DEFT_RUN_SUMMARY_PATH;
-    delete process.env.DEFT_RUN_SUMMARY_PATH;
-    try {
-      expect(run(["--project-root", root, "--quiet"])).toBe(0);
-    } finally {
-      if (prevSummary === undefined) {
-        delete process.env.DEFT_RUN_SUMMARY_PATH;
-      } else {
-        process.env.DEFT_RUN_SUMMARY_PATH = prevSummary;
+        }),
+        "utf8",
+      );
+      const prevSummary = process.env.DEFT_RUN_SUMMARY_PATH;
+      delete process.env.DEFT_RUN_SUMMARY_PATH;
+      try {
+        expect(run(["--project-root", root, "--quiet"])).toBe(0);
+      } finally {
+        if (prevSummary === undefined) {
+          delete process.env.DEFT_RUN_SUMMARY_PATH;
+        } else {
+          process.env.DEFT_RUN_SUMMARY_PATH = prevSummary;
+        }
       }
-    }
-  });
+    },
+  );
 });

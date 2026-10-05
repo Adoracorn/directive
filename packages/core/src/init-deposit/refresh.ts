@@ -11,10 +11,16 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { platform as osPlatform } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative as pathRelative, resolve } from "node:path";
 import type { ResolutionFacts, ResolutionPlan } from "@deftai/directive-types";
+import { resolveContentPackageRoot } from "../content-root.js";
 import { assertDepositContained } from "../deposit/contain.js";
-import { replaceTree } from "../deposit/copy-tree.js";
+import {
+  discardTreeSnapshot,
+  replaceTree,
+  restoreExistingTree,
+  snapshotExistingTree,
+} from "../deposit/copy-tree.js";
 import { assertLiveProcedureDepositClean } from "../deposit/live-procedure-targets.js";
 import { prunePythonArtifactsFromDeposit } from "../deposit/python-free.js";
 import { resolveInstalledContentRoot } from "../deposit/resolve-content.js";
@@ -22,6 +28,13 @@ import { manifestTagToVersion, parseInstallManifest } from "../doctor/manifest.j
 import { whichAllFromPath } from "../doctor/which.js";
 import { readCorePackageVersion } from "../engine-version.js";
 import { readLiveGeneration, stampLiveGeneration } from "../freshness/generation.js";
+import {
+  describeDryRunGenerationGate,
+  evaluateGenerationGate,
+  GENERATION_REWIND_ERROR_CODE,
+  type GenerationGateResult,
+  recheckGenerationGateLocal,
+} from "../freshness/generation-gate.js";
 import {
   type ContainedDestExecInput,
   type ContainedDestExecResult,
@@ -50,7 +63,12 @@ import {
   NO_DEFT_DIRECTIVE_INCONSISTENT_MESSAGE,
   NO_DEFT_DIRECTIVE_INCONSISTENT_POLICY,
 } from "../policy/no-deft-directive.js";
-import { runOrgForceOnMigration } from "../policy/org-force-on-migration.js";
+import {
+  type OrgForceOnMigrationResult,
+  PROJECT_DEFINITION_CONSUMER_OWNED_SKIP,
+  runOrgForceOnMigration,
+} from "../policy/org-force-on-migration.js";
+import { PROJECT_DEFINITION_REL_PATH, projectDefinitionPath } from "../policy/resolve.js";
 import {
   type ClassifySeams,
   checkLocalEngineIntegrity,
@@ -78,8 +96,10 @@ import { removeStaleMigratedFrameworkNarrative } from "../xbrief-migrate/migrate
 import { writeAgentHookDeposit } from "./agent-hooks.js";
 import { ensureInitGitignoreLines, type GitLsFiles, isDepositTrackedInGit } from "./gitignore.js";
 import {
+  classifyDirtyEscapeLedger,
   depositStagePaths,
   isInstallerManagedPath,
+  type LedgerStageSplit,
   printCommitGuidance,
   printDirtyEscapeCommitGuidance,
   reconcileDepositToContentPackage,
@@ -114,6 +134,7 @@ import {
   assertKnownUpdateFlags,
   decideUpdateGitGate,
   destPlanIsEmpty,
+  type GitExecFn,
   gitPreflightRequired,
   outOfRootWriterMightFire,
   probeUpdateGit,
@@ -131,6 +152,22 @@ export interface RefreshDepositArgs extends InitDepositArgs {
   readonly allowDirtyNoStage?: boolean;
 }
 
+/** #5096 partitioned consumer-facing projection dispositions. */
+export type ConsumerProjectionDisposition = "skipped" | "refused" | "rewritten";
+
+export type ConsumerProjectionWriteClass =
+  | "schema"
+  | "pin"
+  | "project-definition"
+  | "version-marker";
+
+export interface ConsumerProjectionLedgerEntry {
+  readonly path: string;
+  readonly disposition: ConsumerProjectionDisposition;
+  readonly write_class: ConsumerProjectionWriteClass;
+  readonly reason: string;
+}
+
 export interface RefreshDepositResult {
   readonly projectDir: string;
   readonly deftDir: string;
@@ -146,17 +183,17 @@ export interface RefreshDepositResult {
   readonly stagedPaths: string[];
   /** This-run write/remove ledger (#3392). Same source as printf + JSON. */
   readonly mutations: MutationSummary;
+  /** #5096 skip/refuse/rewrite ledger for consumer-facing projections. */
+  readonly consumerProjections?: readonly ConsumerProjectionLedgerEntry[];
   /** Pin+lock reconstitution failed; pin was reverted (#4710). */
   readonly pinLockRefreshError?: string;
-}
-
-function hasCanonicalXbriefLifecycle(projectDir: string): boolean {
-  try {
-    resolveLifecycleRoot(projectDir);
-    return true;
-  } catch {
-    return false;
-  }
+  /** #4120 generation rewind gate refused before dest writes. */
+  readonly generationRewindError?: string;
+  /**
+   * Dirty-escape classified ledger split (#5245). Populated when
+   * `--allow-dirty-no-stage` skips automatic git add; --json emits the sets.
+   */
+  readonly dirtyEscapeSplit?: LedgerStageSplit;
 }
 
 export type RefreshDepositStrategy = "file-swap" | "no-op";
@@ -178,8 +215,11 @@ export interface RefreshDepositSeams {
   gitLsFiles?: GitLsFiles;
   /** #2530: injected git config seams for {@link writeConsumerGitHooks}. */
   gitHooks?: GitHooksSeams;
-  /** #2822: optional seam. Default {@link runOrgForceOnMigration} already writes via containedWrite. */
-  runOrgForceOn?: (projectRoot: string) => void;
+  /**
+   * #2822 / #5096: optional seam. Default runs org-force-on with
+   * `projectDefinitionMutation: "skip"` so update never rewrites PROJECT-DEFINITION.
+   */
+  runOrgForceOn?: (projectRoot: string) => OrgForceOnMigrationResult | undefined;
   /** Post-deposit functional readiness gate (#3100). */
   evaluateAgentHookReadiness?: (projectRoot: string) => AgentHookReadinessResult;
   /** Injected three-state Git probe (#4158). Default {@link probeUpdateGit}. */
@@ -190,6 +230,13 @@ export interface RefreshDepositSeams {
   containedDestExec?: (input: ContainedDestExecInput) => ContainedDestExecResult;
   /** PATH resolve for lockfile manager binaries. Default {@link whichAllFromPath}. */
   resolveLockfileManager?: (execFile: string) => string | null;
+  /** Injected git exec for the #4120 generation rewind gate. */
+  execGit?: GitExecFn;
+  /**
+   * This-run generation decision from the CLI preflight. When set, skip a
+   * second invocation-owned fetch inside {@link runRefreshDeposit}.
+   */
+  generationGate?: GenerationGateResult;
 }
 
 /**
@@ -529,8 +576,9 @@ export function frameworkRefreshSideEffects(
 export function printRefreshSideEffects(io: InitDepositIo, effects: RefreshSideEffects): void {
   if (effects.crlfOnlyCoreFiles.length > 0) {
     io.printf(
-      "\nWindows line-ending note (#2118): suppressed .deft/core CRLF/LF-only noise; " +
-        "ensure .gitattributes contains `.deft/core/** text eol=lf`.\n",
+      "\nWindows line-ending note (#2118 / #5245): suppressed .deft/core CRLF/LF-only noise; " +
+        "ensure .gitattributes contains `.deft/core/** text=auto eol=lf` " +
+        "(not legacy `text eol=lf`, which corrupts binary assets).\n",
     );
   }
   if (effects.files.length === 0) return;
@@ -634,6 +682,7 @@ export function buildUpdateSummaryJson(input: {
 }): Record<string, unknown> {
   const { result, options, updateState, readiness, gitPreflight } = input;
   const allowDirtyNoStage = options.allowDirtyNoStage === true;
+  const ledger = result.consumerProjections ?? [];
   return {
     success: readiness ? readiness.code === 0 : true,
     deposit_completed: true,
@@ -651,7 +700,16 @@ export function buildUpdateSummaryJson(input: {
     missing_tools: [],
     maintainer_mode: false,
     maintainer_tools: [],
-    skipped_consumer_projections: [],
+    // Full ledger (skip/refuse/rewrite). Name kept for #5096 observability.
+    consumer_projections: ledger.map((entry) => ({ ...entry })),
+    // Legacy key: skipped + refused only (not rewritten).
+    skipped_consumer_projections: ledger
+      .filter((entry) => entry.disposition === "skipped" || entry.disposition === "refused")
+      .map((entry) => ({ ...entry })),
+    pin_writes: ledger.filter((entry) => entry.write_class === "pin").map((entry) => entry.path),
+    version_marker_writes: ledger
+      .filter((entry) => entry.write_class === "version-marker")
+      .map((entry) => entry.path),
     user_config_dir: "",
     skills_created: false,
     payload_layout: "vendored",
@@ -663,6 +721,9 @@ export function buildUpdateSummaryJson(input: {
           allow_dirty_no_stage: true,
           staging_skipped: true,
           staging_skipped_reason: "allow-dirty-no-stage",
+          stage_candidates: result.dirtyEscapeSplit?.stagePaths ?? [],
+          unstaged_remainder: result.dirtyEscapeSplit?.unstagedRemainder ?? [],
+          skipped_untracked_deletes: result.dirtyEscapeSplit?.skippedUntrackedDeletes ?? [],
         }
       : {}),
     staged_paths: result.stagedPaths,
@@ -697,6 +758,35 @@ export function formatPrettierSensitiveAnnounce(paths: readonly string[]): strin
     `Rewritten consumer-owned paths (${PRETTIER_SENSITIVE_FMT_HINT}):\n` +
     paths.map((path) => `  ${path}\n`).join("")
   );
+}
+
+/** Human rows for the #5096 consumer-projection ledger (pin / PD / version markers). */
+export function formatConsumerProjectionLedger(
+  entries: readonly ConsumerProjectionLedgerEntry[],
+): string {
+  if (entries.length === 0) return "";
+  const lines = ["Consumer projection ledger (#5096):\n"];
+  for (const entry of entries) {
+    lines.push(`  ${entry.disposition.padEnd(9)} ${entry.path}  (${entry.reason})\n`);
+  }
+  return lines.join("");
+}
+
+function posixRel(projectDir: string, absPath: string): string {
+  return pathRelative(projectDir, absPath).split("\\").join("/");
+}
+
+function wroteSince(before: readonly string[], after: readonly string[]): string[] {
+  const prior = new Set(before);
+  return after.filter((path) => !prior.has(path));
+}
+
+function consumerProjectDefinitionRel(projectDir: string): string {
+  try {
+    return posixRel(projectDir, projectDefinitionPath(projectDir)) || PROJECT_DEFINITION_REL_PATH;
+  } catch {
+    return PROJECT_DEFINITION_REL_PATH;
+  }
 }
 
 /** Human summary row for post-add index state (#4562). Sourced from cached names. */
@@ -736,6 +826,10 @@ export function printUpdateComplete(
   const prettierText = formatPrettierSensitiveAnnounce(prettierSensitiveRewrites(result.mutations));
   if (prettierText.length > 0) {
     io.printf(`\n${prettierText}`);
+  }
+  const ledgerText = formatConsumerProjectionLedger(result.consumerProjections ?? []);
+  if (ledgerText.length > 0) {
+    io.printf(`\n${ledgerText}`);
   }
   printMigrateNudgeIfNeeded(result.projectDir, io);
   io.printf("\n");
@@ -880,6 +974,48 @@ function reconstituteConsumerPinAndLock(
   return null;
 }
 
+/**
+ * Stamp from a this-run gate after rechecking the local token. A CLI-cached
+ * decideGenerationStamp can lag a concurrent writer (#4120).
+ */
+function stampRefreshGeneration(
+  projectDir: string,
+  generationGate: GenerationGateResult | null,
+  input: {
+    readonly contentVersion: string;
+    readonly increment: boolean;
+    readonly nowIso?: string;
+  },
+): string | undefined {
+  if (generationGate === null) {
+    stampLiveGeneration(projectDir, {
+      contentVersion: input.contentVersion,
+      stampedBy: "directive-update",
+      increment: input.increment,
+      nowIso: input.nowIso,
+    });
+    return undefined;
+  }
+  const gate = recheckGenerationGateLocal(generationGate, projectDir, {
+    increment: input.increment,
+    contentVersion: input.contentVersion,
+  });
+  if (gate.action === "refuse") {
+    return gate.message;
+  }
+  if (gate.action === "keep-prior") {
+    return undefined;
+  }
+  stampLiveGeneration(projectDir, {
+    contentVersion: input.contentVersion,
+    stampedBy: "directive-update",
+    increment: input.increment,
+    nowIso: input.nowIso,
+    forcedGeneration: gate.generation,
+  });
+  return undefined;
+}
+
 export async function runRefreshDeposit(
   args: RefreshDepositArgs,
   io: InitDepositIo,
@@ -925,7 +1061,38 @@ export async function runRefreshDeposit(
     previousDepositVersion !== null &&
     normalizeVersion(previousDepositVersion) === normalizeVersion(contentVersion);
   const strategy: RefreshDepositStrategy = alreadyCurrent ? "no-op" : "file-swap";
+
   const payloadReadRoot = recordModePayloadRoot({ contentRoot, deftDir, alreadyCurrent });
+
+  let generationGate: GenerationGateResult | null = null;
+  if (!isPortRecordMode()) {
+    generationGate =
+      seams.generationGate ??
+      evaluateGenerationGate({
+        projectDir,
+        contentVersion,
+        increment: !alreadyCurrent,
+        execGit: seams.execGit,
+      });
+    if (generationGate.action === "refuse") {
+      return {
+        projectDir,
+        deftDir,
+        contentVersion,
+        engineVersion,
+        previousDepositVersion,
+        alreadyCurrent,
+        strategy,
+        agentsMdUpdated: false,
+        versionSkewNotice,
+        legacyLayout: false,
+        taskfileWired: false,
+        stagedPaths: [],
+        mutations: emptyMutationSummary(),
+        generationRewindError: generationGate.message,
+      };
+    }
+  }
 
   if (alreadyCurrent) {
     io.printf("[deft update] Framework payload already current; skipping payload copy.\n");
@@ -949,11 +1116,28 @@ export async function runRefreshDeposit(
       priorGen !== null &&
       normalizeVersion(priorGen.contentVersion) === normalizeVersion(contentVersion);
     try {
-      stampLiveGeneration(projectDir, {
+      const rewind = stampRefreshGeneration(projectDir, generationGate, {
         contentVersion,
-        stampedBy: "directive-update",
         increment: false,
       });
+      if (rewind !== undefined) {
+        return {
+          projectDir,
+          deftDir,
+          contentVersion,
+          engineVersion,
+          previousDepositVersion,
+          alreadyCurrent,
+          strategy,
+          agentsMdUpdated: false,
+          versionSkewNotice,
+          legacyLayout: false,
+          taskfileWired: false,
+          stagedPaths: [],
+          mutations: snapshotMutationSummary(),
+          generationRewindError: rewind,
+        };
+      }
     } catch (err) {
       if (!generationMatches) {
         throw err;
@@ -961,51 +1145,115 @@ export async function runRefreshDeposit(
       // Token already matches content; ensure write failure is non-fatal noise.
     }
   } else {
-    // Full-tree replace (or injected seam). Additive copy is no longer the default.
-    // C3 the incoming package BEFORE replace so a reject cannot leave a broken deposit.
-    assertLiveProcedureDepositClean(contentRoot);
-    await copyContent(contentRoot, deftDir);
-    await prunePythonArtifactsFromDeposit(deftDir, projectDir, io);
-    // Port-record skips dest IO; dest C3 would read the unreplaced tree (#4389).
-    if (!isPortRecordMode()) {
-      assertLiveProcedureDepositClean(deftDir);
+    // Recheck the local token before payload/VERSION swap so a concurrent
+    // unreadable stamp cannot report generation_rewind after dest mutation (#4120).
+    if (generationGate !== null) {
+      const preSwap = recheckGenerationGateLocal(generationGate, projectDir, {
+        increment: true,
+        contentVersion,
+      });
+      if (preSwap.action === "refuse") {
+        return {
+          projectDir,
+          deftDir,
+          contentVersion,
+          engineVersion,
+          previousDepositVersion,
+          alreadyCurrent,
+          strategy,
+          agentsMdUpdated: false,
+          versionSkewNotice,
+          legacyLayout: false,
+          taskfileWired: false,
+          stagedPaths: [],
+          mutations: emptyMutationSummary(),
+          generationRewindError: preSwap.message,
+        };
+      }
+      generationGate = preSwap;
     }
-    // #2913 / #2804 / #2347: fail-closed delete-not-in-source BEFORE VERSION stamp.
-    // replaceTree already drops dst-only paths; reconcile verifies and covers
-    // additive seams. Throws => no VERSION rewrite (refuse stamp until clean).
-    await reconcileDepositToContentPackage(deftDir, contentRoot, io);
 
-    const nowIso = seams.nowIso ?? (() => new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
-    const stampedAt = nowIso();
-    const manifestFields: InstallManifestFields = {
-      ref: contentVersion.startsWith("v") ? contentVersion : `v${contentVersion}`,
-      sha: "content-package",
-      tag: contentVersion.startsWith("v") ? contentVersion : `v${contentVersion}`,
-      installRoot: CANONICAL_INSTALL_ROOT,
-      fetchedAt: stampedAt,
-      fetchedBy: "directive-update",
-      ...(previousManagedBy ? { managedBy: previousManagedBy } : {}),
-    };
-    const writtenManifestPath = writeInstallManifest(projectDir, deftDir, manifestFields);
+    const payloadSnapshot = await snapshotExistingTree(deftDir);
+    try {
+      // Full-tree replace (or injected seam). Additive copy is no longer the default.
+      // C3 the incoming package BEFORE replace so a reject cannot leave a broken deposit.
+      assertLiveProcedureDepositClean(contentRoot);
+      await copyContent(contentRoot, deftDir);
+      await prunePythonArtifactsFromDeposit(deftDir, projectDir, io);
+      // Port-record skips dest IO; dest C3 would read the unreplaced tree (#4389).
+      if (!isPortRecordMode()) {
+        assertLiveProcedureDepositClean(deftDir);
+      }
+      // #2913 / #2804 / #2347: fail-closed delete-not-in-source BEFORE VERSION stamp.
+      // replaceTree already drops dst-only paths; reconcile verifies and covers
+      // additive seams. Throws => no VERSION rewrite (refuse stamp until clean).
+      await reconcileDepositToContentPackage(deftDir, contentRoot, io);
 
-    // #2064: retire a stale legacy .deft/VERSION now that the canonical
-    // .deft/core/VERSION has been rewritten (folded in from install-upgrade so no
-    // manifest behavior is lost by the redirect). Best-effort; never fatal.
-    migrateLegacyInstallManifest(projectDir, writtenManifestPath);
+      const nowIso = seams.nowIso ?? (() => new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
+      const stampedAt = nowIso();
+      const manifestFields: InstallManifestFields = {
+        ref: contentVersion.startsWith("v") ? contentVersion : `v${contentVersion}`,
+        sha: "content-package",
+        tag: contentVersion.startsWith("v") ? contentVersion : `v${contentVersion}`,
+        installRoot: CANONICAL_INSTALL_ROOT,
+        fetchedAt: stampedAt,
+        fetchedBy: "directive-update",
+        ...(previousManagedBy ? { managedBy: previousManagedBy } : {}),
+      };
+      const writtenManifestPath = writeInstallManifest(projectDir, deftDir, manifestFields);
 
-    // #3117: monotonic live generation MUST advance after a successful payload
-    // swap. Suppressing stamp failure would leave a prior bound/live match
-    // reporting `current` while the on-disk payload already changed (Greptile P1).
-    stampLiveGeneration(projectDir, {
-      contentVersion,
-      stampedBy: "directive-update",
-      increment: true,
-      nowIso: stampedAt,
-    });
+      // #2064: retire a stale legacy .deft/VERSION now that the canonical
+      // .deft/core/VERSION has been rewritten (folded in from install-upgrade so no
+      // manifest behavior is lost by the redirect). Best-effort; never fatal.
+      migrateLegacyInstallManifest(projectDir, writtenManifestPath);
+
+      // #3117: monotonic live generation MUST advance after a successful payload
+      // swap. Suppressing stamp failure would leave a prior bound/live match
+      // reporting `current` while the on-disk payload already changed (Greptile P1).
+      // Recheck local GENERATION.json before reusing a CLI-cached decision (#4120).
+      const rewind = stampRefreshGeneration(projectDir, generationGate, {
+        contentVersion,
+        increment: true,
+        nowIso: stampedAt,
+      });
+      if (rewind !== undefined) {
+        await restoreExistingTree({
+          snapshot: payloadSnapshot,
+          dest: deftDir,
+          projectDir,
+        });
+        return {
+          projectDir,
+          deftDir,
+          contentVersion,
+          engineVersion,
+          previousDepositVersion,
+          alreadyCurrent,
+          strategy,
+          agentsMdUpdated: false,
+          versionSkewNotice,
+          legacyLayout: false,
+          taskfileWired: false,
+          stagedPaths: [],
+          mutations: emptyMutationSummary(),
+          generationRewindError: rewind,
+        };
+      }
+    } finally {
+      await discardTreeSnapshot(payloadSnapshot);
+    }
   }
 
+  const consumerProjections: ConsumerProjectionLedgerEntry[] = [];
+  const wroteBeforeReconstitute = snapshotMutationSummary().wrote;
   const pinLockRefreshError = reconstituteConsumerPinAndLock(projectDir, contentVersion, io, seams);
   if (pinLockRefreshError !== null) {
+    consumerProjections.push({
+      path: "package.json",
+      disposition: "refused",
+      write_class: "pin",
+      reason: "pin reconstitution / lockfile refresh failed (#4710)",
+    });
     return {
       projectDir,
       deftDir,
@@ -1020,41 +1268,147 @@ export async function runRefreshDeposit(
       taskfileWired: false,
       stagedPaths: [],
       mutations: snapshotMutationSummary(),
+      consumerProjections,
       pinLockRefreshError,
     };
   }
+  for (const path of wroteSince(wroteBeforeReconstitute, snapshotMutationSummary().wrote)) {
+    if (path === "package.json" || path.endsWith("/package.json")) {
+      consumerProjections.push({
+        path,
+        disposition: "rewritten",
+        write_class: "pin",
+        reason: "lagging-pin reconstitute (#4710)",
+      });
+    }
+  }
+  const wroteBeforeNullPin = snapshotMutationSummary().wrote;
   restoreNullPinAtRecordedDepositVersion({
     projectDir,
     deftDir,
     recordedVersion: readRecordedDepositVersion(deftDir) ?? previousDepositVersion,
     io,
   });
+  for (const path of wroteSince(wroteBeforeNullPin, snapshotMutationSummary().wrote)) {
+    if (path === "package.json" || path.endsWith("/package.json")) {
+      consumerProjections.push({
+        path,
+        disposition: "rewritten",
+        write_class: "pin",
+        reason: "null-pin restore at recorded deposit version (#4533)",
+      });
+    }
+  }
 
   // #2595: payload freshness and consumer derivative freshness are independent.
   // Always repair these cheap projections, including on the #2118 no-op path.
+  const wroteBeforeMarker = snapshotMutationSummary().wrote;
   if (alreadyCurrent) {
-    syncExistingBareVersionMarker(projectDir, contentVersion);
+    syncExistingBareVersionMarker(projectDir, contentVersion, {
+      printf: (t) => io.printf(t),
+    });
   } else {
-    syncBareVersionMarker(projectDir, contentVersion);
+    syncBareVersionMarker(projectDir, contentVersion, { printf: (t) => io.printf(t) });
+  }
+  for (const path of wroteSince(wroteBeforeMarker, snapshotMutationSummary().wrote)) {
+    if (path.endsWith(".deft-version") || path === ".deft-version") {
+      consumerProjections.push({
+        path,
+        disposition: "rewritten",
+        write_class: "version-marker",
+        reason: "engine/content version marker sync (#2595)",
+      });
+    }
   }
   // Do not turn a legacy-only or cache-only support tree into canonical
   // lifecycle content before migrate:xbrief can transactionally converge it.
-  if (hasCanonicalXbriefLifecycle(projectDir)) {
-    syncConsumerXbriefSchemas(projectDir, payloadReadRoot);
+  // Gate MUST call resolveLifecycleRoot at this site (SLizard xbrief-schema-projection-gaps).
+  // Catch only lifecycle-root refusal — schema sync / cleanup errors must surface (#5096 Greptile P1).
+  let canonicalLifecycleRoot: string | undefined;
+  try {
+    canonicalLifecycleRoot = resolveLifecycleRoot(projectDir);
+  } catch {
+    // legacy-only / cache-only — do not mkdir xbrief/schemas.
+  }
+  if (canonicalLifecycleRoot !== undefined) {
+    const wroteBeforeSchemas = snapshotMutationSummary().wrote;
+    const schemasChanged = syncConsumerXbriefSchemas(projectDir, payloadReadRoot);
+    for (const path of wroteSince(wroteBeforeSchemas, snapshotMutationSummary().wrote)) {
+      if (path === "xbrief/schemas" || path.startsWith("xbrief/schemas/")) {
+        consumerProjections.push({
+          path,
+          disposition: "rewritten",
+          write_class: "schema",
+          reason: "installer-managed schema sync (#2595)",
+        });
+      }
+    }
+    // Removals (e.g. obsolete schema) may not appear in wrote[]; ledger when sync changed without wrote paths.
+    if (schemasChanged) {
+      const schemaWrote = wroteSince(wroteBeforeSchemas, snapshotMutationSummary().wrote).some(
+        (path) => path === "xbrief/schemas" || path.startsWith("xbrief/schemas/"),
+      );
+      if (!schemaWrote) {
+        consumerProjections.push({
+          path: "xbrief/schemas/",
+          disposition: "rewritten",
+          write_class: "schema",
+          reason: "installer-managed schema sync removal/cleanup (#2595)",
+        });
+      }
+    }
     removeStaleMigratedFrameworkNarrative(projectDir);
   }
 
-  const runOrgForceOn =
-    seams.runOrgForceOn ??
-    ((root) => {
-      runOrgForceOnMigration(root, { actor: "directive-update" });
-    });
+  // #5096: update must skip+preserve consumer-owned PROJECT-DEFINITION.
+  let orgForceResult: OrgForceOnMigrationResult = {
+    ran: false,
+    skippedReason: null,
+    valueFeedbackChanged: false,
+    productSignalChanged: false,
+  };
   try {
-    runOrgForceOn(projectDir);
+    if (seams.runOrgForceOn !== undefined) {
+      // Injected seam fully replaces the default path (even when it returns undefined).
+      const seamResult = seams.runOrgForceOn(projectDir);
+      if (seamResult !== undefined) {
+        orgForceResult = seamResult;
+      }
+    } else {
+      orgForceResult = runOrgForceOnMigration(projectDir, {
+        actor: "directive-update",
+        projectDefinitionMutation: "skip",
+      });
+    }
   } catch {
     // Policy migration is best-effort; never block framework refresh (#2822).
   }
+  if (orgForceResult.skippedReason === PROJECT_DEFINITION_CONSUMER_OWNED_SKIP) {
+    consumerProjections.push({
+      path: consumerProjectDefinitionRel(projectDir),
+      disposition: "skipped",
+      write_class: "project-definition",
+      reason: "consumer-owned; org-force-on not applied on update (#5096 / #3029)",
+    });
+  }
 
+  // #5013: AGENTS render is same-root against payloadReadRoot. Prefer-package
+  // readers (default agents:refresh) may still see a stale project install —
+  // companion disclosure only; not an alternate first-ship fix.
+  const preferPackageRoot = resolveContentPackageRoot(projectDir);
+  if (preferPackageRoot !== null) {
+    const preferVersion = readContentPackageVersion(preferPackageRoot, () => "");
+    const depositedVersion = readContentPackageVersion(payloadReadRoot, () => contentVersion);
+    if (
+      preferVersion.length > 0 &&
+      depositedVersion.length > 0 &&
+      preferVersion !== depositedVersion
+    ) {
+      io.printf(
+        `Note: project @deftai/directive-content@${preferVersion} differs from deposited ${depositedVersion}. AGENTS.md was rendered from the deposit; run \`npm ci\` (or reinstall) before trusting default \`agents:refresh\` prefer-package reads (#5013).\n`,
+      );
+    }
+  }
   const agentsMdUpdated = writeAgentsMd(projectDir, payloadReadRoot, io);
   writeAgentHookDeposit(projectDir, io);
   // #75 residual: multi-host thin skill discovery (mirror `.agents/skills` inventory).
@@ -1100,8 +1454,11 @@ export async function runRefreshDeposit(
   });
 
   let stagedPaths: string[] = [];
+  let dirtyEscapeSplit: LedgerStageSplit | undefined;
   if (args.allowDirtyNoStage === true) {
-    printDirtyEscapeCommitGuidance(io, snapshotMutationSummary().wrote);
+    // After runWithMutationLedger: summary.deleted is populated (#5245 Prefer-A H4).
+    dirtyEscapeSplit = classifyDirtyEscapeLedger(projectDir, snapshotMutationSummary());
+    printDirtyEscapeCommitGuidance(io, dirtyEscapeSplit);
   } else if (!alreadyCurrent || effects.files.length > 0) {
     const stagedResult = depositStagePaths(projectDir, {
       includeTaskfile: taskfileWired,
@@ -1147,6 +1504,8 @@ export async function runRefreshDeposit(
     taskfileWired,
     stagedPaths,
     mutations: snapshotMutationSummary(),
+    consumerProjections,
+    ...(dirtyEscapeSplit !== undefined ? { dirtyEscapeSplit } : {}),
   };
 }
 
@@ -1309,6 +1668,36 @@ function emitGitRefusal(
   return UPDATE_REFUSED_EXIT_CODE;
 }
 
+function emitGenerationRewindRefusal(
+  options: RunRefreshDepositCliOptions,
+  io: InitDepositIo,
+  projectDir: string,
+  message: string,
+  dryRun: boolean,
+  gitPreflight: UpdateGitPreflight | undefined,
+): number {
+  io.printf(`${message}\n`);
+  if (options.jsonOut) {
+    options.writeOut(
+      `${JSON.stringify(
+        {
+          success: false,
+          action: "update",
+          error_code: GENERATION_REWIND_ERROR_CODE,
+          message,
+          project_dir: projectDir,
+          ...gitPreflightJsonFields(gitPreflight),
+          ...(dryRun ? { dry_run: true } : {}),
+          mutations: mutationSummaryJson(emptyMutationSummary()),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  }
+  return UPDATE_REFUSED_EXIT_CODE;
+}
+
 /** Emit the classified plan plus recorded port dest mutations (ADR-004). */
 async function emitDryRunPlan(
   options: RunRefreshDepositCliOptions,
@@ -1317,6 +1706,7 @@ async function emitDryRunPlan(
   classification: UpdateClassification,
   destResult: RefreshDepositResult,
   gitPreflight: UpdateGitPreflight,
+  generationGate?: ReturnType<typeof describeDryRunGenerationGate>,
 ): Promise<number> {
   const { previousVersion, contentVersion } = await readDryRunVersions(
     projectDir,
@@ -1352,11 +1742,16 @@ async function emitDryRunPlan(
           mutations: mutationSummaryJson(mutations),
           exclusions: [...UPDATE_DRY_RUN_EXCLUSIONS],
           ...gitPreflightJsonFields(gitPreflight),
+          ...(generationGate ? { generation_gate: generationGate } : {}),
           ...(options.allowDirtyNoStage === true
             ? {
                 allow_dirty_no_stage: true,
                 staging_skipped: true,
                 staging_skipped_reason: "allow-dirty-no-stage",
+                stage_candidates: destResult.dirtyEscapeSplit?.stagePaths ?? [],
+                unstaged_remainder: destResult.dirtyEscapeSplit?.unstagedRemainder ?? [],
+                skipped_untracked_deletes:
+                  destResult.dirtyEscapeSplit?.skippedUntrackedDeletes ?? [],
               }
             : {}),
         },
@@ -1419,6 +1814,7 @@ export async function runRefreshDepositCli(options: RunRefreshDepositCliOptions)
   const detectLegacy = options.seams?.detectLegacy ?? detectLegacyLayout;
   let classification: UpdateClassification | null = null;
   let gitPreflight: UpdateGitPreflight | undefined;
+  let liveGenerationGate: GenerationGateResult | undefined;
   if (!detectLegacy(projectDir).legacy) {
     classification = classifyUpdateState(projectDir, options.classifySeams ?? {});
     if (classification.state === "not-initialized") {
@@ -1482,11 +1878,54 @@ export async function runRefreshDepositCli(options: RunRefreshDepositCliOptions)
       );
     }
 
+    const versions = await readDryRunVersions(projectDir, options.seams ?? {});
+    const increment = depositRefreshPending(versions.previousVersion, versions.contentVersion);
     if (options.dryRun) {
+      const dryGate = describeDryRunGenerationGate({
+        projectDir,
+        contentVersion: versions.contentVersion,
+        increment,
+        execGit: options.seams?.execGit,
+      });
+      if (dryGate.verdict === "refuse") {
+        return emitGenerationRewindRefusal(
+          options,
+          io,
+          projectDir,
+          dryGate.message ?? "directive update: generation rewind refused",
+          true,
+          gitPreflight,
+        );
+      }
       if (destResult === null) {
         return 1;
       }
-      return emitDryRunPlan(options, io, projectDir, classification, destResult, gitPreflight);
+      return emitDryRunPlan(
+        options,
+        io,
+        projectDir,
+        classification,
+        destResult,
+        gitPreflight,
+        dryGate,
+      );
+    }
+
+    liveGenerationGate = evaluateGenerationGate({
+      projectDir,
+      contentVersion: versions.contentVersion,
+      increment,
+      execGit: options.seams?.execGit,
+    });
+    if (liveGenerationGate.action === "refuse") {
+      return emitGenerationRewindRefusal(
+        options,
+        io,
+        projectDir,
+        liveGenerationGate.message,
+        false,
+        gitPreflight,
+      );
     }
 
     if (options.allowDirtyNoStage === true && gitPreflight.kind === "dirty") {
@@ -1512,7 +1951,20 @@ export async function runRefreshDepositCli(options: RunRefreshDepositCliOptions)
 
   return runWithMutationLedger(projectDir, async () => {
     try {
-      const result = await runRefreshDeposit(options, io, options.seams);
+      const result = await runRefreshDeposit(options, io, {
+        ...options.seams,
+        ...(liveGenerationGate !== undefined ? { generationGate: liveGenerationGate } : {}),
+      });
+      if (result.generationRewindError !== undefined) {
+        return emitGenerationRewindRefusal(
+          options,
+          io,
+          projectDir,
+          result.generationRewindError,
+          false,
+          gitPreflight,
+        );
+      }
       if (result.pinLockRefreshError !== undefined) {
         options.writeErr(`directive update: ${result.pinLockRefreshError}\n`);
         if (options.jsonOut) {

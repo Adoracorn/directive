@@ -3,7 +3,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { ContainedWriteError, containedWrite } from "../fs/contained-write.js";
 import { assertWriteTargetSafe } from "../fs/projection-containment.js";
@@ -20,6 +20,12 @@ import {
   type HumanOriginGrant,
   type UatLease,
 } from "./types.js";
+import {
+  type AuthzUatWriteDecision,
+  type EvaluateAuthzStateWriteOptions,
+  evaluateAuthzStateWriteUnderUat,
+  evaluateGrantWriteUnderUat,
+} from "./uat-write-guard.js";
 
 function utcIso(now?: Date): string {
   const dt = now ?? new Date();
@@ -266,7 +272,8 @@ export function markGrantUsed(
       usedAt: utcIso(now),
     },
   };
-  saveGrant(projectRoot, used);
+  const wrote = saveGrant(projectRoot, used);
+  if (!wrote.ok) return null;
   return used;
 }
 
@@ -325,6 +332,43 @@ function readGrantClaimLockRecord(lockPath: string): GrantClaimLockRecord | null
   } catch {
     return null;
   }
+}
+
+/**
+ * Rename-away reclaim that refuses to steal a live replacement lock (#4233).
+ * After rename, the side file must still match the dead record we inspected;
+ * otherwise restore and fail closed so two reclaimers cannot both enter.
+ */
+function tryReclaimDeadLock(lockPath: string): boolean {
+  const existing = readGrantClaimLockRecord(lockPath);
+  if (!isGrantClaimLockReclaimable(existing)) return false;
+  const expectedPid = existing?.pid ?? null;
+  const expectedToken = existing?.token ?? null;
+  const side = `${lockPath}.reclaim.${randomBytes(6).toString("hex")}`;
+  try {
+    renameSync(lockPath, side);
+  } catch {
+    return false;
+  }
+  const got = readGrantClaimLockRecord(side);
+  const sameDead =
+    existing === null
+      ? got === null
+      : got !== null && got.pid === expectedPid && got.token === expectedToken;
+  if (!sameDead) {
+    try {
+      renameSync(side, lockPath);
+    } catch {
+      /* best-effort restore of live replacement */
+    }
+    return false;
+  }
+  try {
+    rmSync(side, { force: true });
+  } catch {
+    /* best-effort side cleanup */
+  }
+  return true;
 }
 
 export interface ClaimSingleUseGrantOptions {
@@ -403,21 +447,8 @@ export function claimSingleUseGrantForApply(
 
   let locked = tryCreateLock();
   if (!locked) {
-    // Dead-PID / corrupt reclaim: rename the old lock aside (atomic contention) then create.
-    // Blind rmSync is forbidden — a second reclaimer must not delete a winner's new lock.
-    const existing = readGrantClaimLockRecord(lockPath);
-    if (isGrantClaimLockReclaimable(existing)) {
-      const side = `${lockPath}.reclaim.${randomBytes(6).toString("hex")}`;
-      try {
-        renameSync(lockPath, side);
-        try {
-          rmSync(side, { force: true });
-        } catch {
-          /* best-effort side cleanup */
-        }
-      } catch {
-        // Lost rename race or lock already gone — fall through to exclusive create.
-      }
+    // Dead-PID / corrupt reclaim: rename-away only when side still matches the dead record.
+    if (tryReclaimDeadLock(lockPath)) {
       locked = tryCreateLock();
     }
   }
@@ -470,7 +501,10 @@ export function claimSingleUseGrantForApply(
         usedAt: usedAtIso,
       },
     };
-    saveGrant(projectRoot, used);
+    const spent = saveGrant(projectRoot, used);
+    if (!spent.ok) {
+      return { ok: false, reason: spent.reason };
+    }
     markedUsedAt = usedAtIso;
 
     if (opts.apply !== undefined) {
@@ -508,8 +542,143 @@ export function claimSingleUseGrantForApply(
   }
 }
 
-export function saveAuthzState(projectRoot: string, state: AuthzState): void {
-  writeJsonContained(projectRoot, authzStatePath(projectRoot), state);
+export type SaveAuthzStateOptions = EvaluateAuthzStateWriteOptions;
+
+/**
+ * Persist authz state. Under active UAT, write-class refuse applies (#4233):
+ * pin mutate / unsealed campaign-end / other UAT field mutate return ok:false.
+ * Sealed campaign-end (CLI after gateConfirm) may flip uat.active true→false only.
+ */
+function storeWriteFail(
+  code: "store-write-lock-timeout" | "store-write-io",
+  reason: string,
+): AuthzUatWriteDecision {
+  return { ok: false, code, reason, intent: "noop" };
+}
+
+function withAuthzStoreWriteLock<T>(projectRoot: string, fn: () => T): T | AuthzUatWriteDecision {
+  const root = resolve(projectRoot);
+  const lockPath = join(root, ".deft", "authz", "locks", "store-write.lock");
+  const lockToken = randomBytes(8).toString("hex");
+  const lockBody = `${JSON.stringify({
+    pid: process.pid,
+    startedAt: utcIso(),
+    token: lockToken,
+  } satisfies GrantClaimLockRecord)}\n`;
+
+  const tryCreateLock = (): boolean | AuthzUatWriteDecision => {
+    try {
+      containedWrite({ root, target: lockPath, data: lockBody, mode: "create" });
+      return true;
+    } catch (err) {
+      if (err instanceof ContainedWriteError && err.code === "CONTAINED_WRITE_EXISTS") {
+        return false;
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      return storeWriteFail("store-write-io", `authz store lock create failed: ${reason}`);
+    }
+  };
+
+  const stillOwnLock = (): boolean => {
+    const rec = readGrantClaimLockRecord(lockPath);
+    return rec !== null && rec.token === lockToken && rec.pid === process.pid;
+  };
+
+  const start = Date.now();
+  for (;;) {
+    const created = tryCreateLock();
+    if (created === true) break;
+    if (created !== false) return created;
+    // Dead-PID / corrupt reclaim — token-checked so a stale reclaim cannot rename a live lock.
+    if (tryReclaimDeadLock(lockPath)) {
+      const again = tryCreateLock();
+      if (again === true) break;
+      if (again !== false) return again;
+    }
+    if (Date.now() - start > 5000) {
+      return storeWriteFail(
+        "store-write-lock-timeout",
+        "authz store write lock timeout (remove leftover `.deft/authz/locks/store-write.lock` after a dead-holder crash if reclaim fails)",
+      );
+    }
+    const waitUntil = Date.now() + 20;
+    while (Date.now() < waitUntil) {
+      /* spin */
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    // Never delete a successor's claim after reclaim/timeout races.
+    if (stillOwnLock()) {
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+export function saveAuthzState(
+  projectRoot: string,
+  state: AuthzState,
+  options: SaveAuthzStateOptions = {},
+): AuthzUatWriteDecision {
+  return withAuthzStoreWriteLock(projectRoot, () => {
+    const prev = loadAuthzState(projectRoot);
+    // UAT activate must carry the pin observed under the lock so a pre-lock
+    // snapshot cannot drop a concurrent pinned mint (#4233).
+    const next: AuthzState =
+      prev.uat?.active !== true && state.uat?.active === true
+        ? {
+            schemaVersion: state.schemaVersion,
+            uat: state.uat,
+            activeGrantIds: [...prev.activeGrantIds],
+          }
+        : state;
+    const decision = evaluateAuthzStateWriteUnderUat(prev, next, options);
+    if (!decision.ok) return decision;
+    try {
+      writeJsonContained(projectRoot, authzStatePath(projectRoot), next);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return storeWriteFail("store-write-io", `authz state write failed: ${reason}`);
+    }
+    return decision;
+  });
+}
+
+/**
+ * Load→mutate→evaluate→write authz state under the store write lock (#4233).
+ * Callers that only flip UAT must use this so a concurrent pin is not overwritten
+ * by a pin snapshot taken before the lock.
+ */
+export function mutateAuthzState(
+  projectRoot: string,
+  mutator: (prev: AuthzState) => AuthzState,
+  options: SaveAuthzStateOptions = {},
+): AuthzUatWriteDecision & { readonly state: AuthzState } {
+  const locked = withAuthzStoreWriteLock(projectRoot, () => {
+    const prev = loadAuthzState(projectRoot);
+    const next = mutator(prev);
+    const decision = evaluateAuthzStateWriteUnderUat(prev, next, options);
+    if (!decision.ok) {
+      return { ...decision, state: prev };
+    }
+    try {
+      writeJsonContained(projectRoot, authzStatePath(projectRoot), next);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return {
+        ...storeWriteFail("store-write-io", `authz state write failed: ${reason}`),
+        state: prev,
+      };
+    }
+    return { ...decision, state: next };
+  });
+  if ("state" in locked) return locked;
+  return { ...locked, state: loadAuthzState(projectRoot) };
 }
 
 export function loadGrant(projectRoot: string, grantId: string): HumanOriginGrant | null {
@@ -522,8 +691,118 @@ export function loadGrant(projectRoot: string, grantId: string): HumanOriginGran
   }
 }
 
-export function saveGrant(projectRoot: string, grant: HumanOriginGrant): void {
-  writeJsonContained(projectRoot, authzGrantPath(projectRoot, grant.id), grant);
+/**
+ * Persist a grant. Under active UAT (#4233): grant-create and authority-field
+ * mutate refuse (returned failure); usedAt-only consume is allowed.
+ */
+export function saveGrant(projectRoot: string, grant: HumanOriginGrant): AuthzUatWriteDecision {
+  return withAuthzStoreWriteLock(projectRoot, () => {
+    const state = loadAuthzState(projectRoot);
+    const onDisk = loadGrant(projectRoot, grant.id);
+    const decision = evaluateGrantWriteUnderUat(state, onDisk, grant);
+    if (!decision.ok) return decision;
+    try {
+      writeJsonContained(projectRoot, authzGrantPath(projectRoot, grant.id), grant);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      return storeWriteFail("store-write-io", `authz grant write failed: ${reason}`);
+    }
+    return decision;
+  });
+}
+
+/**
+ * Persist a minted grant and optionally pin it in one locked transaction (#4233).
+ * If the pin write would refuse, the grant file is not written (no orphan active grant).
+ * First pin from empty seeds grants that empty-pin currently activates so older
+ * still-valid CLI grants keep authorizing outside UAT.
+ *
+ * Publish order (#4233 residual):
+ * - New grant (no on-disk id): pin first, then grant — empty-pin cannot activate an orphan.
+ * - Remint (same id on disk): grant first, then pin — interrupt cannot pin old authority.
+ * Failures restore the prior pin or prior grant bytes; never unlink a pre-existing same-ID grant.
+ */
+export function persistMintedGrant(
+  projectRoot: string,
+  grant: HumanOriginGrant,
+  options: { readonly pinActive?: boolean } = {},
+): AuthzUatWriteDecision {
+  return withAuthzStoreWriteLock(projectRoot, () => {
+    const state = loadAuthzState(projectRoot);
+    const onDisk = loadGrant(projectRoot, grant.id);
+    const grantDecision = evaluateGrantWriteUnderUat(state, onDisk, grant);
+    if (!grantDecision.ok) return grantDecision;
+
+    if (options.pinActive !== true) {
+      try {
+        writeJsonContained(projectRoot, authzGrantPath(projectRoot, grant.id), grant);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return storeWriteFail("store-write-io", `authz grant write failed: ${reason}`);
+      }
+      return grantDecision;
+    }
+
+    const ids = new Set(state.activeGrantIds);
+    if (ids.size === 0) {
+      for (const active of listActiveHumanGrants(projectRoot, state)) {
+        ids.add(active.id);
+      }
+    }
+    ids.add(grant.id);
+    const nextState: AuthzState = {
+      schemaVersion: 1,
+      uat: state.uat,
+      activeGrantIds: [...ids],
+    };
+    const pinDecision = evaluateAuthzStateWriteUnderUat(state, nextState);
+    if (!pinDecision.ok) return pinDecision;
+
+    const grantPath = authzGrantPath(projectRoot, grant.id);
+    const statePath = authzStatePath(projectRoot);
+
+    if (onDisk === null) {
+      // New mint: pin before grant so empty-pin cannot activate a half-written grant.
+      try {
+        writeJsonContained(projectRoot, statePath, nextState);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return storeWriteFail("store-write-io", `authz pin write failed: ${reason}`);
+      }
+      try {
+        writeJsonContained(projectRoot, grantPath, grant);
+      } catch (err) {
+        try {
+          writeJsonContained(projectRoot, statePath, state);
+        } catch {
+          /* best-effort pin restore */
+        }
+        const reason = err instanceof Error ? err.message : String(err);
+        return storeWriteFail("store-write-io", `authz grant write failed after pin: ${reason}`);
+      }
+    } else {
+      // Remint: replace grant bytes first so an interrupt cannot leave old authority pinned.
+      // Containment/IO refuse before publish must not unlink the prior same-ID path.
+      try {
+        writeJsonContained(projectRoot, grantPath, grant);
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        return storeWriteFail("store-write-io", `authz remint grant write failed: ${reason}`);
+      }
+      try {
+        writeJsonContained(projectRoot, statePath, nextState);
+      } catch (err) {
+        try {
+          writeJsonContained(projectRoot, grantPath, onDisk);
+        } catch {
+          /* best-effort grant restore */
+        }
+        const reason = err instanceof Error ? err.message : String(err);
+        return storeWriteFail("store-write-io", `authz pin write failed after grant: ${reason}`);
+      }
+    }
+    return pinDecision;
+  });
 }
 
 export function listGrants(projectRoot: string): HumanOriginGrant[] {
@@ -545,6 +824,9 @@ export function listGrants(projectRoot: string): HumanOriginGrant[] {
 /**
  * Active grants: non-revoked, optionally filtered by state.activeGrantIds,
  * human-origin only (self-authored records stay on disk but do not activate).
+ *
+ * Empty pin (#4233): outside UAT activates all non-revoked human-origin grants;
+ * under active UAT activates none (fail closed). startUatLease carries the pin forward.
  */
 export function listActiveHumanGrants(
   projectRoot: string,
@@ -553,7 +835,9 @@ export function listActiveHumanGrants(
 ): HumanOriginGrant[] {
   const all = listGrants(projectRoot);
   const pin = state.activeGrantIds;
-  const pinSet = pin.length > 0 ? new Set(pin) : null;
+  const uatActive = state.uat?.active === true;
+  // Outside UAT: empty pin = no filter. Under UAT: empty pin = activate none.
+  const pinSet = pin.length > 0 ? new Set(pin) : uatActive ? new Set<string>() : null;
   const nowMs = now.getTime();
   return all.filter((g) => {
     if (pinSet !== null && !pinSet.has(g.id)) return false;

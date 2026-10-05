@@ -504,6 +504,28 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function isGithubWorkflowPath(relPath: string): boolean {
+  return /(^|\/)\.github\/workflows\//i.test(relPath.replace(/\\/g, "/"));
+}
+
+/**
+ * Explicit CI harness workflow basenames (fail-closed). Unknown workflow names
+ * — including release/publish variants — stay under class 2 (#5097).
+ */
+function isCiHarnessGithubWorkflow(relPath: string): boolean {
+  const base = relPath.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  return (
+    base === "ci.yml" ||
+    base === "ci.yaml" ||
+    base === "ci-lane.yml" ||
+    base === "ci-lane.yaml" ||
+    base === "branch-gate.yml" ||
+    base === "branch-gate.yaml" ||
+    base.startsWith("greenfield-") ||
+    base.startsWith("one-pr-unit")
+  );
+}
+
 function scanProductionReferences(
   relPath: string,
   content: string,
@@ -518,6 +540,12 @@ function scanProductionReferences(
   if (isUnderAnyRoot(relPath, policy.testRoots) || isUnderAnyRoot(relPath, policy.fixtureRoots)) {
     return null;
   }
+  // Only known CI harness workflows may stage fixtures/test roots. Shipping and
+  // unknown workflow names remain class-2 fail-closed (#5097).
+  if (isGithubWorkflowPath(relPath) && isCiHarnessGithubWorkflow(relPath)) {
+    return null;
+  }
+
   const underSource = isUnderAnyRoot(relPath, policy.sourceRoots);
   const looksLikeDeploy =
     /(^|\/)(infra|deploy|deployment|terraform|bicep|cloudformation)(\/|$)/i.test(relPath) ||
@@ -836,9 +864,14 @@ export function evaluateClassChecks(
   const protectedHits = changed
     .map((p) => normalizeRepoRelPath(p))
     .filter((p) => !isExempt(p, baseTb.testRoots) && isProtected(p, classPolicy.protectedGlobs));
-  const storyMix = changed.some((p) =>
-    isStoryProductPath(normalizeRepoRelPath(p), baseTb, classPolicy.protectedGlobs),
-  );
+  // CLI authz is a composition companion only when paired with core authz
+  // protected paths (#4233 / #4980) — not a blanket story-product exemption.
+  const authzProtectedHit = protectedHits.some((p) => p.startsWith("packages/core/src/authz/"));
+  const storyMix = changed.some((p) => {
+    const posix = normalizeRepoRelPath(p);
+    if (posix === "packages/cli/src/authz.ts" && authzProtectedHit) return false;
+    return isStoryProductPath(posix, baseTb, classPolicy.protectedGlobs);
+  });
   if (protectedHits.length > 0 && storyMix) {
     for (const path of protectedHits) {
       findings.push({

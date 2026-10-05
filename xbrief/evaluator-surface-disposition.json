@@ -1,11 +1,11 @@
 {
   "schema": "deft.evaluator-surface-disposition.v1",
   "kind": "disclosure",
-  "issue": 5028,
+  "issue": 1589,
   "surfaces": [
+    "tasks/verify.yml",
     "vitest.config.ts",
-    "packages/core/src/vitest-runner/duration-sequencer.ts",
     "xbrief/evaluator-surface-disposition.json"
   ],
-  "note": "Renewed disclosure for #5028 cold-worktree DurationSequencer (no harmful groupOrder; projects stay concurrent). Committed durations fixture replaces host-global cache.dir. Disclosure only; not #3164 authorization."
+  "note": "Renewed disclosure for #1589 / PR #5315: tasks/verify.yml registers verify:spec-drift; vitest.config.ts adds @deftai/directive-core/spec-reconstruct alias. Disclosure only; not #3164 authorization. Floor-exception merge cites C3 enforce leftover #5350."
 }

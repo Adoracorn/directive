@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeGateResult } from "./compute.js";
+import { type ComputeGateOptions, computeGateResult } from "./compute.js";
 import {
   CONFIDENCE_RE,
   GREPTILE_ERRORED_SENTINEL,
@@ -8,9 +8,22 @@ import {
   VIA_FALLBACK2,
   VIA_PRIMARY,
 } from "./constants.js";
-import { evaluateGates } from "./evaluate.js";
+import { evaluateGates, isMergeReady } from "./evaluate.js";
 import { emptyVerdict, isInformalCleanMissingCanonicalFields, parseGreptileBody } from "./parse.js";
 import type { GreptileVerdict, RunGhFn } from "./types.js";
+
+/** Hermetic Greptile suites must opt out of closeout explicitly (#3875). */
+function computeGate(
+  prNumber: number,
+  repo: string | null,
+  runGh: Parameters<typeof computeGateResult>[2],
+  options: ComputeGateOptions = {},
+) {
+  return computeGateResult(prNumber, repo, runGh, {
+    skipCloseoutAttestable: true,
+    ...options,
+  });
+}
 
 const HEAD = "abc1234567890def1234567890abcdef12345678";
 
@@ -153,6 +166,23 @@ describe("evaluateGates", () => {
     expect(failures.some((f) => f.includes("No Greptile rolling-summary"))).toBe(true);
   });
 
+  it("no_reviewer_installed is a named failure, never CLEAN or wait-pending (#3630)", () => {
+    const failures = evaluateGates(
+      1,
+      HEAD,
+      verdict({ found: false, lastReviewedSha: null, confidence: null }),
+      null,
+      { reviewerReadyState: "no_reviewer_installed" },
+    );
+    expect(failures.some((f) => f.includes("NO_REVIEWER_INSTALLED"))).toBe(true);
+    expect(failures.some((f) => f.includes("review_cycle: skipped:no-reviewer-installed"))).toBe(
+      true,
+    );
+    expect(failures.some((f) => f.includes("deft-directive-pre-pr"))).toBe(true);
+    expect(failures.some((f) => f.includes("Wait for the review"))).toBe(false);
+    expect(isMergeReady(failures)).toBe(false);
+  });
+
   it("fails on errored state", () => {
     expect(
       evaluateGates(1, HEAD, verdict({ errored: true })).some((f) => f.includes("ERRORED")),
@@ -222,7 +252,7 @@ describe("evaluateGates", () => {
         p0Count: 0,
         p1Count: 0,
       }),
-      { p0Count: 0, p1Count: 0, unresolvedThreadCount: 0, error: null },
+      { p0Count: 0, p1Count: 0, unresolvedThreadCount: 0, error: null, resolutionKnown: true },
       { greptileReviewTerminalOnHead: true, commentsAdded: 0 },
     );
     expect(failures).toEqual([]);
@@ -250,7 +280,7 @@ describe("evaluateGates", () => {
         p0Count: 0,
         p1Count: 0,
       }),
-      { p0Count: 0, p1Count: 1, unresolvedThreadCount: 1, error: null },
+      { p0Count: 0, p1Count: 1, unresolvedThreadCount: 1, error: null, resolutionKnown: true },
       { greptileReviewTerminalOnHead: true, commentsAdded: 1 },
     );
     expect(failures.some((f) => f.includes("findings channel"))).toBe(true);
@@ -267,7 +297,13 @@ describe("evaluateGates", () => {
         p0Count: 0,
         p1Count: 0,
       }),
-      { p0Count: 0, p1Count: 0, unresolvedThreadCount: 0, error: "graphql rate limit" },
+      {
+        p0Count: 0,
+        p1Count: 0,
+        unresolvedThreadCount: 0,
+        error: "graphql rate limit",
+        resolutionKnown: true,
+      },
       { greptileReviewTerminalOnHead: true, commentsAdded: 1 },
     );
     expect(failures.some((f) => f.includes("0 P0 and 0 P1"))).toBe(false);
@@ -302,6 +338,7 @@ describe("evaluateGates", () => {
       p1Count: 1,
       unresolvedThreadCount: 1,
       error: null,
+      resolutionKnown: true,
     });
     expect(failures.some((f) => f.includes("unresolved inline P1"))).toBe(true);
   });
@@ -312,6 +349,7 @@ describe("evaluateGates", () => {
       p1Count: 0,
       unresolvedThreadCount: 0,
       error: "graphql reviewThreads failed: rate limit",
+      resolutionKnown: true,
     });
     expect(
       failures.some((f) => f.includes("Could not verify Greptile inline review comments")),
@@ -328,6 +366,7 @@ describe("evaluateGates", () => {
         p1Count: 1,
         unresolvedThreadCount: 1,
         error: null,
+        resolutionKnown: true,
       },
     );
     expect(failures.some((f) => f.includes("unresolved inline P1"))).toBe(true);
@@ -407,7 +446,7 @@ describe("computeGateResult layered fallbacks", () => {
   }
 
   it("primary clean via primary", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({
@@ -421,7 +460,7 @@ describe("computeGateResult layered fallbacks", () => {
   });
 
   it("primary blocked stays primary", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({
@@ -435,7 +474,7 @@ describe("computeGateResult layered fallbacks", () => {
 
   it("fallback1 when jq fails", () => {
     const rest = JSON.stringify([{ user: { login: "greptile-apps[bot]" }, body: cleanBody() }]);
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({
@@ -450,7 +489,7 @@ describe("computeGateResult layered fallbacks", () => {
   });
 
   it("blocks on failed required check-run", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({
@@ -474,7 +513,7 @@ describe("computeGateResult layered fallbacks", () => {
   });
 
   it("reports pending check-run as not-ready-yet", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({
@@ -494,7 +533,7 @@ describe("computeGateResult layered fallbacks", () => {
   });
 
   it("honors ignore list for flaky non-required check", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({
@@ -513,7 +552,7 @@ describe("computeGateResult layered fallbacks", () => {
   });
 
   it("fallback2 never clean", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({
@@ -543,7 +582,7 @@ describe("computeGateResult layered fallbacks", () => {
   });
 
   it("total failure returns via error", () => {
-    const result = computeGateResult(
+    const result = computeGate(
       1363,
       "deftai/directive",
       installFakeGh({

@@ -3,14 +3,21 @@ import { dualStopSpendSeats, evaluateDualStopPostBudget } from "./leftover-pain.
 import { resolveArcRunPostureForHost } from "./run-posture.js";
 import {
   ARC_SPENDS,
+  evaluateHostMemorySpendConflict,
   evaluateSpendRecord,
+  HOST_MEMORY_CONFLICT_DISCLOSURE_PREFIX,
+  HOST_MEMORY_EXTERNAL_CONTEXT_FAMILY,
+  hostMemoryHasPersonalAuthority,
   N1_SPEND,
   N3_SPEND,
   parseOperatorSpend,
+  parseSpendRecommend,
   SPEND_ASK_FIELD,
   SPEND_ASK_REMEDIATION,
   SPEND_FIELD,
+  SPEND_RECOMMEND_FIELD,
   spendAskRecordLine,
+  spendRecommendRecordLine,
   spendRecordLine,
 } from "./spend.js";
 
@@ -319,19 +326,134 @@ describe("evaluateSpendRecord (#4705)", () => {
 });
 
 describe("spend does not copy grok-bot run-posture default (#4705)", () => {
-  it("asks missing-token even when grok-bot detect would default posture", () => {
+  it("asks missing-token without spend-recommend even when posture defaults", () => {
     const utterance = "arc no-ingest yolo 4690";
     expect(parseOperatorSpend(utterance)).toEqual({
       kind: "ask",
       reason: "missing-token",
     });
     expect(
-      resolveArcRunPostureForHost({ utterance: "run an arc on #286", grokBotDetected: true }),
+      resolveArcRunPostureForHost({ utterance: "run an arc on #286", grokBotDetected: false }),
     ).toEqual({ kind: "resolved", posture: "no-ingest" });
     expect(parseOperatorSpend("run an arc on #286")).toEqual({
       kind: "ask",
       reason: "missing-token",
     });
+  });
+});
+
+describe("spend-recommend closed source (#5111)", () => {
+  it("parses closed spend-recommend lines only", () => {
+    expect(parseSpendRecommend("spend-recommend: N=1")).toBe(N1_SPEND);
+    expect(parseSpendRecommend("spend-recommend: N≥3")).toBe(N3_SPEND);
+    expect(parseSpendRecommend("spend-recommend: N>=3")).toBeNull();
+    expect(parseSpendRecommend("use recommended n")).toBeNull();
+    expect(parseSpendRecommend(null)).toBeNull();
+    expect(spendRecommendRecordLine(N1_SPEND)).toBe("spend-recommend: N=1");
+    expect(SPEND_RECOMMEND_FIELD).toBe("spend-recommend:");
+  });
+
+  it("resolves missing utterance token from spend-recommend without silent N=1", () => {
+    expect(parseOperatorSpend("arc no-ingest yolo 4690", { spendRecommend: N1_SPEND })).toEqual({
+      kind: "resolved",
+      spend: N1_SPEND,
+    });
+    expect(parseOperatorSpend("arc no-ingest yolo 4690", { spendRecommend: N3_SPEND })).toEqual({
+      kind: "resolved",
+      spend: N3_SPEND,
+    });
+    expect(parseOperatorSpend("arc no-ingest yolo 4690")).toEqual({
+      kind: "ask",
+      reason: "missing-token",
+    });
+    expect(
+      evaluateSpendRecord({
+        parse: parseOperatorSpend("arc 5111", { spendRecommend: N3_SPEND }),
+        asked: false,
+        answer: null,
+        stop1Spend: N3_SPEND,
+        spendAsk: "resolved",
+      }),
+    ).toEqual({ ok: true, spend: N3_SPEND });
+  });
+
+  it("lets explicit n= tokens override spend-recommend", () => {
+    expect(parseOperatorSpend("arc 5111 n=1", { spendRecommend: N3_SPEND })).toEqual({
+      kind: "resolved",
+      spend: N1_SPEND,
+    });
+    expect(parseOperatorSpend("arc 5111 n=3", { spendRecommend: N1_SPEND })).toEqual({
+      kind: "resolved",
+      spend: N3_SPEND,
+    });
+  });
+});
+
+describe("host-memory external-context authority (#5321)", () => {
+  it("gives every host-memory provenance zero Personal authority", () => {
+    expect(hostMemoryHasPersonalAuthority("unsigned")).toBe(false);
+    expect(hostMemoryHasPersonalAuthority("agent-inferred")).toBe(false);
+    expect(hostMemoryHasPersonalAuthority(null)).toBe(false);
+    expect(hostMemoryHasPersonalAuthority(undefined)).toBe(false);
+    // operator-asked is write-consent audit, not USER.md Personal (#5321 F5)
+    expect(hostMemoryHasPersonalAuthority("operator-asked")).toBe(false);
+  });
+
+  it("lets spend-recommend resolve beat host-memory always-ask with disclosure", () => {
+    const verdict = evaluateHostMemorySpendConflict({
+      hostMemoryAlwaysAsk: true,
+      hostMemoryProvenance: "unsigned",
+      utterance: "arc 5318",
+      spendRecommend: N1_SPEND,
+    });
+    expect(verdict.follow).toBe("contract");
+    expect(verdict.hostMemoryPersonalAuthority).toBe(false);
+    expect(verdict.spendParse).toEqual({ kind: "resolved", spend: N1_SPEND });
+    expect(verdict.spendAsk).toBe("resolved");
+    expect(verdict.spendRecord).toEqual({ ok: true, spend: N1_SPEND });
+    expect(verdict.disclosure).toBe(
+      `${HOST_MEMORY_CONFLICT_DISCLOSURE_PREFIX} spend (spend-recommend → spend-ask: resolved)`,
+    );
+    expect(HOST_MEMORY_EXTERNAL_CONTEXT_FAMILY).toContain("host agent memory");
+    expect(HOST_MEMORY_EXTERNAL_CONTEXT_FAMILY).toContain("Warp Drive");
+  });
+
+  it("discloses when an explicit utterance token beats host-memory always-ask", () => {
+    const verdict = evaluateHostMemorySpendConflict({
+      hostMemoryAlwaysAsk: true,
+      hostMemoryProvenance: "unsigned",
+      utterance: "arc 5318 n=1",
+      spendRecommend: null,
+    });
+    expect(verdict.spendParse).toEqual({ kind: "resolved", spend: N1_SPEND });
+    expect(verdict.disclosure).toBe(
+      `${HOST_MEMORY_CONFLICT_DISCLOSURE_PREFIX} spend (utterance token → spend-ask: resolved)`,
+    );
+  });
+
+  it("credits the utterance token when both token and spend-recommend resolve", () => {
+    const verdict = evaluateHostMemorySpendConflict({
+      hostMemoryAlwaysAsk: true,
+      hostMemoryProvenance: "operator-asked",
+      utterance: "arc 5318 n=1",
+      spendRecommend: N3_SPEND,
+    });
+    expect(verdict.hostMemoryPersonalAuthority).toBe(false);
+    expect(verdict.spendParse).toEqual({ kind: "resolved", spend: N1_SPEND });
+    expect(verdict.disclosure).toBe(
+      `${HOST_MEMORY_CONFLICT_DISCLOSURE_PREFIX} spend (utterance token → spend-ask: resolved)`,
+    );
+  });
+
+  it("does not invent disclosure when host memory is silent", () => {
+    const verdict = evaluateHostMemorySpendConflict({
+      hostMemoryAlwaysAsk: false,
+      hostMemoryProvenance: "unsigned",
+      utterance: "arc 5318",
+      spendRecommend: N1_SPEND,
+    });
+    expect(verdict.disclosure).toBeNull();
+    expect(verdict.spendAsk).toBe("resolved");
   });
 });
 

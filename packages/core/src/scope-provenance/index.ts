@@ -3,8 +3,12 @@
  */
 
 export {
+  type ApprovedScopeMembershipFinding,
+  type ApprovedScopeMembershipInput,
+  type ApprovedScopeMembershipKind,
   CHANGELOG_REL,
   concreteProductionScopeEntries,
+  evaluateApprovedScopeMembership,
   evaluateProductionScopeFence,
   isConcreteFileScopeEntry,
   isProductionRootPath,

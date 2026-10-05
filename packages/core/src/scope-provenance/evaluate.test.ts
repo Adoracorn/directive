@@ -97,8 +97,1127 @@ describe("evaluateOneScopeProvenance (#4956 retires mint-on-proceed)", () => {
   });
 });
 
+describe("evaluateScopeProvenance membership (#4774)", () => {
+  it("fails closed when first-story has no merge-base mint (Bound)", () => {
+    const active = new Map<string, string>([
+      [
+        "xbrief/active/story.xbrief.json",
+        JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+      ],
+    ]);
+    const result = evaluateScopeProvenance("/tmp/proj-c24", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        ".gitignore",
+        "COST-ESTIMATE.md",
+        "packages/core/src/a.ts",
+      ],
+      activeXbriefs: active,
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map(),
+      enforce: false,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings[0]?.kind).toBe("active-xbrief-modified-without-digest");
+    expect(result.findings[0]?.detail).toMatch(/#4774/);
+    expect(result.findings[0]?.expandedPaths).toEqual(
+      expect.arrayContaining([".gitignore", "COST-ESTIMATE.md", "packages/core/src/a.ts"]),
+    );
+  });
+
+  it("does not treat omitting file_scope as undeclared-by-design when mint is missing", () => {
+    const undeclared = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: { id: "story-uat", status: "running", metadata: { intended_placement: { files: [] } } },
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-uat5", {
+      changedFiles: [
+        "xbrief/active/2026-09-18-4-show-request-time-in-milliseconds.xbrief.json",
+        ".gitignore",
+        "COST-ESTIMATE.md",
+        "Taskfile.yml",
+        "package.json",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/2026-09-18-4-show-request-time-in-milliseconds.xbrief.json",
+          JSON.stringify(undeclared),
+        ],
+      ]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map(),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings[0]?.kind).toBe("active-xbrief-modified-without-digest");
+    expect(result.findings[0]?.remediation).toMatch(/not undeclared-by-design attestation/i);
+  });
+
+  it("compares change-set paths to merge-base approved-scope, not live HEAD file_scope", () => {
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: xbrief("story-1", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    // Live HEAD claims extras are in scope — membership must still refuse non-allowance paths.
+    const head = xbrief("story-1", [
+      "packages/core/src/a.ts",
+      "packages/core/src/b.ts",
+      ".gitignore",
+    ]);
+    const result = evaluateScopeProvenance("/tmp/proj-membership", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        ".gitignore",
+      ],
+      activeXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(head)]]),
+      approvedRecords: [approved],
+      baseApprovedRecords: new Map([["story-1", approved]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings.some((f) => f.kind === "change-set-outside-approved-scope")).toBe(true);
+    const hit = result.findings.find((f) => f.kind === "change-set-outside-approved-scope");
+    // b.ts may spend production allowance; .gitignore never matches without allowlist entry.
+    expect(hit?.expandedPaths).toContain(".gitignore");
+    expect(hit?.expandedPaths).not.toContain("xbrief/active/story.xbrief.json");
+  });
+
+  it("exempts the bound active xBRIEF path after a merge-base mint exists", () => {
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: xbrief("story-1", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-exempt", {
+      changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts", "CHANGELOG.md"],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [approved],
+      baseApprovedRecords: new Map([["story-1", approved]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("fails closed when PR brief file_scope would self-authorize without mint", () => {
+    const result = evaluateScopeProvenance("/tmp/proj-first-story", {
+      changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts", "CHANGELOG.md"],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map(),
+      enforce: false,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings.some((f) => f.kind === "active-xbrief-modified-without-digest")).toBe(
+      true,
+    );
+  });
+
+  it("empty merge-base mint is authoritative (no brief fallback)", () => {
+    const emptyMint = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: xbrief("story-1", []),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-empty-mint", {
+      changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts"],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [emptyMint],
+      baseApprovedRecords: new Map([["story-1", emptyMint]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      enforce: false,
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings[0]?.kind).toBe("active-xbrief-modified-without-digest");
+    expect(result.findings[0]?.expandedPaths).toContain("packages/core/src/a.ts");
+  });
+
+  it("falls back to concrete merge-base brief file_scope when mint is absent (#5192 Path B)", () => {
+    const result = evaluateScopeProvenance("/tmp/proj-base-brief-fallback", {
+      changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts"],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts", "packages/core/src/b.ts"])),
+        ],
+      ]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      enforce: false,
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("Path B plus undeclared tests refuses with split/widen-brief remediation, not mint (#5192)", () => {
+    const result = evaluateScopeProvenance("/tmp/proj-path-b-tests", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "tests/helpers/probe.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      enforce: false,
+    });
+    expect(result.exitCode).toBe(1);
+    const hit = result.findings.find((f) => f.kind === "change-set-outside-approved-scope");
+    expect(hit?.expandedPaths).toContain("tests/helpers/probe.ts");
+    expect(hit?.remediation).toMatch(/widened concrete brief|follow-up story/i);
+    expect(hit?.remediation).not.toMatch(/renewed merge-base approval/i);
+  });
+
+  it("peer PR-authored file_scope does not expand another story's allowlist", () => {
+    const approvedA = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story-a.xbrief.json",
+      payload: xbrief("story-a", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-peer-pr-authored", {
+      changedFiles: [
+        "xbrief/active/story-a.xbrief.json",
+        "xbrief/active/story-b.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "packages/core/src/c.ts",
+        "packages/core/src/d.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/active/story-b.xbrief.json",
+          // Peer first-intro with PR-authored scope covering b.ts — must not widen A.
+          JSON.stringify(xbrief("story-b", ["packages/core/src/b.ts"])),
+        ],
+      ]),
+      approvedRecords: [approvedA],
+      baseApprovedRecords: new Map([["story-a", approvedA]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      enforce: false,
+    });
+    expect(result.exitCode).toBe(1);
+    // Without peer widening, three source extras exceed allowance 2.
+    const hit = result.findings.find((f) => f.kind === "change-set-outside-approved-scope");
+    expect(hit?.expandedPaths.length).toBeGreaterThan(0);
+  });
+
+  it("unchanged peer approved scope does not authorize this story's files", () => {
+    const approvedA = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story-a.xbrief.json",
+      payload: xbrief("story-a", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const approvedB = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story-b.xbrief.json",
+      payload: xbrief("story-b", ["packages/core/src/b.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-unchanged-peer", {
+      changedFiles: [
+        "xbrief/active/story-a.xbrief.json",
+        "packages/core/src/a.ts",
+        "tests/peer-b-leak.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/active/story-b.xbrief.json",
+          JSON.stringify(xbrief("story-b", ["packages/core/src/b.ts"])),
+        ],
+      ]),
+      approvedRecords: [approvedA, approvedB],
+      baseApprovedRecords: new Map([
+        ["story-a", approvedA],
+        ["story-b", approvedB],
+      ]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/active/story-b.xbrief.json",
+          JSON.stringify(xbrief("story-b", ["packages/core/src/b.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(1);
+    const hit = result.findings.find((f) => f.kind === "change-set-outside-approved-scope");
+    expect(hit?.expandedPaths).toContain("tests/peer-b-leak.ts");
+  });
+
+  it("peer approval does not hide a missing own allowlist", () => {
+    const approvedB = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story-b.xbrief.json",
+      payload: xbrief("story-b", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const emptyA = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: { id: "story-a", status: "running", metadata: { swarm: { file_scope: [] } } },
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-peer-hide", {
+      changedFiles: [
+        "xbrief/active/story-a.xbrief.json",
+        "xbrief/active/story-b.xbrief.json",
+        "packages/core/src/a.ts",
+      ],
+      activeXbriefs: new Map([
+        ["xbrief/active/story-a.xbrief.json", JSON.stringify(emptyA)],
+        [
+          "xbrief/active/story-b.xbrief.json",
+          JSON.stringify(xbrief("story-b", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [approvedB],
+      baseApprovedRecords: new Map([["story-b", approvedB]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story-b.xbrief.json",
+          JSON.stringify(xbrief("story-b", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(
+      result.findings.some(
+        (f) =>
+          f.kind === "active-xbrief-modified-without-digest" &&
+          f.xbriefRelPath === "xbrief/active/story-a.xbrief.json",
+      ),
+    ).toBe(true);
+  });
+
+  it("unions peer merge-base approved scopes for multi-story membership", () => {
+    const approvedA = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story-a.xbrief.json",
+      payload: xbrief("story-a", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const approvedB = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story-b.xbrief.json",
+      payload: xbrief("story-b", ["packages/core/src/b.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-multi-story", {
+      changedFiles: [
+        "xbrief/active/story-a.xbrief.json",
+        "xbrief/active/story-b.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "CHANGELOG.md",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/active/story-b.xbrief.json",
+          JSON.stringify(xbrief("story-b", ["packages/core/src/b.ts"])),
+        ],
+      ]),
+      approvedRecords: [approvedA, approvedB],
+      baseApprovedRecords: new Map([
+        ["story-a", approvedA],
+        ["story-b", approvedB],
+      ]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/active/story-b.xbrief.json",
+          JSON.stringify(xbrief("story-b", ["packages/core/src/b.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.findings.some((f) => f.kind === "change-set-outside-approved-scope")).toBe(false);
+  });
+
+  it("uses continuity-resolved planId mint even when xbriefRelPath is stale (#5192)", () => {
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/old-name.xbrief.json",
+      payload: xbrief("story-1", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-stale-path-mint", {
+      changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts"],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [approved],
+      baseApprovedRecords: new Map([["story-1", approved]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("refuses same-path plan.id relabel before borrowing another mint (#5192)", () => {
+    const otherMint = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/other.xbrief.json",
+      payload: xbrief("story-other", ["packages/core/src/a.ts", "tests/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-relabel", {
+      changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts", "tests/a.ts"],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-other", ["packages/core/src/a.ts", "tests/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [otherMint],
+      baseApprovedRecords: new Map([["story-other", otherMint]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings[0]?.detail).toMatch(/plan\.id rewrite|relabel/i);
+  });
+
+  it("no-plan.id basename-keyed mint at same path remains authoritative (#5192)", () => {
+    const noId = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "running",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: {
+        ...noId,
+        plan: { ...noId.plan, id: "story" },
+      },
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    // Force basename key + path match for no-plan.id head.
+    const basenameMint = {
+      ...approved,
+      planId: "story",
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      fileScope: ["packages/core/src/a.ts"],
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-no-planid-mint", {
+      changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts", "tests/out.ts"],
+      activeXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noId)]]),
+      approvedRecords: [basenameMint],
+      baseApprovedRecords: new Map([["story", basenameMint]]),
+      baseXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noId)]]),
+    });
+    expect(result.exitCode).toBe(1);
+    const hit = result.findings.find((f) => f.kind === "change-set-outside-approved-scope");
+    expect(hit?.expandedPaths).toContain("tests/out.ts");
+  });
+
+  it("no-plan.id pending→active brief-only with both paths listed passes (#5192)", () => {
+    const noId = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "running",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-no-planid-move", {
+      changedFiles: [
+        "xbrief/pending/story.xbrief.json",
+        "xbrief/active/story.xbrief.json",
+        "CHANGELOG.md",
+      ],
+      activeXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noId)]]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([["xbrief/pending/story.xbrief.json", JSON.stringify(noId)]]),
+    });
+    expect(result.exitCode).toBe(0);
+  });
+
+  it("no-plan.id move plus tests fails; land the move brief-only first (#5192)", () => {
+    const noId = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "running",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-no-planid-move-impl", {
+      changedFiles: [
+        "xbrief/pending/story.xbrief.json",
+        "xbrief/active/story.xbrief.json",
+        "tests/a.ts",
+        "tests/b.ts",
+        "tests/c.ts",
+        "tests/d.ts",
+        "tests/e.ts",
+        "tests/f.ts",
+      ],
+      activeXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noId)]]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([["xbrief/pending/story.xbrief.json", JSON.stringify(noId)]]),
+    });
+    expect(result.exitCode).toBe(1);
+  });
+
+  it("peer completed move uses continuity baseRel so it does not exhaust another allowance (#5192)", () => {
+    const approvedA = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/a.xbrief.json",
+      payload: xbrief("story-a", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const approvedB = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/b.xbrief.json",
+      payload: xbrief("story-b", [
+        "packages/core/src/b1.ts",
+        "packages/core/src/b2.ts",
+        "packages/core/src/b3.ts",
+        "packages/core/src/b4.ts",
+        "packages/core/src/b5.ts",
+      ]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    // A stays active (narrow). B completes with five in-scope product files.
+    // Without peer continuity, A's fence would miss B's base claim and fail.
+    const result = evaluateScopeProvenance("/tmp/proj-peer-completed-move", {
+      changedFiles: [
+        "xbrief/active/b.xbrief.json",
+        "xbrief/completed/b.xbrief.json",
+        "packages/core/src/b1.ts",
+        "packages/core/src/b2.ts",
+        "packages/core/src/b3.ts",
+        "packages/core/src/b4.ts",
+        "packages/core/src/b5.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/completed/b.xbrief.json",
+          JSON.stringify(
+            xbrief("story-b", [
+              "packages/core/src/b1.ts",
+              "packages/core/src/b2.ts",
+              "packages/core/src/b3.ts",
+              "packages/core/src/b4.ts",
+              "packages/core/src/b5.ts",
+            ]),
+          ),
+        ],
+      ]),
+      approvedRecords: [approvedA, approvedB],
+      baseApprovedRecords: new Map([
+        ["story-a", approvedA],
+        ["story-b", approvedB],
+      ]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/active/b.xbrief.json",
+          JSON.stringify(
+            xbrief("story-b", [
+              "packages/core/src/b1.ts",
+              "packages/core/src/b2.ts",
+              "packages/core/src/b3.ts",
+              "packages/core/src/b4.ts",
+              "packages/core/src/b5.ts",
+            ]),
+          ),
+        ],
+      ]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    expect(result.findings.some((f) => f.kind === "production-scope-over-budget")).toBe(false);
+  });
+
+  it("uses continuity baseRel for production fence after active→completed move (#5192)", () => {
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: xbrief("story-1", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    // Broader mint must not skip the restrictive base brief fence on the old path.
+    const broadMint = {
+      ...approved,
+      fileScope: [
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "packages/core/src/c.ts",
+        "packages/core/src/d.ts",
+        "packages/core/src/e.ts",
+        "packages/core/src/f.ts",
+        "packages/core/src/g.ts",
+      ],
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-move-fence", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "xbrief/completed/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "packages/core/src/c.ts",
+        "packages/core/src/d.ts",
+        "packages/core/src/e.ts",
+        "packages/core/src/f.ts",
+        "packages/core/src/g.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/completed/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [broadMint],
+      baseApprovedRecords: new Map([["story-1", broadMint]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings.some((f) => f.kind === "production-scope-over-budget")).toBe(true);
+  });
+
+  it("does not treat pending→active as a move when pending remains on HEAD (#5192)", () => {
+    const result = evaluateScopeProvenance("/tmp/proj-pending-still-head", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "tests/a.ts",
+        "tests/b.ts",
+        "tests/c.ts",
+        "tests/d.ts",
+        "tests/e.ts",
+        "tests/f.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([
+        [
+          "xbrief/pending/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings[0]?.detail).toMatch(/still present on head|not a continuity move/i);
+  });
+
+  it("rejects basename mint whose planId mismatches the basename key (#5192)", () => {
+    const noId = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "running",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const mismatched = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: xbrief("other-plan", ["packages/core/src/a.ts", "packages/core/src/evil.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    expect(mismatched.planId).toBe("other-plan");
+    const result = evaluateScopeProvenance("/tmp/proj-basename-mismatch", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/evil.ts",
+      ],
+      activeXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noId)]]),
+      approvedRecords: [mismatched],
+      // Keyed by basename "story" but planId is other-plan — must not authorize.
+      baseApprovedRecords: new Map([["story", mismatched]]),
+      baseXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noId)]]),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.findings.some((f) => /mismatched planId/i.test(f.detail))).toBe(true);
+    // Mismatched mint must not become the allowlist (evil.ts would otherwise pass).
+    expect(result.findings.some((f) => f.kind === "change-set-outside-approved-scope")).toBe(false);
+  });
+
+  it("injected active map does not re-bind a new pending brief over an active story (#5192)", () => {
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/a.xbrief.json",
+      payload: xbrief("story-a", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-pending-not-rebound", {
+      changedFiles: [
+        "xbrief/pending/unrelated.xbrief.json",
+        "packages/core/src/a.ts",
+        "CHANGELOG.md",
+      ],
+      // Pinned presentation-coverage selection: active only (new pending omitted).
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [approved],
+      baseApprovedRecords: new Map([["story-a", approved]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.findings.some((f) => f.xbriefRelPath.includes("pending/"))).toBe(false);
+  });
+
+  it("no-plan.id completed move still uses same-basename base fence (#5192)", () => {
+    const noIdNarrow = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "running",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const broadMint = {
+      planId: "story",
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      fileScope: [
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "packages/core/src/c.ts",
+        "packages/core/src/d.ts",
+        "packages/core/src/e.ts",
+        "packages/core/src/f.ts",
+        "packages/core/src/g.ts",
+      ],
+      fileScopeDigest: "deadbeef",
+      humanApproval: {
+        kind: "operator" as const,
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-noid-completed-fence", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "xbrief/completed/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "packages/core/src/c.ts",
+        "packages/core/src/d.ts",
+        "packages/core/src/e.ts",
+        "packages/core/src/f.ts",
+        "packages/core/src/g.ts",
+      ],
+      activeXbriefs: new Map([["xbrief/completed/story.xbrief.json", JSON.stringify(noIdNarrow)]]),
+      approvedRecords: [broadMint],
+      baseApprovedRecords: new Map([["story", broadMint]]),
+      baseXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noIdNarrow)]]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    expect(result.findings.some((f) => f.kind === "production-scope-over-budget")).toBe(true);
+  });
+
+  it("no-plan.id completed move keeps concrete precommitment for membership (#5192)", () => {
+    const noId = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "completed",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-noid-completed-precommit", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "xbrief/completed/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "CHANGELOG.md",
+      ],
+      activeXbriefs: new Map([["xbrief/completed/story.xbrief.json", JSON.stringify(noId)]]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(noId)]]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    expect(result.exitCode).toBe(0);
+    expect(
+      result.findings.some(
+        (f) =>
+          f.kind === "active-xbrief-modified-without-digest" ||
+          f.kind === "change-set-outside-approved-scope",
+      ),
+    ).toBe(false);
+  });
+
+  it("no-plan.id completed brief does not borrow a same-basename pending still on HEAD (#5192)", () => {
+    const noIdNarrow = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "completed",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const unrelatedPendingBroad = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "pending",
+        metadata: {
+          swarm: {
+            file_scope: [
+              "packages/core/src/a.ts",
+              "packages/core/src/b.ts",
+              "packages/core/src/c.ts",
+              "packages/core/src/d.ts",
+              "packages/core/src/e.ts",
+              "packages/core/src/f.ts",
+              "packages/core/src/g.ts",
+            ],
+          },
+        },
+      },
+    };
+    // New completed brief; pending with same basename remains on HEAD (not a move).
+    const result = evaluateScopeProvenance("/tmp/proj-noid-no-borrow-pending", {
+      changedFiles: [
+        "xbrief/completed/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "packages/core/src/c.ts",
+        "packages/core/src/d.ts",
+        "packages/core/src/e.ts",
+        "packages/core/src/f.ts",
+        "packages/core/src/g.ts",
+      ],
+      activeXbriefs: new Map([
+        ["xbrief/completed/story.xbrief.json", JSON.stringify(noIdNarrow)],
+        ["xbrief/pending/story.xbrief.json", JSON.stringify(unrelatedPendingBroad)],
+      ]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([
+        ["xbrief/pending/story.xbrief.json", JSON.stringify(unrelatedPendingBroad)],
+      ]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    // Must not admit extras under the unrelated pending brief's broad scope.
+    expect(
+      result.findings.some(
+        (f) =>
+          f.kind === "production-scope-over-budget" ||
+          f.kind === "active-xbrief-modified-without-digest" ||
+          f.kind === "change-set-outside-approved-scope",
+      ),
+    ).toBe(true);
+  });
+
+  it("no-plan.id completed move prefers active over stale pending for fence (#5192)", () => {
+    const noIdNarrow = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "completed",
+        metadata: { swarm: { file_scope: ["packages/core/src/a.ts"] } },
+      },
+    };
+    const stalePendingBroad = {
+      xBRIEFInfo: { version: "0.8" },
+      plan: {
+        status: "pending",
+        metadata: {
+          swarm: {
+            file_scope: [
+              "packages/core/src/a.ts",
+              "packages/core/src/b.ts",
+              "packages/core/src/c.ts",
+              "packages/core/src/d.ts",
+              "packages/core/src/e.ts",
+              "packages/core/src/f.ts",
+              "packages/core/src/g.ts",
+            ],
+          },
+        },
+      },
+    };
+    const result = evaluateScopeProvenance("/tmp/proj-noid-prefer-active", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "xbrief/completed/story.xbrief.json",
+        "packages/core/src/a.ts",
+        "packages/core/src/b.ts",
+        "packages/core/src/c.ts",
+        "packages/core/src/d.ts",
+        "packages/core/src/e.ts",
+        "packages/core/src/f.ts",
+        "packages/core/src/g.ts",
+      ],
+      activeXbriefs: new Map([["xbrief/completed/story.xbrief.json", JSON.stringify(noIdNarrow)]]),
+      approvedRecords: [],
+      baseApprovedRecords: new Map(),
+      baseXbriefs: new Map([
+        ["xbrief/pending/story.xbrief.json", JSON.stringify(stalePendingBroad)],
+        ["xbrief/active/story.xbrief.json", JSON.stringify(noIdNarrow)],
+      ]),
+      sourceRoots: ["packages"],
+      testRoots: ["tests"],
+      fixtureRoots: ["fixtures"],
+    });
+    expect(result.findings.some((f) => f.kind === "production-scope-over-budget")).toBe(true);
+  });
+
+  it("does not exempt a deleted peer active brief from membership (#4774)", () => {
+    const approvedA = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story-a.xbrief.json",
+      payload: xbrief("story-a", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    // Story A modified in-scope; peer B deleted (in change set, absent from active/).
+    const result = evaluateScopeProvenance("/tmp/proj-deleted-peer", {
+      changedFiles: [
+        "xbrief/active/story-a.xbrief.json",
+        "xbrief/active/story-b.xbrief.json",
+        "packages/core/src/a.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [approvedA],
+      baseApprovedRecords: new Map([["story-a", approvedA]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story-a.xbrief.json",
+          JSON.stringify(xbrief("story-a", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/active/story-b.xbrief.json",
+          JSON.stringify(xbrief("story-b", ["packages/core/src/b.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(1);
+    const hit = result.findings.find((f) => f.kind === "change-set-outside-approved-scope");
+    expect(hit?.expandedPaths).toContain("xbrief/active/story-b.xbrief.json");
+  });
+
+  it("plan.id story does not exempt deleting a different same-basename brief (#5192)", () => {
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: xbrief("story-1", ["packages/core/src/a.ts"]),
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
+    const result = evaluateScopeProvenance("/tmp/proj-basename-other-delete", {
+      changedFiles: [
+        "xbrief/active/story.xbrief.json",
+        "xbrief/pending/story.xbrief.json",
+        "packages/core/src/a.ts",
+      ],
+      activeXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+      ]),
+      approvedRecords: [approved],
+      baseApprovedRecords: new Map([["story-1", approved]]),
+      baseXbriefs: new Map([
+        [
+          "xbrief/active/story.xbrief.json",
+          JSON.stringify(xbrief("story-1", ["packages/core/src/a.ts"])),
+        ],
+        [
+          "xbrief/pending/story.xbrief.json",
+          JSON.stringify(xbrief("other-story", ["packages/core/src/other.ts"])),
+        ],
+      ]),
+    });
+    expect(result.exitCode).toBe(1);
+    const hit = result.findings.find((f) => f.kind === "change-set-outside-approved-scope");
+    expect(hit?.expandedPaths).toContain("xbrief/pending/story.xbrief.json");
+  });
+});
+
 describe("evaluateScopeProvenance base-brief fence (#4956)", () => {
-  it("passes when proceed adds a brief with file_scope and no approved-scope digest", () => {
+  it("fails membership without mint even when PR brief file_scope covers product paths (#4774)", () => {
     const active = new Map<string, string>([
       [
         "xbrief/active/story.xbrief.json",
@@ -109,11 +1228,12 @@ describe("evaluateScopeProvenance base-brief fence (#4956)", () => {
       changedFiles: ["xbrief/active/story.xbrief.json", "packages/core/src/a.ts"],
       activeXbriefs: active,
       approvedRecords: [],
+      baseApprovedRecords: new Map(),
       baseXbriefs: new Map(), // not on base yet
       enforce: false,
     });
-    expect(result.exitCode).toBe(0);
-    expect(result.message).not.toMatch(/record-approved-scope/);
+    expect(result.exitCode).toBe(1);
+    expect(result.findings[0]?.kind).toBe("active-xbrief-modified-without-digest");
   });
 
   it("fails when production extras exceed the merge-base allowance", () => {
@@ -124,6 +1244,16 @@ describe("evaluateScopeProvenance base-brief fence (#4956)", () => {
       "packages/core/src/c.ts",
       "packages/core/src/d.ts",
     ]);
+    // Wide merge-base mint so #4774 membership does not mask the #4956 fence.
+    const approved = buildApprovedScopeRecord({
+      xbriefRelPath: "xbrief/active/story.xbrief.json",
+      payload: head,
+      humanApproval: {
+        kind: "operator",
+        actor: "scott",
+        mintedAt: "2026-08-01T00:00:00Z",
+      },
+    });
     const result = evaluateScopeProvenance("/tmp/proj", {
       changedFiles: [
         "xbrief/active/story.xbrief.json",
@@ -133,13 +1263,15 @@ describe("evaluateScopeProvenance base-brief fence (#4956)", () => {
       ],
       activeXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(head)]]),
       baseXbriefs: new Map([["xbrief/active/story.xbrief.json", JSON.stringify(base)]]),
-      approvedRecords: [],
+      approvedRecords: [approved],
+      baseApprovedRecords: new Map([["story-1", approved]]),
     });
     expect(result.exitCode).toBe(1);
-    expect(result.findings[0]?.kind).toBe("production-scope-over-budget");
-    expect(result.findings[0]?.remediation).toMatch(/follow-up story/i);
-    expect(result.findings[0]?.remediation).not.toMatch(/record-approved-scope/);
-    expect(result.findings[0]?.remediation).not.toMatch(/--kind renewed-approval/);
+    expect(result.findings.some((f) => f.kind === "production-scope-over-budget")).toBe(true);
+    const fence = result.findings.find((f) => f.kind === "production-scope-over-budget");
+    expect(fence?.remediation).toMatch(/follow-up story/i);
+    expect(fence?.remediation).not.toMatch(/record-approved-scope/);
+    expect(fence?.remediation).not.toMatch(/--kind renewed-approval/);
   });
 
   it("ignores head brief widening when counting the fence", () => {

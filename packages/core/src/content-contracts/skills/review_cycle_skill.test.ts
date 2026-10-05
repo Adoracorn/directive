@@ -237,6 +237,10 @@ describe("test_review_cycle_skill", () => {
     expect(text).toContain("deft pr:watch --help");
     expect(text).toContain("task deft:pr:watch -- --help");
     expect(text).toContain("Pass go-task's bare `--` separator into `deft`/`directive` CLI forms");
+    // #5251: true rejectors stay reject; roadmap-render ignores bare --; project-render rejects
+    expect(text).toContain("true rejectors such as `pr:watch`");
+    expect(text).toContain("`roadmap-render` ignores bare `--`");
+    expect(text).toContain("sibling `project-render`");
     // Anti-pattern: bare task-only consumer form
     expect(text).toContain("Treat bare `task pr:watch` as the only consumer gate form");
     // Positive probe must be `deft pr:watch --help` (without go-task bare --)
@@ -259,6 +263,17 @@ describe("test_review_cycle_skill", () => {
     expect(text).toContain("wait for auto-failover");
     expect(text).toContain("--skip-ci");
     expect(text).toContain("#2672");
+  });
+
+  it("zero_reviewer_named_terminal_before_poll (#3630)", () => {
+    const text = readReviewCycleSkill();
+    expect(text).toContain("NO_REVIEWER_INSTALLED");
+    expect(text).toContain("review_cycle: skipped:no-reviewer-installed");
+    expect(text).toContain("deft-directive-pre-pr");
+    expect(text).toContain("#3630");
+    expect(text).toContain("empty observation");
+    expect(text).toContain("#769");
+    expect(text).toContain("plan.policy.review.reviewers");
   });
 
   it("ci_weather reason codes thrash caps and BLOCKED (#3167)", () => {

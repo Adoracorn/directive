@@ -3,11 +3,15 @@
  * posts-not-seats, and pain-audit follow-through after a bind lean.
  *
  * Does not NLP-grade Bound-remedy English (ADR-005). Does not waive #4592
- * path-1 refuse. Live parent turns stay unenforced; these are fixtures.
- * Pain-audit dispatch fills operative audit-targets (ids or none). English
- * Pain-audit headings are not targeting. Parent calls
+ * path-1 refuse. Pain-audit dispatch fills operative audit-targets (ids or
+ * none). English Pain-audit headings are not targeting. Parent calls
  * evaluateAutoStampPath1Write before path-1. Footnote-only follow-through
- * is not clearance (#4648).
+ * is not clearance (#4648). #5233 composes evaluatePainAuditFollowThrough
+ * into completed-arc via evaluateAccumulatedPainAuditFollowThrough.
+ *
+ * #5188 recording helpers: reserved-slot literacy (`dual-stop-reserved:`) and
+ * process-only `verification-path:` before panel-deposit. Returned refusals
+ * only; no Dual-stop math recut and no always-on +1.
  */
 
 import { type PainCite, scanPainCites } from "./citation-grammar.js";
@@ -18,9 +22,15 @@ import {
   type ThreadComment,
 } from "./completed-arc-record.js";
 import { evaluateDualStopReservedSlot } from "./handoff.js";
+import {
+  evaluatePainAuditFollowThrough,
+  type PainAuditFindingClass,
+} from "./pain-audit-follow-through-gate.js";
 import { extractOperativeAuditTargets, painMarkerId } from "./parent-audit.js";
+import { type ArcSpend, N3_SPEND } from "./spend.js";
 
-export type PainAuditFindingClass = "blocking" | "sharpening" | "footnote";
+export type { PainAuditFindingClass };
+export { evaluatePainAuditFollowThrough };
 
 export type PainCiteLeanKind = "bind" | "retraction" | "intermediate";
 
@@ -186,64 +196,6 @@ export function evaluatePainCitePlacement(input: {
   return { allowed: true, operativeCiteCount: cites.length };
 }
 
-export function evaluatePainAuditFollowThrough(input: {
-  readonly findingClasses: readonly PainAuditFindingClass[];
-  readonly harvestChanged: boolean;
-}): {
-  readonly postRetractionThenHandoff: boolean;
-  readonly bindableWithoutExtraLean: boolean;
-  readonly recordingOnlyParentComment: boolean;
-  readonly newBindLeanAndAudit: boolean;
-  readonly spendsNumberedDualStopPost: boolean;
-  readonly movesCriticEnvelopes: boolean;
-  readonly isRelief: boolean;
-} {
-  const hasBlocking = input.findingClasses.includes("blocking");
-  const hasSharpening = input.findingClasses.includes("sharpening");
-  if (hasBlocking) {
-    return {
-      postRetractionThenHandoff: true,
-      bindableWithoutExtraLean: false,
-      recordingOnlyParentComment: false,
-      newBindLeanAndAudit: false,
-      spendsNumberedDualStopPost: false,
-      movesCriticEnvelopes: false,
-      isRelief: false,
-    };
-  }
-  if (hasSharpening && input.harvestChanged) {
-    return {
-      postRetractionThenHandoff: false,
-      bindableWithoutExtraLean: false,
-      recordingOnlyParentComment: false,
-      newBindLeanAndAudit: true,
-      spendsNumberedDualStopPost: true,
-      movesCriticEnvelopes: true,
-      isRelief: false,
-    };
-  }
-  if (hasSharpening) {
-    return {
-      postRetractionThenHandoff: false,
-      bindableWithoutExtraLean: true,
-      recordingOnlyParentComment: true,
-      newBindLeanAndAudit: false,
-      spendsNumberedDualStopPost: false,
-      movesCriticEnvelopes: false,
-      isRelief: false,
-    };
-  }
-  return {
-    postRetractionThenHandoff: false,
-    bindableWithoutExtraLean: true,
-    recordingOnlyParentComment: false,
-    newBindLeanAndAudit: false,
-    spendsNumberedDualStopPost: false,
-    movesCriticEnvelopes: false,
-    isRelief: false,
-  };
-}
-
 export function evaluateYoloStandingLeftoverScope(input: {
   readonly allAcceptMap: boolean;
   readonly leanCarriesOperatorConfirmedSplit: boolean;
@@ -261,11 +213,29 @@ export function evaluateYoloStandingLeftoverScope(input: {
   };
 }
 
+/**
+ * Bind lean must name a predecessor that does not already carry relieves of
+ * those ids. Escape (#5284): overlap allowed only when harvestChanged and the
+ * bind map operatively Recut-supersedes a prior successor lean
+ * (`collectSupersededSuccessorLeans` / operative supersedes cite).
+ */
 export function bindLeanPredecessorValid(input: {
   readonly predecessorRelievesIds: readonly string[];
   readonly bindRelievesIds: readonly string[];
+  /** Same boolean threaded by evaluatePainAuditFollowThrough. */
+  readonly harvestChanged?: boolean;
+  /** True when collectSupersededSuccessorLeans finds an operative prior successor lean. */
+  readonly operativelyRecutSupersedesPriorSuccessorLean?: boolean;
 }): boolean {
-  return !input.bindRelievesIds.some((id) => input.predecessorRelievesIds.includes(id));
+  const overlap = input.bindRelievesIds.some((id) => input.predecessorRelievesIds.includes(id));
+  if (!overlap) return true;
+  if (
+    input.harvestChanged === true &&
+    input.operativelyRecutSupersedesPriorSuccessorLean === true
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -374,4 +344,80 @@ export function dualStopCapNotation(posts: number): string {
 
 export function recordingCommentOpensSuccessorLean(body: string): boolean {
   return isSuccessorLeanBody(body);
+}
+
+/** Closed Stop 1 / parent literacy line when spend is N≥3 and pain is non-vacuous (#5188). */
+export const DUAL_STOP_RESERVED_LITERACY_FIELD = "dual-stop-reserved:";
+
+export function dualStopReservedLiteracyRecordLine(): string {
+  return (
+    `${DUAL_STOP_RESERVED_LITERACY_FIELD} first post-lean pain-audit of asserted ` +
+    "coverage in-cap via evaluateDualStopParentPath; raise after reserved spent"
+  );
+}
+
+/**
+ * Whether Stop 1 / parent must surface Dual-stop reserved-slot literacy.
+ * Reuses existing N≥3 spend token and pain ids; does not grow numbered budget
+ * or key a second reserved-slot predicate off Stop 1 pain presence.
+ */
+export function evaluateReservedSlotLiteracyRecording(input: {
+  readonly spend: ArcSpend | null;
+  readonly painIds: readonly string[];
+}): { readonly owed: boolean; readonly recordLine: string | null } {
+  const nonVacuous = input.painIds.some((id) => /^P\d{1,8}$/.test(id));
+  const owed = input.spend === N3_SPEND && nonVacuous;
+  return {
+    owed,
+    recordLine: owed ? dualStopReservedLiteracyRecordLine() : null,
+  };
+}
+
+/** Closed verification-path line before panel-deposit on a process-only dest (#5188). */
+export const VERIFICATION_PATH_FIELD = "verification-path:";
+
+export type VerificationPathRecord =
+  | { readonly kind: "pin-read"; readonly dispatchSha: string }
+  | { readonly kind: "provisioned"; readonly path: string };
+
+export function verificationPathRecordLine(input: VerificationPathRecord): string {
+  if (input.kind === "pin-read") {
+    return (
+      `${VERIFICATION_PATH_FIELD} pin-read git show ${input.dispatchSha}:; ` +
+      "dest cwd-without-occupy"
+    );
+  }
+  return `${VERIFICATION_PATH_FIELD} provisioned ${input.path}`;
+}
+
+/** Closed forms only — matches `verificationPathRecordLine` output. */
+const VERIFICATION_PATH_CLOSED_RE = /^verification-path:\s+(?:pin-read|provisioned)\s+\S/;
+const VERIFICATION_PATH_ANY_RE = /^verification-path:\s+\S/;
+
+/**
+ * Fixture over parent-claimed process-only dest + recorded line.
+ * Accepts only closed `pin-read` / `provisioned` lines from
+ * `verificationPathRecordLine`. Launch-probe and other junk →
+ * `invalid-verification-path`. Returned refusal only — no throw.
+ */
+export function evaluateVerificationPathBeforePanelDeposit(input: {
+  readonly processOnlyDest: boolean;
+  readonly recordedLine: string | null;
+}):
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: "missing-verification-path" | "invalid-verification-path";
+    } {
+  if (!input.processOnlyDest) {
+    return { ok: true };
+  }
+  const line = input.recordedLine?.trim() ?? "";
+  if (VERIFICATION_PATH_CLOSED_RE.test(line)) {
+    return { ok: true };
+  }
+  if (VERIFICATION_PATH_ANY_RE.test(line)) {
+    return { ok: false, reason: "invalid-verification-path" };
+  }
+  return { ok: false, reason: "missing-verification-path" };
 }

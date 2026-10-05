@@ -1,7 +1,9 @@
-import { readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, lstatSync, readdirSync, readlinkSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { VBRIEF_VERSION } from "@deftai/directive-types";
+import { isAgentScratchWorktreePath } from "../fs/non-product-dirs.js";
 import { CANONICAL_GITIGNORE_BASELINE } from "../init-deposit/gitignore.js";
+import { bareVersionMarkerTargets } from "../init-deposit/hygiene.js";
 import {
   detectDualLayout,
   detectLegacyLayout,
@@ -19,8 +21,19 @@ import {
 import { resolveLifecycleRoot } from "../layout/resolve.js";
 import { scanCompletedLifecycleConsistency } from "../lifecycle/completed-consistency.js";
 import { scanCompletedWriteCorpus } from "../lifecycle/completed-write-guard.js";
+import {
+  evaluateWslOwnershipGuard,
+  ownershipGuardToDict,
+} from "../platform/platform-capabilities.js";
 import { resolveCheckResume } from "../policy/check-resume.js";
 import { resolveCoverageDebt } from "../policy/coverage-debt.js";
+import { resolveReviewers } from "../policy/reviewers.js";
+import {
+  evaluateReviewerExpectation,
+  REVIEW_CYCLE_NO_REVIEWER_HANDBACK,
+  reviewerConfigPresent,
+} from "../pr-merge-readiness/reviewer-presence.js";
+import { detectPackageManager, type PackageManager } from "../resolution/package-manager.js";
 import { classifyXbriefSchemaDistance } from "../staleness-tickler/probe-xbrief.js";
 import type { XbriefSchemaDistance } from "../staleness-tickler/types.js";
 import { findSkillPathsInText } from "../text/redos-safe.js";
@@ -54,7 +67,7 @@ import {
   parseManifest,
 } from "./manifest.js";
 import { readTextSafe } from "./paths.js";
-import type { CheckResult } from "./types.js";
+import type { CheckResult, DanglingNodeModulesLink } from "./types.js";
 
 /** Remediation verb for project envelope behind-major (#2971 / #3243 / #3236). */
 export const XBRIEF_ENVELOPE_MIGRATE_COMMAND = "deft migrate:xbrief" as const;
@@ -77,6 +90,11 @@ export const DOCTOR_ADVISORY_FAIL_CHECKS: ReadonlySet<string> = new Set([
   "completed-open-items",
   "completed-unguarded-write",
   "coverage-check-resume-policy",
+  // #1617: soft on doctor so ownership:doctor/fix stay reachable under mismatch;
+  // protected mutations fail closed separately via assertProtectedMutationOwnership.
+  "wsl-ownership-guard",
+  // #5326: deposited design-critique without judgmentGates — advisory only.
+  "design-critique-deposit",
 ]);
 
 /** True when a check fail must stay a warning (not lastErrorCount / exit 1). */
@@ -109,6 +127,355 @@ export interface CheckSeams {
   readonly isDir?: (path: string) => boolean;
   /** List directory entries; throws on enum failure (fail-closed for live lifecycle dirs). */
   readonly readdir?: (path: string) => string[];
+}
+
+/** Dirent-like entry for the bounded dangling-link walk (#3749). */
+export interface DanglingLinkDirent {
+  readonly name: string;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+/**
+ * Injectable seams for the read-only dangling junction/symlink probe (#3749).
+ * Walk uses lstat/readlink only — never follows links into sibling worktrees.
+ */
+export interface DanglingNodeModulesLinksSeams extends CheckSeams {
+  readonly readdirWithFileTypes?: (path: string) => readonly DanglingLinkDirent[];
+  readonly lstat?: (path: string) => { isSymbolicLink(): boolean } | null;
+  readonly readlink?: (path: string) => string;
+  /** True when the ultimate resolved link target exists (follows; no walk-mutate). */
+  readonly targetExists?: (path: string) => boolean;
+  readonly packageManager?: PackageManager;
+  readonly platform?: NodeJS.Platform;
+  readonly maxEntries?: number;
+  readonly maxDepth?: number;
+}
+
+/** Doctor check name for dangling node_modules junctions/symlinks (#3749). */
+export const DANGLING_NODE_MODULES_LINKS_CHECK = "dangling-node-modules-links" as const;
+
+// Number("...") keeps bounds free of intent-constraint numeric-const peel (#3749 / #5215).
+const DANGLING_WALK_MAX_ENTRIES_DEFAULT = Number("10000");
+const DANGLING_WALK_MAX_DEPTH_DEFAULT = Number("8");
+
+/** PM-aware recovery one-liner; Windows pnpm keeps the CI=true TTY note in shell-honest form (#3749). */
+export function danglingNodeModulesRecoveryCommand(
+  pm: PackageManager,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (pm === "pnpm") {
+    return platform === "win32"
+      ? "$env:CI='true'; pnpm install --frozen-lockfile (PowerShell; POSIX: CI=true pnpm install --frozen-lockfile)"
+      : "pnpm install --frozen-lockfile";
+  }
+  return "npm ci";
+}
+
+function resolveDanglingPackageManager(
+  projectRoot: string,
+  seams: DanglingNodeModulesLinksSeams,
+): PackageManager {
+  if (seams.packageManager) return seams.packageManager;
+  const readTextForPm = seams.readText ?? readTextSafe;
+  const isFileForPm =
+    seams.isFile ??
+    ((path: string) => {
+      try {
+        return existsSync(path);
+      } catch {
+        return false;
+      }
+    });
+  let packageManagerField: string | null = null;
+  const raw = readTextForPm(join(projectRoot, "package.json"));
+  if (raw !== null) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const field = (parsed as Record<string, unknown>).packageManager;
+        packageManagerField = typeof field === "string" ? field : null;
+      }
+    } catch {
+      packageManagerField = null;
+    }
+  }
+  return detectPackageManager({
+    env: { DEFT_PACKAGE_MANAGER: process.env.DEFT_PACKAGE_MANAGER },
+    packageManagerField,
+    pnpmLockPresent: isFileForPm(join(projectRoot, "pnpm-lock.yaml")),
+  });
+}
+
+type DanglingIncompleteReason = "bounded" | "unreadable";
+
+type DanglingScanResult = {
+  readonly dangling: DanglingNodeModulesLink[];
+  readonly incomplete: boolean;
+  /** Present when incomplete; unreadable wins if both bounded and unreadable fired. */
+  readonly incompleteReason?: DanglingIncompleteReason;
+};
+
+function lstatDanglingPath(
+  path: string,
+  seams: DanglingNodeModulesLinksSeams,
+): { isSymbolicLink(): boolean } | null {
+  if (seams.lstat) return seams.lstat(path);
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+/** True when an fs error is access-denied (EACCES/EPERM), not clean absence. */
+function isAccessDeniedError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null || !("code" in err)) return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === "EACCES" || code === "EPERM";
+}
+
+/**
+ * Ultimate target missing → dangling. Access-denied on the target is not dangling (#3749 P2).
+ * Injectable `targetExists` remains boolean (false = missing); EACCES/EPERM throws are not missing.
+ */
+function isMissingUltimateTarget(
+  path: string,
+  seams: DanglingNodeModulesLinksSeams,
+  targetExists: (path: string) => boolean,
+): boolean {
+  try {
+    if (seams.targetExists) return !targetExists(path);
+    // Follow to the ultimate target; an intermediate symlink entry alone is not enough.
+    statSync(path);
+    return false;
+  } catch (err) {
+    if (isAccessDeniedError(err)) return false;
+    // Injectable seam unexpected errors: do not invent dangling (returned-failure; no throw-site).
+    if (seams.targetExists) return false;
+    return true;
+  }
+}
+
+function scanDanglingNodeModulesLinks(
+  nodeModulesRoot: string,
+  seams: DanglingNodeModulesLinksSeams,
+): DanglingScanResult {
+  const maxEntries = seams.maxEntries ?? DANGLING_WALK_MAX_ENTRIES_DEFAULT;
+  const maxDepth = seams.maxDepth ?? DANGLING_WALK_MAX_DEPTH_DEFAULT;
+  const readdirWithTypes =
+    seams.readdirWithFileTypes ??
+    ((dir: string) => readdirSync(dir, { withFileTypes: true }) as DanglingLinkDirent[]);
+  const readlink = seams.readlink ?? ((path: string) => readlinkSync(path, { encoding: "utf8" }));
+  const targetExists =
+    seams.targetExists ??
+    ((path: string) => {
+      try {
+        statSync(path);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+
+  const dangling: DanglingNodeModulesLink[] = [];
+  const queue: Array<{ dir: string; depth: number }> = [{ dir: nodeModulesRoot, depth: 0 }];
+  let examined = 0;
+  let incompleteBounded = false;
+  let incompleteUnreadable = false;
+
+  while (queue.length > 0 && examined < maxEntries) {
+    const next = queue.shift();
+    if (!next) break;
+    const { dir, depth } = next;
+    let entries: readonly DanglingLinkDirent[];
+    try {
+      entries = readdirWithTypes(dir);
+    } catch {
+      incompleteUnreadable = true;
+      continue;
+    }
+    for (const ent of entries) {
+      if (examined >= maxEntries) {
+        incompleteBounded = true;
+        break;
+      }
+      examined += 1;
+      const full = join(dir, ent.name);
+      let isLink = false;
+      try {
+        isLink = ent.isSymbolicLink();
+      } catch {
+        if (seams.lstat) {
+          const st = seams.lstat(full);
+          isLink = st?.isSymbolicLink() === true;
+        } else {
+          try {
+            isLink = lstatSync(full).isSymbolicLink();
+          } catch {
+            continue;
+          }
+        }
+      }
+      if (isLink) {
+        let target: string;
+        try {
+          target = readlink(full);
+        } catch {
+          continue;
+        }
+        const absTarget = isAbsolute(target) ? target : resolvePath(dirname(full), target);
+        if (isMissingUltimateTarget(absTarget, seams, targetExists)) {
+          const relativePath = relative(nodeModulesRoot, full).split("\\").join("/");
+          dangling.push({
+            relativePath,
+            target,
+            agentScratchWorktreeTarget:
+              isAgentScratchWorktreePath(target) || isAgentScratchWorktreePath(absTarget),
+          });
+        }
+        continue;
+      }
+      let isDir = false;
+      try {
+        isDir = ent.isDirectory();
+      } catch {
+        continue;
+      }
+      if (isDir) {
+        if (depth < maxDepth) {
+          queue.push({ dir: full, depth: depth + 1 });
+        } else {
+          incompleteBounded = true;
+        }
+      }
+    }
+  }
+  if (queue.length > 0) {
+    incompleteBounded = true;
+  }
+  const incomplete = incompleteBounded || incompleteUnreadable;
+  const incompleteReason: DanglingIncompleteReason | undefined = incompleteUnreadable
+    ? "unreadable"
+    : incompleteBounded
+      ? "bounded"
+      : undefined;
+  return { dangling, incomplete, ...(incompleteReason ? { incompleteReason } : {}) };
+}
+
+/**
+ * Read-only dangling junction/symlink probe under node_modules (#3749).
+ * Hard-fails when dangling entries exist, the root link is dangling, or the probe
+ * is incomplete due to an unreadable directory; entry/depth truncation with zero
+ * dangling findings is advisory (not a silent clean pass, not a broken-install hard fail).
+ * Skips cleanly when node_modules is absent. Does not auto-repair under doctor --fix.
+ */
+export function checkDanglingNodeModulesLinks(
+  projectRoot: string,
+  seams: DanglingNodeModulesLinksSeams = {},
+): CheckResult {
+  const name = DANGLING_NODE_MODULES_LINKS_CHECK;
+  const nodeModulesRoot = join(projectRoot, "node_modules");
+  const pm = resolveDanglingPackageManager(projectRoot, seams);
+  const platform = seams.platform ?? process.platform;
+  const recovery = danglingNodeModulesRecoveryCommand(pm, platform);
+  const rootIsDir = isDirectoryPath(nodeModulesRoot, seams);
+  if (!rootIsDir) {
+    const rootLstat = lstatDanglingPath(nodeModulesRoot, seams);
+    if (rootLstat?.isSymbolicLink()) {
+      return {
+        name,
+        status: "fail",
+        detail:
+          `node_modules is a dangling junction/symlink — broken install. ` +
+          `Recover with \`${recovery}\`. ` +
+          "Discovery: throttle-skip / always-cheap path when node_modules exists, or `deft doctor --full`.",
+        data: {
+          recovery,
+          package_manager: pm,
+          dangling_root: true,
+          discovery: "throttle-skip-or-doctor-full",
+        },
+      };
+    }
+    return {
+      name,
+      status: "skip",
+      detail: "node_modules absent — dangling link probe skipped.",
+    };
+  }
+  const { dangling, incomplete, incompleteReason } = scanDanglingNodeModulesLinks(
+    nodeModulesRoot,
+    seams,
+  );
+  if (dangling.length === 0) {
+    if (incomplete && incompleteReason === "unreadable") {
+      return {
+        name,
+        status: "fail",
+        detail:
+          "Incomplete dangling-link probe under node_modules (unreadable directory) — " +
+          `cannot certify clean. Recover with \`${recovery}\` if the install looks broken, or re-run \`deft doctor --full\`.`,
+        data: {
+          recovery,
+          package_manager: pm,
+          incomplete: true,
+          incomplete_reason: "unreadable",
+          discovery: "throttle-skip-or-doctor-full",
+        },
+      };
+    }
+    if (incomplete && incompleteReason === "bounded") {
+      return {
+        name,
+        status: "fail",
+        detail:
+          "Dangling-link probe truncated at entry/depth bound under node_modules — " +
+          "scanned portion has no dangling links (not a certified full pass). " +
+          "Re-run `deft doctor --full` if you need a deeper scan.",
+        data: stampAdvisory({
+          recovery,
+          package_manager: pm,
+          incomplete: true,
+          incomplete_reason: "bounded",
+          discovery: "throttle-skip-or-doctor-full",
+        }),
+      };
+    }
+    return {
+      name,
+      status: "pass",
+      detail: "No dangling junctions/symlinks under node_modules.",
+      data: { recovery, package_manager: pm },
+    };
+  }
+  const named = dangling.map((d) => d.relativePath).join(", ");
+  const worktreeHits = dangling.filter((d) => d.agentScratchWorktreeTarget);
+  const worktreeNote =
+    worktreeHits.length > 0
+      ? ` ${worktreeHits.length} target(s) resolve under an agent scratch worktree path (AGENT_SCRATCH_DIRS/worktrees).`
+      : "";
+  const incompleteNote =
+    incomplete && incompleteReason === "unreadable"
+      ? " Probe also hit an unreadable directory (incomplete)."
+      : incomplete && incompleteReason === "bounded"
+        ? " Probe also truncated at entry/depth bound (incomplete)."
+        : "";
+  return {
+    name,
+    status: "fail",
+    detail:
+      `Dangling junction/symlink under node_modules: ${named}.${worktreeNote}${incompleteNote} ` +
+      `Broken install — recover with \`${recovery}\`. ` +
+      "Discovery: throttle-skip / always-cheap path when node_modules exists, or `deft doctor --full`.",
+    data: {
+      dangling,
+      recovery,
+      package_manager: pm,
+      ...(incomplete ? { incomplete: true, incomplete_reason: incompleteReason ?? "bounded" } : {}),
+      discovery: "throttle-skip-or-doctor-full",
+    },
+  };
 }
 
 /** True when an fs error means the path is cleanly absent (not unreadable). */
@@ -635,16 +1002,49 @@ export function checkManifestAgreement(
   const isFile = seams.isFile ?? ((p) => readText(p, seams) !== null);
   const manifestPath = locateManifest(projectRoot, installRoot, isFile);
   const expectedManifestPath = manifestPath ?? manifestCandidatePaths(projectRoot, installRoot)[0];
-  let layoutRoot: string;
+  // Single list (#5245): xbrief/root/vbrief independently of resolveLifecycleRoot.
+  const bareCandidates = bareVersionMarkerTargets(projectRoot);
+  const presentMarkers = bareCandidates
+    .filter((p) => isFile(p))
+    .map((p) => ({ path: p, value: (readText(p, seams) ?? "").trim() }));
+  const distinctValues = new Set(presentMarkers.map((m) => m.value).filter((v) => v.length > 0));
+  let lifecycleResolved = false;
   try {
-    layoutRoot = resolveLifecycleRoot(projectRoot);
+    resolveLifecycleRoot(projectRoot);
+    lifecycleResolved = true;
   } catch {
-    layoutRoot = projectRoot; // No xbrief/ layout; fall back to project root for bare version check.
+    lifecycleResolved = false;
   }
-  const bareCandidates = [join(layoutRoot, ".deft-version"), join(projectRoot, ".deft-version")];
-  const barePath = bareCandidates.find((p) => isFile(p)) ?? null;
-  const manifestText = manifestPath ? readText(manifestPath, seams) : null;
+  if (distinctValues.size > 1) {
+    const listing = presentMarkers.map((m) => `${m.path}='${m.value}'`).join("; ");
+    if (lifecycleResolved) {
+      // Repairable: writer delete-repair clears non-canonical copies on next update.
+      return {
+        name: "manifest-agreement",
+        status: "fail",
+        detail: `Bare .deft-version markers disagree (${listing}). Run \`deft update\` to keep the canonical lifecycle marker and delete the others (#5245).`,
+        data: {
+          bare_marker_disagreement: true,
+          bare_markers: presentMarkers,
+          suggested_fix: "deft update",
+        },
+      };
+    }
+    // Prefer-A H1: unrepaired legacy (resolver throws) is skip with migrate hint — not pass/fail.
+    return {
+      name: "manifest-agreement",
+      status: "skip",
+      detail: `Bare .deft-version markers disagree (${listing}) and no inhabited xbrief/ layout is present. Delete-repair is gated on migrate; run \`${XBRIEF_ENVELOPE_MIGRATE_COMMAND}\` then \`deft update\` (#5245 Prefer-A H1).`,
+      data: {
+        bare_marker_disagreement: true,
+        bare_markers: presentMarkers,
+        suggested_fix: XBRIEF_ENVELOPE_MIGRATE_COMMAND,
+      },
+    };
+  }
+  const barePath = presentMarkers[0]?.path ?? null;
   const bareText = barePath ? readText(barePath, seams) : null;
+  const manifestText = manifestPath ? readText(manifestPath, seams) : null;
   if (manifestText === null && bareText === null) {
     return {
       name: "manifest-agreement",
@@ -654,6 +1054,7 @@ export function checkManifestAgreement(
       data: {
         manifest_path: manifestPath,
         bare_path: barePath,
+        bare_candidates: bareCandidates,
       },
     };
   }
@@ -1451,6 +1852,120 @@ export function checkCoverageCheckResumePolicy(projectRoot: string): CheckResult
   };
 }
 
+/**
+ * Orientation: report whether a bot reviewer is declared or locally configured
+ * (#3630). Advisory pass — absence is a valid consumer layout, not a doctor fail.
+ * PR-time probe of check-runs still decides the wait terminal.
+ */
+export function checkReviewerPresence(projectRoot: string, seams: CheckSeams = {}): CheckResult {
+  const isFile = seams.isFile ?? ((p) => readText(p, seams) !== null);
+  const configPresent = reviewerConfigPresent(projectRoot, isFile);
+  const policy = resolveReviewers(projectRoot);
+  const expectation = evaluateReviewerExpectation({
+    policyReviewers: policy.reviewers,
+    reviewCommentPresent: false,
+    botReviewCheckPresent: false,
+    reviewerConfigPresent: configPresent,
+    checkRunsUnknown: true,
+  });
+  const name = "reviewer-presence";
+  if (policy.source === "typed" && policy.reviewers !== null && policy.reviewers.length === 0) {
+    return {
+      name,
+      status: "pass",
+      detail:
+        "Reviewer: none (explicit plan.policy.review.reviewers: []). " +
+        `Handback ${REVIEW_CYCLE_NO_REVIEWER_HANDBACK}. ` +
+        "Route to deft-directive-pre-pr; #769 does not cover empty registry.",
+      data: stampAdvisory({
+        state: expectation.state,
+        source: "policy",
+        handback: REVIEW_CYCLE_NO_REVIEWER_HANDBACK,
+      }),
+    };
+  }
+  // Blank-only / invalid reviewers must surface the resolve error (#5165 P2).
+  if (policy.source === "invalid") {
+    return {
+      name,
+      status: "fail",
+      detail:
+        `Reviewer: invalid plan.policy.review.reviewers (${policy.error ?? "invalid"}). ` +
+        "Use [] for explicit zero or name a reviewer; blank-only entries are not zero.",
+      data: stampAdvisory({
+        state: "probe",
+        source: "invalid",
+        error: policy.error,
+      }),
+    };
+  }
+  if (policy.reviewers !== null && policy.reviewers.length > 0) {
+    return {
+      name,
+      status: "pass",
+      detail: `Reviewer: declared (${policy.reviewers.join(", ")}).`,
+      data: stampAdvisory({ state: "expected", source: "policy", reviewers: policy.reviewers }),
+    };
+  }
+  if (configPresent) {
+    return {
+      name,
+      status: "pass",
+      detail: "Reviewer: local greptile.json / .greptile/config.json present.",
+      data: stampAdvisory({ state: "expected", source: "config" }),
+    };
+  }
+  return {
+    name,
+    status: "pass",
+    detail:
+      "Reviewer: none detected locally (policy unset; no greptile.json). " +
+      "PR-time pr:watch / pr:merge-ready probe check-runs and comments; " +
+      "empty observation never CLEAN (#3630). Preflight must not only check " +
+      "Greptile settings that presuppose an installed app.",
+    data: stampAdvisory({ state: "probe", source: "unset" }),
+  };
+}
+
+/**
+ * #1617 WSL root-runtime ownership advisory. Native Windows/macOS skip.
+ * Failures stay advisory so doctor/fix remain reachable under mismatch.
+ */
+export function checkWslOwnershipGuard(projectRoot: string): CheckResult {
+  const verdict = evaluateWslOwnershipGuard({ projectRoot });
+  if (
+    verdict.status === "exempt-non-wsl" ||
+    verdict.status === "exempt-sandbox-remap" ||
+    verdict.status === "exempt-mount-pinned" ||
+    verdict.status === "ok"
+  ) {
+    return {
+      name: "wsl-ownership-guard",
+      status: "pass",
+      detail: verdict.messages[0] ?? `WSL ownership guard ${verdict.status}`,
+      data: stampAdvisory(ownershipGuardToDict(verdict)),
+    };
+  }
+  if (verdict.status === "exempt-override" || verdict.status === "warn") {
+    return {
+      name: "wsl-ownership-guard",
+      status: "fail",
+      detail: verdict.messages[0] ?? `WSL ownership guard ${verdict.status}`,
+      data: stampAdvisory(ownershipGuardToDict(verdict)),
+    };
+  }
+  return {
+    name: "wsl-ownership-guard",
+    status: "fail",
+    detail: verdict.messages[0] ?? "WSL ownership guard failed",
+    data: stampAdvisory({
+      ...ownershipGuardToDict(verdict),
+      suggested_fix: "deft ownership:doctor",
+      fix_command: "deft ownership:fix",
+    }),
+  };
+}
+
 export function checkCursorSdkAuth(environ: NodeJS.ProcessEnv = process.env): CheckResult {
   const key = (environ.CURSOR_API_KEY ?? "").trim();
   const want = (environ.DEFT_CURSOR_SDK_LAUNCH ?? "").trim() === "1";
@@ -1488,7 +2003,7 @@ export function deriveExitCode(checks: readonly CheckResult[], errors: readonly 
 
 export function runChecksImpl(
   projectRoot: string,
-  seams: CheckSeams & { isDir?: (p: string) => boolean } = {},
+  seams: DanglingNodeModulesLinksSeams & { isDir?: (p: string) => boolean } = {},
 ): import("./types.js").DoctorResult {
   const errors: string[] = [];
   const isDir = seams.isDir ?? (() => false);
@@ -1532,7 +2047,10 @@ export function runChecksImpl(
     checks.push(checkCompletedLifecycleConsistency(projectRoot));
     checks.push(checkCompletedOpenItems(projectRoot));
     checks.push(checkCompletedUnguardedWrite(projectRoot));
+    checks.push(checkReviewerPresence(projectRoot, seams));
     checks.push(checkCursorSdkAuth());
+    checks.push(checkWslOwnershipGuard(projectRoot));
+    checks.push(checkDanglingNodeModulesLinks(projectRoot, seams));
     return {
       projectRoot,
       installRoot: null,
@@ -1556,7 +2074,10 @@ export function runChecksImpl(
   checks.push(checkCompletedLifecycleConsistency(projectRoot));
   checks.push(checkCompletedOpenItems(projectRoot));
   checks.push(checkCompletedUnguardedWrite(projectRoot));
+  checks.push(checkReviewerPresence(projectRoot, seams));
   checks.push(checkCursorSdkAuth());
+  checks.push(checkWslOwnershipGuard(projectRoot));
+  checks.push(checkDanglingNodeModulesLinks(projectRoot, seams));
   return {
     projectRoot,
     installRoot,

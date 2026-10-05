@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeKillAttestation } from "../orchestration/subagent-kill-attestation.js";
 import { DEFAULT_RUNTIME_AUTHORITY_POLICY } from "../policy/runtime-authority.js";
 import { loadStoryWriteFenceFromPath } from "../policy/write-fence.js";
 import {
@@ -1611,6 +1612,170 @@ describe("direct-write hook policy", () => {
       expect(isCompletedLifecycleWrite("/project", "xbrief/completed/README.md")).toBe(false);
       expect(isCompletedLifecycleWrite("/project", "src/index.ts")).toBe(false);
       expect(isCompletedLifecycleWrite("/project", null)).toBe(false);
+    });
+  });
+
+  describe("apply_patch empty-target deny (#5094)", () => {
+    const unclassified =
+      "apply_patch body named no classifiable mutation target, so the write fence cannot authorize it";
+    const proposed = "xbrief/proposed/2026-08-21-story.xbrief.json";
+    const commandPatch = (body: string) => ({
+      host: "codex" as const,
+      event: "tool.before" as const,
+      projectRoot: "/project",
+      payload: {
+        tool_name: "apply_patch",
+        tool_input: { command: body },
+      },
+    });
+    const noScope = () =>
+      readySeams({
+        inspectScope: () => ({
+          ready: false,
+          path: null,
+          message: "No active xBRIEF artifact was found under xbrief/active/",
+        }),
+      });
+    const fenceSeams = () =>
+      readySeams({
+        loadRuntimeAuthority: () => ({
+          enabled: true,
+          allowPaths: ["xbrief/**"],
+          denyPaths: [".github/**", "src/**"],
+          scopes: { edits: true, push: false, merge: false },
+        }),
+      });
+
+    it("allows string command Add File of a proposed xBRIEF", () => {
+      const body = `*** Begin Patch\n*** Add File: ${proposed}\n+{}\n*** End Patch`;
+      const decision = decideHook(commandPatch(body), noScope());
+      expect(decision).toMatchObject({ verdict: "allow", code: "write-propose-ready" });
+    });
+
+    it("denies argv command, raw-string tool_input, renamed field, and empty tool_input", () => {
+      const cases: unknown[] = [
+        { command: ["apply_patch", "*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch"] },
+        "*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch",
+        { patch_text: "*** Begin Patch\n*** Add File: a.ts\n+x\n*** End Patch" },
+        {},
+      ];
+      for (const tool_input of cases) {
+        const decision = decideHook(
+          {
+            host: "codex",
+            event: "tool.before",
+            projectRoot: "/project",
+            payload: { tool_name: "apply_patch", tool_input },
+          },
+          readySeams(),
+        );
+        expect(decision).toMatchObject({
+          verdict: "deny",
+          code: "runtime-policy-deny-path",
+        });
+        expect(decision.message).toContain(unclassified);
+      }
+    });
+
+    it("allows canonical string tool_input.input Add File of a proposed xBRIEF (#5129)", () => {
+      const body = `*** Begin Patch\n*** Add File: ${proposed}\n+{}\n*** End Patch`;
+      const decision = decideHook(
+        {
+          host: "codex",
+          event: "tool.before",
+          projectRoot: "/project",
+          payload: { tool_name: "apply_patch", tool_input: { input: body } },
+        },
+        noScope(),
+      );
+      expect(decision).toMatchObject({ verdict: "allow", code: "write-propose-ready" });
+    });
+
+    it("allows canonical top-level string payload.input Add File of a proposed xBRIEF (#5129)", () => {
+      const body = `*** Begin Patch\n*** Add File: ${proposed}\n+{}\n*** End Patch`;
+      const decision = decideHook(
+        {
+          host: "codex",
+          event: "tool.before",
+          projectRoot: "/project",
+          payload: { tool_name: "apply_patch", input: body },
+        },
+        noScope(),
+      );
+      expect(decision).toMatchObject({ verdict: "allow", code: "write-propose-ready" });
+    });
+
+    it("denies non-canonical string input even with a declared path (#5129)", () => {
+      const cases: unknown[] = [
+        { input: "not a patch" },
+        { path: "/project/src/a.ts", input: "not a patch" },
+        {
+          path: "/project/src/a.ts",
+          input: "not a patch\n*** Update File: /linked/src/a.ts\nnoise",
+        },
+        { input: "*** Begin Patch\n*** End Patch" },
+      ];
+      for (const tool_input of cases) {
+        const decision = decideHook(
+          {
+            host: "codex",
+            event: "tool.before",
+            projectRoot: "/project",
+            payload: { tool_name: "apply_patch", tool_input },
+          },
+          readySeams(),
+        );
+        expect(decision).toMatchObject({
+          verdict: "deny",
+          code: "runtime-policy-deny-path",
+        });
+        expect(decision.message).toContain(unclassified);
+      }
+    });
+
+    it("declared-path-only apply_patch still reaches write-ready (#5129)", () => {
+      const decision = decideHook(
+        {
+          host: "codex",
+          event: "tool.before",
+          projectRoot: "/project",
+          payload: {
+            tool_name: "apply_patch",
+            tool_input: { file_path: "/project/src/a.ts" },
+          },
+        },
+        readySeams(),
+      );
+      expect(decision).toMatchObject({ verdict: "allow", code: "write-ready" });
+    });
+
+    it("denies command-shaped patches to fence denyPaths", () => {
+      const body =
+        "*** Begin Patch\n*** Add File: .github/workflows/release.yml\n+name: pwn\n*** End Patch";
+      const decision = decideHook(commandPatch(body), fenceSeams());
+      expect(decision).toMatchObject({
+        verdict: "deny",
+        code: "runtime-policy-deny-path",
+      });
+    });
+
+    it("denies command-shaped patches to src/** under the write fence", () => {
+      const body = "*** Begin Patch\n*** Update File: src/index.ts\n+x\n*** End Patch";
+      const decision = decideHook(commandPatch(body), fenceSeams());
+      expect(decision).toMatchObject({
+        verdict: "deny",
+        code: "runtime-policy-deny-path",
+      });
+    });
+
+    it("denies command-shaped patches outside file_scope", () => {
+      const body =
+        "*** Begin Patch\n*** Update File: packages/core/src/hooks/tools.ts\n+x\n*** End Patch";
+      const decision = decideHook(commandPatch(body), fenceSeams());
+      expect(decision).toMatchObject({
+        verdict: "deny",
+        code: "runtime-policy-deny-path",
+      });
     });
   });
 
@@ -6292,5 +6457,260 @@ describe("requirements posture (#4444)", () => {
       readySeams(),
     );
     expect(decision).toMatchObject({ verdict: "deny", code: "write-requirements-out-of-class" });
+  });
+});
+
+describe("kill_command_or_subagent attestation gate (#5281 Prefer-A Bound)", () => {
+  function killPayload(toolInput: Record<string, unknown>) {
+    return {
+      host: "grok" as const,
+      event: "tool.before" as const,
+      projectRoot: "/project",
+      payload: { toolName: "kill_command_or_subagent", tool_input: toolInput },
+      environ: { DEFT_SESSION_ID: "parent-1" },
+    };
+  }
+
+  it("DCR(i): bare kill of still-running child without attestation is refused", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-bare-"));
+    hookTemps.push(project);
+    const decision = decideHook(
+      {
+        ...killPayload({ task_id: "child-1", status: "running" }),
+        projectRoot: project,
+      },
+      readySeams(),
+    );
+    expect(decision).toMatchObject({
+      verdict: "deny",
+      code: "kill-attestation-deny",
+      toolName: "kill_command_or_subagent",
+    });
+    expect(decision.message).toMatch(/attestation/i);
+  });
+
+  it("DCR(ii): green equivalent attestation allows kill", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-green-"));
+    hookTemps.push(project);
+    const attestDir = join(project, ".deft-scratch", "subagent-kill-attestation");
+    writeKillAttestation(attestDir, {
+      agentId: "child-1",
+      writerId: "parent-1",
+      kind: "note",
+    });
+    const decision = decideHook(
+      {
+        ...killPayload({ task_id: "child-1", status: "running" }),
+        projectRoot: project,
+      },
+      readySeams(),
+    );
+    expect(decision).toMatchObject({
+      verdict: "allow",
+      code: "kill-attestation-ready",
+    });
+  });
+
+  it("DCR(ii): tip pre-cancel green seam allows kill", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-precancel-"));
+    hookTemps.push(project);
+    const decision = decideHook(
+      {
+        ...killPayload({ task_id: "child-1", status: "running" }),
+        projectRoot: project,
+      },
+      readySeams({
+        evaluatePreCancelGreen: () => true,
+      }),
+    );
+    expect(decision).toMatchObject({
+      verdict: "allow",
+      code: "kill-attestation-ready",
+    });
+  });
+
+  it("DCR(iii): force requires non-empty reason and prints it", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-force-"));
+    hookTemps.push(project);
+    const missing = decideHook(
+      {
+        ...killPayload({ task_id: "child-1", status: "running", force: true }),
+        projectRoot: project,
+      },
+      readySeams(),
+    );
+    expect(missing).toMatchObject({ verdict: "deny", code: "kill-attestation-deny" });
+    expect(missing.message).toMatch(/reason/i);
+
+    const ok = decideHook(
+      {
+        ...killPayload({
+          task_id: "child-1",
+          status: "running",
+          force: true,
+          reason: "hung after REDISPATCH_OK",
+        }),
+        projectRoot: project,
+      },
+      readySeams(),
+    );
+    expect(ok).toMatchObject({ verdict: "allow", code: "kill-force-ready" });
+    expect(ok.message).toContain("hung after REDISPATCH_OK");
+  });
+
+  it("DCR(iv): peer kill without attestation refuses the same as parent", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-peer-"));
+    hookTemps.push(project);
+    const decision = decideHook(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: project,
+        payload: {
+          toolName: "kill_command_or_subagent",
+          tool_input: { task_id: "child-1", status: "running", writer_id: "peer-9" },
+        },
+        environ: { DEFT_SESSION_ID: "peer-9" },
+      },
+      readySeams(),
+    );
+    expect(decision).toMatchObject({
+      verdict: "deny",
+      code: "kill-attestation-deny",
+    });
+  });
+
+  it("terminal host status allows kill without attestation via host oracle seam", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-term-"));
+    hookTemps.push(project);
+    const decision = decideHook(
+      {
+        ...killPayload({ task_id: "child-1", status: "running" }),
+        projectRoot: project,
+      },
+      readySeams({
+        resolveKillHostStatus: () => "terminal",
+      }),
+    );
+    expect(decision).toMatchObject({
+      verdict: "allow",
+      code: "kill-terminal-ready",
+    });
+  });
+
+  it("caller-claimed tool_input status does not clear attestation without host oracle", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-spoof-status-"));
+    hookTemps.push(project);
+    const decision = decideHook(
+      {
+        ...killPayload({ task_id: "child-1", status: "completed" }),
+        projectRoot: project,
+      },
+      readySeams(),
+    );
+    expect(decision).toMatchObject({
+      verdict: "deny",
+      code: "kill-attestation-deny",
+    });
+  });
+
+  it("tool_input writer_id cannot spoof killer identity over DEFT_SESSION_ID", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-spoof-writer-"));
+    hookTemps.push(project);
+    const attestDir = join(project, ".deft-scratch", "subagent-kill-attestation");
+    writeKillAttestation(attestDir, {
+      agentId: "child-1",
+      writerId: "peer-9",
+      kind: "note",
+    });
+    const decision = decideHook(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: project,
+        payload: {
+          toolName: "kill_command_or_subagent",
+          tool_input: {
+            task_id: "child-1",
+            status: "running",
+            writer_id: "peer-9",
+          },
+        },
+        environ: { DEFT_SESSION_ID: "parent-1" },
+      },
+      readySeams(),
+    );
+    expect(decision).toMatchObject({
+      verdict: "deny",
+      code: "kill-attestation-deny",
+    });
+    expect(decision.message).toMatch(/writer_id|attestation/i);
+  });
+
+  it("falls back to GROK_SESSION_ID when DEFT_* identity env is absent", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-grok-id-"));
+    hookTemps.push(project);
+    const attestDir = join(project, ".deft-scratch", "subagent-kill-attestation");
+    writeKillAttestation(attestDir, {
+      agentId: "child-1",
+      writerId: "grok-session-9",
+      kind: "note",
+    });
+    const decision = decideHook(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: project,
+        payload: {
+          toolName: "kill_command_or_subagent",
+          tool_input: { task_id: "child-1", status: "running" },
+        },
+        environ: { GROK_SESSION_ID: "grok-session-9" },
+      },
+      readySeams(),
+    );
+    expect(decision).toMatchObject({
+      verdict: "allow",
+      code: "kill-attestation-ready",
+    });
+  });
+
+  it("heartbeat STALE / REDISPATCH_OK alone does not skip attestation", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-stale-"));
+    hookTemps.push(project);
+    for (const status of ["STALE", "REDISPATCH_OK"]) {
+      const decision = decideHook(
+        {
+          ...killPayload({ task_id: "child-1", status }),
+          projectRoot: project,
+        },
+        readySeams(),
+      );
+      expect(decision.code).toBe("kill-attestation-deny");
+    }
+  });
+
+  it("renders Grok force-allow with printed reason on tool.before", () => {
+    const project = mkdtempSync(join(tmpdir(), "kill-force-render-"));
+    hookTemps.push(project);
+    const decision = decideHook(
+      {
+        ...killPayload({
+          task_id: "child-1",
+          status: "running",
+          force: true,
+          reason: "hung after REDISPATCH_OK",
+        }),
+        projectRoot: project,
+      },
+      readySeams(),
+    );
+    expect(decision.code).toBe("kill-force-ready");
+    const wire = JSON.parse(renderHostDecision("grok", decision)) as {
+      decision: string;
+      reason: string;
+    };
+    expect(wire.decision).toBe("allow");
+    expect(wire.reason).toContain("hung after REDISPATCH_OK");
   });
 });

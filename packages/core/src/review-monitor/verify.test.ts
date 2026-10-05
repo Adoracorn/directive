@@ -2,24 +2,38 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import {
+  bindLivePhaseCorrectWait,
+  evaluateMergePathArm,
+  writePrWatchWaitHeartbeat,
+} from "../pr-watch/main.js";
+import { DEFAULT_STALE_MINUTES } from "./constants.js";
 import { computeExpiresAt, renderReviewOwnerComment } from "./lease-comment.js";
 import { probeMonitoringTier } from "./tier-detection.js";
 import {
   evaluateReviewMonitorGate,
+  formatApproach1BabysitterOneLiner,
   hasActivePollingHeartbeat,
+  heartbeatActiveForMergePathArm,
+  POST_CLEAN_WAIT_PARENT_ID,
   verifyResultToJson,
+  writeMergePathCleanAttestation,
 } from "./verify.js";
 
 const NOW = new Date("2026-07-24T12:00:00.000Z");
 
-function activeLeaseComment(owner: string, monitorAgentId: string): string {
+function activeLeaseComment(
+  owner: string,
+  monitorAgentId: string,
+  platformPrimitive: "cursor-task" | "spawn_subagent" = "cursor-task",
+): string {
   return renderReviewOwnerComment({
     owner,
     monitor_agent_id: monitorAgentId,
     head_sha: "abc123",
     started_at: NOW.toISOString(),
     expires_at: computeExpiresAt(NOW),
-    platform_primitive: "cursor-task",
+    platform_primitive: platformPrimitive,
     ended_at: null,
   });
 }
@@ -127,6 +141,50 @@ describe("evaluateReviewMonitorGate", () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.message).toContain("Tier 3");
+    expect(result.tier.descriptor).toBe("generic-terminal");
+  });
+
+  it("labels DEFT_MONITOR_TIER=3 READY distinctly from honest generic-terminal (#5229)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-gate-override-t3-"));
+    const result = evaluateReviewMonitorGate({
+      pr: 99,
+      projectRoot: root,
+      environ: { DEFT_MONITOR_TIER: "3" },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.tier.descriptor).toBe("override-tier3");
+    expect(result.message).toContain("override-tier3");
+    expect(result.message).toContain("not honest generic-terminal");
+  });
+
+  it("!isTier1 consults sticky lease before READY and elevates on Tier-1 primitive (#5229)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-gate-lease-elevate-"));
+    const result = evaluateReviewMonitorGate({
+      pr: 5229,
+      projectRoot: root,
+      repo: "deftai/directive",
+      headSha: "abc123",
+      now: NOW,
+      environ: {},
+      seams: {
+        fetchComments: () => [
+          {
+            id: 5229,
+            body: activeLeaseComment("owner", "babysitter-5229", "spawn_subagent"),
+            htmlUrl: "",
+            updatedAt: "2026-07-24T12:00:00.000Z",
+            authorLogin: "owner",
+            authorAssociation: "MEMBER",
+          },
+        ],
+      },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.tier.descriptor).toBe("lease-elevated");
+    expect(result.tier.primitive).toBe("spawn_subagent");
+    expect(result.monitorRecord?.monitor_agent_id).toBe("babysitter-5229");
+    expect(result.message).toContain("elevated via sticky lease");
+    expect(result.message).not.toContain("no active review-monitor required");
   });
 
   it("rejects Approach 3 on Tier 1", () => {
@@ -188,6 +246,35 @@ describe("evaluateReviewMonitorGate", () => {
       environ: {},
     });
     expect(result.exitCode).toBe(0);
+  });
+
+  it("rejects Approach 3 when sticky Tier-1 lease exists despite bare env (#5229)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-gate-a3-lease-"));
+    const result = evaluateReviewMonitorGate({
+      pr: 5229,
+      projectRoot: root,
+      repo: "deftai/directive",
+      headSha: "abc123",
+      approach3: true,
+      approach3Warned: true,
+      now: NOW,
+      environ: {},
+      seams: {
+        fetchComments: () => [
+          {
+            id: 5229,
+            body: activeLeaseComment("owner", "babysitter-5229", "spawn_subagent"),
+            htmlUrl: "",
+            updatedAt: "2026-07-24T12:00:00.000Z",
+            authorLogin: "owner",
+            authorAssociation: "MEMBER",
+          },
+        ],
+      },
+    });
+    expect(result.exitCode).toBe(1);
+    expect(result.tier.descriptor).toBe("lease-elevated");
+    expect(result.message).toContain("Approach 3 blocking poll is forbidden");
   });
 
   it("rejects Approach 3 on Tier 3 without warning ack", () => {
@@ -312,5 +399,388 @@ describe("evaluateReviewMonitorGate", () => {
     expect(result.exitCode).toBe(1);
     expect(result.heartbeatActive).toBe(true);
     expect(result.message).toContain("local subagent heartbeat is present");
+  });
+
+  it("wait exit while lease sticky leaves --merge-path-arm --live-wait unarmed (#5020)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-dead-wait-"));
+    writePrWatchWaitHeartbeat(root, 5020, { phase: "polling" });
+    expect(hasActivePollingHeartbeat(root, 5020)).toBe(true);
+    writePrWatchWaitHeartbeat(root, 5020, { phase: "terminal", terminalState: "exited" });
+    expect(hasActivePollingHeartbeat(root, 5020)).toBe(false);
+
+    const result = evaluateReviewMonitorGate({
+      pr: 5020,
+      projectRoot: root,
+      repo: "deftai/directive",
+      callSite: "solo",
+      environ: { GROK_BUILD: "1" },
+      seams: {
+        fetchComments: () => [
+          {
+            id: 1,
+            body: activeLeaseComment("owner", "monitor-5020"),
+            htmlUrl: "",
+            updatedAt: NOW.toISOString(),
+            authorLogin: "owner",
+            authorAssociation: "MEMBER",
+          },
+        ],
+      },
+      now: NOW,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.monitorRecord).not.toBeNull();
+    expect(result.heartbeatActive).toBe(false);
+
+    const liveBind = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: result.monitorRecord !== null,
+      heartbeatActive: result.heartbeatActive,
+      pr: 5020,
+    });
+    expect(liveBind.livePhaseCorrectWait).toBe(false);
+    expect(liveBind.reason).toBe("missing_process_liveness");
+    const arm = evaluateMergePathArm({
+      livePhaseCorrectWait: liveBind.livePhaseCorrectWait,
+      explicitFinish: false,
+      stickyLeaseActive: true,
+    });
+    expect(arm.armed).toBe(false);
+  });
+
+  it("force-killed wait (fresh file, dead pid) leaves --live-wait unarmed (#5020)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-force-kill-"));
+    const deadPid = 9_999_992;
+    writePrWatchWaitHeartbeat(root, 5020, { phase: "polling", pid: deadPid });
+    // finally never ran; pid liveness still refuses the arm.
+    expect(
+      hasActivePollingHeartbeat(root, 5020, {
+        isProcessAlive: () => false,
+      }),
+    ).toBe(false);
+
+    const result = evaluateReviewMonitorGate({
+      pr: 5020,
+      projectRoot: root,
+      repo: "deftai/directive",
+      callSite: "solo",
+      environ: { GROK_BUILD: "1" },
+      seams: {
+        fetchComments: () => [
+          {
+            id: 1,
+            body: activeLeaseComment("owner", "monitor-5020"),
+            htmlUrl: "",
+            updatedAt: NOW.toISOString(),
+            authorLogin: "owner",
+            authorAssociation: "MEMBER",
+          },
+        ],
+      },
+      now: NOW,
+    });
+    // Gate uses real process.kill; deadPid is almost certainly not alive.
+    expect(result.heartbeatActive).toBe(false);
+    const liveBind = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: true,
+      heartbeatActive: result.heartbeatActive,
+      pr: 5020,
+    });
+    expect(liveBind.livePhaseCorrectWait).toBe(false);
+    expect(liveBind.reason).toBe("missing_process_liveness");
+  });
+
+  it("DEFAULT_STALE_MINUTES remains abandonment hygiene, not wait liveness (#5020)", () => {
+    expect(DEFAULT_STALE_MINUTES).toBe(30);
+    // Dead-wait unarm is heartbeat/process-liveness, not TTL expiry.
+    const bound = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: true,
+      heartbeatActive: false,
+      pr: 1,
+    });
+    expect(bound.reason).toBe("missing_process_liveness");
+  });
+
+  it("spawn_subagent: parent-shell pr:watch does not satisfy child-bound live-wait (#5219)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-parent-shell-"));
+    writePrWatchWaitHeartbeat(root, 5219, { phase: "polling" }); // parent_id=pr-watch
+    expect(hasActivePollingHeartbeat(root, 5219)).toBe(true);
+
+    const result = evaluateReviewMonitorGate({
+      pr: 5219,
+      projectRoot: root,
+      repo: "deftai/directive",
+      callSite: "solo",
+      environ: { GROK_BUILD: "1" },
+      seams: {
+        fetchComments: () => [
+          {
+            id: 1,
+            body: activeLeaseComment("owner", "babysitter-5219", "spawn_subagent"),
+            htmlUrl: "",
+            updatedAt: NOW.toISOString(),
+            authorLogin: "owner",
+            authorAssociation: "MEMBER",
+          },
+        ],
+      },
+      now: NOW,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.monitorRecord?.platform_primitive).toBe("spawn_subagent");
+    expect(result.heartbeatActive).toBe(false);
+
+    const liveBind = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: true,
+      heartbeatActive: result.heartbeatActive,
+      pr: 5219,
+    });
+    expect(liveBind.livePhaseCorrectWait).toBe(false);
+    expect(liveBind.reason).toBe("missing_process_liveness");
+    expect(
+      evaluateMergePathArm({
+        livePhaseCorrectWait: liveBind.livePhaseCorrectWait,
+        explicitFinish: false,
+        stickyLeaseActive: true,
+      }).armed,
+    ).toBe(false);
+  });
+
+  it("spawn_subagent: unrelated same-PR parent heartbeat does not join (#5219)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-unrelated-"));
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: "some-other-agent",
+      pid: 4_001,
+    });
+    expect(
+      hasActivePollingHeartbeat(root, 5219, {
+        expectedParentIds: ["babysitter-5219", POST_CLEAN_WAIT_PARENT_ID],
+      }),
+    ).toBe(false);
+  });
+
+  it("spawn_subagent: dead child + live parent shell stays unarmed (#5219)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-dead-child-"));
+    const deadPid = 9_999_991;
+    const lease = {
+      pr: 5219,
+      repo: "deftai/directive" as string | null,
+      head_sha: "abc" as string | null,
+      platform_primitive: "spawn_subagent" as const,
+      monitor_agent_id: "babysitter-5219",
+      owner: "owner",
+      started_at: NOW.toISOString(),
+      expires_at: computeExpiresAt(NOW),
+      worktree_path: null as string | null,
+      parent_session_id: null as string | null,
+      ended_at: null as string | null,
+      comment_id: 1 as number | null,
+    };
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: "babysitter-5219",
+      pid: deadPid,
+    });
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: "pr-watch",
+      pid: 4_002,
+    });
+    expect(
+      heartbeatActiveForMergePathArm(root, 5219, {
+        tierPrimitive: "spawn_subagent",
+        lease,
+        isProcessAlive: (pid) => pid !== deadPid,
+      }),
+    ).toBe(false);
+  });
+
+  it("spawn_subagent: matching live child arms (#5219)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-child-"));
+    const lease = {
+      pr: 5219,
+      repo: "deftai/directive" as string | null,
+      head_sha: "abc" as string | null,
+      platform_primitive: "spawn_subagent" as const,
+      monitor_agent_id: "babysitter-5219",
+      owner: "owner",
+      started_at: NOW.toISOString(),
+      expires_at: computeExpiresAt(NOW),
+      worktree_path: null as string | null,
+      parent_session_id: null as string | null,
+      ended_at: null as string | null,
+      comment_id: 1 as number | null,
+    };
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: "babysitter-5219",
+      pid: 4_003,
+    });
+    const childOk = heartbeatActiveForMergePathArm(root, 5219, {
+      tierPrimitive: "spawn_subagent",
+      lease,
+      isProcessAlive: () => true,
+    });
+    expect(childOk).toBe(true);
+  });
+
+  it("spawn_subagent: closer without CLEAN attestation stays unarmed (#5219)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-premature-closer-"));
+    const lease = {
+      pr: 5219,
+      repo: "deftai/directive" as string | null,
+      head_sha: "abc" as string | null,
+      platform_primitive: "spawn_subagent" as const,
+      monitor_agent_id: "babysitter-5219",
+      owner: "owner",
+      started_at: NOW.toISOString(),
+      expires_at: computeExpiresAt(NOW),
+      worktree_path: null as string | null,
+      parent_session_id: null as string | null,
+      ended_at: null as string | null,
+      comment_id: 1 as number | null,
+    };
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: POST_CLEAN_WAIT_PARENT_ID,
+      pid: 4_004,
+    });
+    expect(
+      heartbeatActiveForMergePathArm(root, 5219, {
+        tierPrimitive: "spawn_subagent",
+        lease,
+        isProcessAlive: () => true,
+        headSha: "abc",
+      }),
+    ).toBe(false);
+  });
+
+  it("spawn_subagent: post-CLEAN wait-merge heartbeat arms with attestation (#5219)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-postclean-"));
+    const lease = {
+      pr: 5219,
+      repo: "deftai/directive" as string | null,
+      head_sha: "abc" as string | null,
+      platform_primitive: "spawn_subagent" as const,
+      monitor_agent_id: "babysitter-5219",
+      owner: "owner",
+      started_at: NOW.toISOString(),
+      expires_at: computeExpiresAt(NOW),
+      worktree_path: null as string | null,
+      parent_session_id: null as string | null,
+      ended_at: null as string | null,
+      comment_id: 1 as number | null,
+    };
+    expect(writeMergePathCleanAttestation(root, 5219, "abc", NOW).ok).toBe(true);
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: POST_CLEAN_WAIT_PARENT_ID,
+      pid: 4_005,
+    });
+    expect(
+      heartbeatActiveForMergePathArm(root, 5219, {
+        tierPrimitive: "spawn_subagent",
+        lease,
+        isProcessAlive: () => true,
+        headSha: "abc",
+        resolveLiveHeadSha: () => "abc",
+      }),
+    ).toBe(true);
+  });
+
+  it("spawn_subagent: tip-A CLEAN attestation does not arm tip-B closer (#5219)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-stale-clean-"));
+    const lease = {
+      pr: 5219,
+      repo: "deftai/directive" as string | null,
+      head_sha: "tip-b" as string | null,
+      platform_primitive: "spawn_subagent" as const,
+      monitor_agent_id: "babysitter-5219",
+      owner: "owner",
+      started_at: NOW.toISOString(),
+      expires_at: computeExpiresAt(NOW),
+      worktree_path: null as string | null,
+      parent_session_id: null as string | null,
+      ended_at: null as string | null,
+      comment_id: 1 as number | null,
+    };
+    expect(writeMergePathCleanAttestation(root, 5219, "tip-a", NOW).ok).toBe(true);
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: POST_CLEAN_WAIT_PARENT_ID,
+      pid: 4_006,
+    });
+    expect(
+      heartbeatActiveForMergePathArm(root, 5219, {
+        tierPrimitive: "spawn_subagent",
+        lease,
+        isProcessAlive: () => true,
+        headSha: "tip-a",
+        resolveLiveHeadSha: () => "tip-b",
+      }),
+    ).toBe(false);
+    expect(
+      heartbeatActiveForMergePathArm(root, 5219, {
+        tierPrimitive: "spawn_subagent",
+        lease,
+        isProcessAlive: () => true,
+        headSha: "tip-a",
+        resolveLiveHeadSha: () => null,
+      }),
+    ).toBe(false);
+  });
+
+  it("spawn_subagent: child heartbeat skips live HEAD lookup (#5219 P2)", () => {
+    const root = mkdtempSync(join(tmpdir(), "rm-5219-no-lookup-"));
+    const lease = {
+      pr: 5219,
+      repo: "deftai/directive" as string | null,
+      head_sha: "abc" as string | null,
+      platform_primitive: "spawn_subagent" as const,
+      monitor_agent_id: "babysitter-5219",
+      owner: "owner",
+      started_at: NOW.toISOString(),
+      expires_at: computeExpiresAt(NOW),
+      worktree_path: null as string | null,
+      parent_session_id: null as string | null,
+      ended_at: null as string | null,
+      comment_id: 1 as number | null,
+    };
+    writePrWatchWaitHeartbeat(root, 5219, {
+      phase: "polling",
+      parentId: "babysitter-5219",
+      pid: 4_007,
+    });
+    let lookedUp = 0;
+    expect(
+      heartbeatActiveForMergePathArm(root, 5219, {
+        tierPrimitive: "spawn_subagent",
+        lease,
+        isProcessAlive: () => true,
+        resolveLiveHeadSha: () => {
+          lookedUp += 1;
+          return "should-not-run";
+        },
+      }),
+    ).toBe(true);
+    expect(lookedUp).toBe(0);
+  });
+
+  it("formatApproach1BabysitterOneLiner watches before parent verify (#5219 P3)", () => {
+    const text = formatApproach1BabysitterOneLiner(9, "rm-9");
+    expect(text).toContain("DEFT_MONITOR_AGENT_ID=rm-9");
+    expect(text).toContain("--monitor-agent-id rm-9");
+    const watchAt = text.indexOf("pr:watch -- 9");
+    const verifyAt = text.indexOf("verify:review-monitor");
+    expect(watchAt).toBeGreaterThan(-1);
+    expect(verifyAt).toBeGreaterThan(watchAt);
   });
 });

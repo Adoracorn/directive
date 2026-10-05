@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { evaluate as evaluateCloseoutAttestable } from "../pr-closeout-attestable/evaluate.js";
 import { resolveBinaryForArgv } from "../scm/call-shape.js";
+import * as scmReadiness from "../scm/readiness.js";
 import { SUBPROCESS_MAX_BUFFER } from "../subprocess/max-buffer.js";
 import type { SubprocessTriple } from "./types.js";
 
@@ -140,9 +141,11 @@ export function runProtectedCheck(
 }
 
 /**
- * Merge-time closeout attestability gate (#3781). In-process: the evaluator lives
- * in this package, and a subprocess hop would only add a script-path failure mode
- * to a gate that must fail closed.
+ * Merge-time closeout attestability gate (#3781 / #3875). In-process thin invoker
+ * over the shared evaluator — one of N route-table call sites (cascade +
+ * `pr:merge-ready`); supersedes #3781's single-cascade-call-site decision. A
+ * subprocess hop would only add a script-path failure mode to a gate that must
+ * fail closed. The evaluator asserts HEAD equals the PR head before reading briefs.
  */
 export function runCloseoutAttestableCheck(
   prNumber: number,
@@ -207,6 +210,9 @@ export interface RunGhMergeOptions {
    * (#3235 TOCTOU: refuse merge if PR head advanced after approval gate).
    */
   readonly matchHeadCommit?: string | null;
+  /** Test seam. Production uses requireScmReady with force:true. */
+  readonly requireScmReady?: typeof scmReadiness.requireScmReady;
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /** Invoke ``gh pr merge --squash --delete-branch --admin`` [``--match-head-commit``]. */
@@ -216,6 +222,20 @@ export function runGhMerge(
   options: RunGhMergeOptions = {},
 ): SubprocessTriple {
   const timeoutSec = options.timeout ?? 120;
+  const env = options.env ?? process.env;
+  const readyFn = options.requireScmReady ?? scmReadiness.requireScmReady;
+  try {
+    readyFn({
+      depth: "deep",
+      force: true,
+      repo: repo ?? undefined,
+      env,
+      checkAuthStatus: true,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    return [-1, "", message];
+  }
   const args = ["pr", "merge", String(prNumber), "--squash", "--delete-branch", "--admin"];
   let binary: string;
   try {
@@ -233,7 +253,7 @@ export function runGhMerge(
   if (matchHead !== null) {
     args.push("--match-head-commit", matchHead);
   }
-  const result = captureExec(binary, args, timeoutSec * 1000);
+  const result = captureExec(binary, args, timeoutSec * 1000, { env });
   if (result.returncode === -1) {
     if (result.stderr.includes("timed out after")) {
       return [-1, "", `gh pr merge timed out after ${timeoutSec}s`];

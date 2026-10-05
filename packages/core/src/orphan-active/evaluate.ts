@@ -28,7 +28,7 @@ import {
   SCOPED_LATENCY_BUDGET_MS,
   type StateResolution,
 } from "./issue-state.js";
-import { collectGithubRefs, type IssueRef, type PrRef } from "./refs.js";
+import { collectGithubRefs, fetchPrMerged, type IssueRef, type PrRef } from "./refs.js";
 import { listActiveRunningBriefs } from "./running-briefs.js";
 
 export type OutputStream = "stdout" | "stderr" | "none";
@@ -182,27 +182,6 @@ function resolveIssueState(
   return resolution.state;
 }
 
-function fetchPrMerged(ref: PrRef, runGh: RunGhFn): boolean | null {
-  const path = `repos/${ref.repo}/pulls/${ref.number}`;
-  const result = runGh(["gh", "api", path]);
-  if (result.returncode !== 0) {
-    return null;
-  }
-  try {
-    const payload = JSON.parse(result.stdout) as unknown;
-    if (payload === null || typeof payload !== "object") {
-      return null;
-    }
-    const mergedAt = (payload as Record<string, unknown>).merged_at;
-    if (mergedAt === null) {
-      return false;
-    }
-    return typeof mergedAt === "string" && mergedAt.length > 0;
-  } catch {
-    return null;
-  }
-}
-
 interface OrphanAssessment {
   readonly orphaned: boolean;
   readonly reason: string | null;
@@ -317,6 +296,31 @@ function briefReferencesIssue(issues: readonly IssueRef[], issue: number): boole
   return issues.some((ref) => ref.number === issue);
 }
 
+export interface UnmarkedFinalizeAdmit {
+  readonly productPr: number;
+  readonly issue: number;
+  readonly detail: string;
+}
+
+/**
+ * Unmarked finalize admit (#3791 P3 / #5122).
+ * This ship has no positive unmarked PR-to-origin carrier: same-repo plus
+ * `merged_at` is not delivery identity. Always returns null. Marked briefs
+ * use `productPullRequestFromPlan` and never enter this derive. Empty-prRefs
+ * and cross-repo pairing stay null. A later ship may admit a uniquely
+ * evidenced pair; `firstMergedPrRef` remains merge-state only.
+ */
+export function deriveUnmarkedFinalizeAdmit(
+  plan: Record<string, unknown>,
+  defaultRepo: string,
+  runGh: RunGhFn,
+): UnmarkedFinalizeAdmit | null {
+  void plan;
+  void defaultRepo;
+  void runGh;
+  return null;
+}
+
 /** Basis, ghx caveat, and budget lines shared by the pass and refusal messages (#3767). */
 function basisLines(tally: BasisTally, basis: OrphanActiveBasis): string[] {
   const lines = [`  Basis: ${tally.summary()}.`];
@@ -426,10 +430,11 @@ function formatRefusal(
       lines.push(`    task scope:complete -- ${orphan.path}`);
     }
     lines.push(
-      "    task scope:cancel -- xbrief/active/<file>.xbrief.json   # when abandoning",
-      "  For stop-at:pr-open workers the orchestrator owns post-merge complete/cancel;",
+      "    task scope:cancel -- xbrief/active/<file>.xbrief.json   # abandon-only; refused when shipped-closed without completed tip twin (#5126)",
+      "  Shipped-closed Tracking/Refs: leftover-complete via printed scope:complete / swarm:finalize-cohort -- --pr <n> — cancel is not a ship exit (#5126).",
+      "  For stop-at:pr-open workers the orchestrator owns post-merge leftover-complete;",
       "  for drive-to:merge-ready workers scope:complete is part of the worker unit (#2321 / #3429).",
-      "  Or run task swarm:finalize-cohort / task swarm:complete-cohort after cohort merge.",
+      "  Or run task swarm:finalize-cohort -- --pr <n> / --stories <ids|paths> after cohort merge.",
     );
   }
   if (unresolvedOrphans.length > 0) {

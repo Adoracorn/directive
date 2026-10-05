@@ -104,16 +104,26 @@ const subpathAliases: Record<string, string> = {
   "@deftai/directive-core/orphan-active": sub("core", "orphan-active"),
   "@deftai/directive-core/agents-md-budget": sub("core", "agents-md-budget"),
   "@deftai/directive-core/agents-md-advisory": sub("core", "agents-md-advisory"),
+  "@deftai/directive-core/project": sub("core", "project"),
   "@deftai/directive-core/eval-health-relocation": sub("core", "eval-health-relocation"),
   "@deftai/directive-core/eval-triggers-relocation": sub("core", "eval-triggers-relocation"),
   "@deftai/directive-core/evaluator-surface": sub("core", "evaluator-surface"),
   "@deftai/directive-core/observable-scope": sub("core", "observable-scope"),
+  "@deftai/directive-core/operator-scope-limit": sub("core", "operator-scope-limit"),
+  "@deftai/directive-core/pre-pr-controller": sub("core", "pre-pr-controller"),
+  "@deftai/directive-core/presentation-coverage": sub("core", "presentation-coverage"),
   "@deftai/directive-core/intent-constraint": sub("core", "intent-constraint"),
+  "@deftai/directive-core/durable-effect-acquisition": sub("core", "durable-effect-acquisition"),
   "@deftai/directive-core/consumer-test-lane": sub("core", "consumer-test-lane"),
   "@deftai/directive-core/scm": sub("core", "scm"),
   "@deftai/directive-core/scope": sub("core", "scope"),
   "@deftai/directive-core/session": sub("core", "session"),
   "@deftai/directive-core/hooks": sub("core", "hooks"),
+  // File subpath must precede `@deftai/directive-core/authz` or the index alias steals it (#4233).
+  "@deftai/directive-core/authz/campaign-end-seal": resolve(
+    import.meta.dirname,
+    "packages/core/src/authz/campaign-end-seal.ts",
+  ),
   "@deftai/directive-core/authz": sub("core", "authz"),
   "@deftai/directive-core/escalation": sub("core", "escalation"),
   "@deftai/directive-core/plan-sequence": sub("core", "plan-sequence"),
@@ -160,6 +170,10 @@ const subpathAliases: Record<string, string> = {
   "@deftai/directive-core/vbrief-activate": sub("core", "vbrief-activate"),
   "@deftai/directive-core/verify-env": sub("core", "verify-env"),
   "@deftai/directive-core/verify-source": sub("core", "verify-source"),
+  "@deftai/directive-core/spec-reconstruct": resolve(
+    import.meta.dirname,
+    "packages/core/src/spec-reconstruct/reconstruct.ts",
+  ),
   "@deftai/directive-core/validate-content": sub("core", "validate-content"),
   "@deftai/directive-core/render": sub("core", "render"),
   "@deftai/directive-core/codebase": sub("core", "codebase"),
@@ -248,15 +262,18 @@ export default defineConfig({
       resolve(import.meta.dirname, "packages/core/src/ts-check-lane/progress-reporter.ts"),
       "default",
     ],
-    // #5028: committed durations + DurationSequencer arm slowest-first on cold
-    // release worktrees (no host-global cache.dir). Do not set sequence.groupOrder
-    // here: Vitest finishes group N before group N+1, so spawn-heavy=0/unit=1
-    // would serialize the unit pool behind the one-worker drain and worsen the
-    // idle-tail. Keep both projects on the default group so they overlap; the
-    // sequencer sorts longest listed files first within each project. Fixture:
-    // packages/core/fixtures/vitest-file-durations.json (interim seed until
-    // #5027 tee ranking refreshes it). groupOrder remains a measured fallback
-    // only if a future pin proves concurrent projects still leave an idle tail.
+    // #5028 / #5140: committed durations + DurationSequencer arm slowest-first
+    // on cold release worktrees (no host-global cache.dir). Do not set
+    // sequence.groupOrder here: Vitest finishes group N before group N+1, so
+    // spawn-heavy=0/unit=1 would serialize the unit pool behind the one-worker
+    // drain and worsen the idle-tail. Keep both projects on the default group
+    // so they overlap. DurationSequencer's equal-groupOrder name tiebreak is
+    // lexicographic (spawn-heavy before unit); that is not a groupOrder serial
+    // drain — size #5140 cheapen against unit git tails via share-plus-reset.
+    // Fixture: packages/core/fixtures/vitest-file-durations.json (refreshed from
+    // Step 5 tee under #5140). Root-cause search also names the Vitest forks
+    // isolate lever; first-ship leaves default isolate on (win32
+    // dangerouslyIgnoreUnhandledErrors can swallow cross-file bleed).
     sequence: {
       sequencer: DurationSequencer,
     },
@@ -344,7 +361,7 @@ export default defineConfig({
         "packages/cli/src/*-fixtures.ts",
         "packages/core/src/**/*.helpers.ts",
       ],
-      reporter: ["text", "text-summary"],
+      reporter: ["text", "text-summary", "json"],
       thresholds:
         coverageDebtIssue !== null
           ? { lines: 0, functions: 0, branches: 0, statements: 0 }

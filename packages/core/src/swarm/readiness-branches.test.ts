@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { readinessReport } from "./readiness.js";
+import { missingRequiredSwarmFields } from "../vbrief-validation/story-quality.js";
+import { enforceGates, type ResolvedStory } from "./launch.js";
+import { readinessReport, SWARM_BLOCK_REMEDIATION_HINT, scaffoldSwarmDraft } from "./readiness.js";
 import { readinessMain } from "./readiness-cli.js";
 
 function writeStory(
@@ -21,9 +23,12 @@ function writeStory(
         title: storyId,
         status: folder === "active" ? "running" : "pending",
         narratives: {
-          Description: "A sufficiently long description for the story quality gate to pass.",
-          ImplementationPlan: "1. First step.\n2. Second step.",
-          UserStory: "As a user, I want this, so that it works.",
+          Description:
+            "This story implements a focused workflow change in the named source path. It keeps the behavior narrow and records success and failure outcomes for verification.",
+          ImplementationPlan:
+            "1. Update packages/core/src/swarm/readiness.ts to apply the documented field mode.\n2. Add targeted vitest coverage under packages/core/src/swarm/readiness-branches.test.ts for success and failure.",
+          UserStory:
+            "As a product user, I want focused readiness behavior, so that I can launch solo headless work.",
           Traces: "FR-1",
         },
         items: [
@@ -31,13 +36,21 @@ function writeStory(
             id: "a1",
             title: "A1",
             status: "pending",
-            narrative: { Acceptance: "Given x when y then z.", Traces: "FR-1" },
+            narrative: {
+              Acceptance:
+                "Given a solo-headless candidate with load-bearing swarm fields, when readiness runs, then it exits 0 without ceremony fields.",
+              Traces: "FR-1",
+            },
           },
           {
             id: "a2",
             title: "A2",
             status: "pending",
-            narrative: { Acceptance: "Given p when q then r.", Traces: "FR-1" },
+            narrative: {
+              Acceptance:
+                "Given a scaffold request without operator-named file_scope, when scaffold runs, then it returns a refused error.",
+              Traces: "FR-1",
+            },
           },
         ],
         metadata: { kind: "story", swarm },
@@ -56,7 +69,7 @@ describe("readiness branch coverage", () => {
       parallel_safe: true,
       size: "large",
       file_scope: ["src/a.ts"],
-      verify_commands: ["npm test"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
       expected_outputs: ["ok"],
       depends_on: [],
       conflict_group: "g",
@@ -76,7 +89,7 @@ describe("readiness branch coverage", () => {
       readiness: "not-ready",
       parallel_safe: false,
       file_scope: ["src/b.ts"],
-      verify_commands: ["npm test"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
       expected_outputs: ["ok"],
       depends_on: [],
       conflict_group: "g",
@@ -87,7 +100,7 @@ describe("readiness branch coverage", () => {
       readiness: "ready",
       parallel_safe: true,
       file_scope: ["src/d.ts"],
-      verify_commands: ["npm test"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
       expected_outputs: ["ok"],
       depends_on: ["blocker"],
       conflict_group: "g",
@@ -105,7 +118,7 @@ describe("readiness branch coverage", () => {
       readiness: "ready",
       parallel_safe: true,
       file_scope: ["src/r.ts"],
-      verify_commands: ["npm test"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
       expected_outputs: ["ok"],
       depends_on: [],
       conflict_group: "g",
@@ -140,7 +153,7 @@ describe("readiness branch coverage", () => {
       readiness: "ready",
       parallel_safe: true,
       file_scope: ["src/e.ts"],
-      verify_commands: ["npm test"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
       expected_outputs: ["ok"],
       depends_on: [],
       conflict_group: "g",
@@ -151,7 +164,7 @@ describe("readiness branch coverage", () => {
       readiness: "ready",
       parallel_safe: true,
       file_scope: ["src/n.ts"],
-      verify_commands: ["npm test"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
       expected_outputs: ["ok"],
       depends_on: ["ext-dep"],
       conflict_group: "g",
@@ -162,5 +175,395 @@ describe("readiness branch coverage", () => {
     expect(exitCode).toBe(1);
     expect(report).toContain("not completed");
     rmSync(project, { recursive: true, force: true });
+  });
+});
+
+describe("swarm readiness #3718", () => {
+  it("solo-headless relaxes ceremony fields but keeps file_scope/verify_commands", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-solo-"));
+    const path = writeStory(project, "solo-a", {
+      readiness: "ready",
+      parallel_safe: true,
+      file_scope: ["src/solo.ts"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
+      depends_on: [],
+      size: "small",
+      file_scope_confidence: "high",
+      // ceremony omitted: expected_outputs, conflict_group, model_tier
+    });
+    const concurrent = readinessReport(project, [path]);
+    expect(concurrent.exitCode).toBe(1);
+    expect(concurrent.report).toContain("expected_outputs");
+    expect(concurrent.report).toContain(SWARM_BLOCK_REMEDIATION_HINT);
+
+    const solo = readinessReport(project, [path], { soloHeadless: true });
+    expect(solo.exitCode).toBe(0);
+    expect(solo.report).toContain("solo-headless");
+    expect(solo.report).not.toContain("plan.metadata.swarm.expected_outputs");
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("scaffold writes operator-named swarm fields and refuses empty file_scope", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-scaf-"));
+    const path = writeStory(project, "scaf-a", {});
+    const refused = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: path,
+      fileScope: [],
+      verifyCommands: ["npm test"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error).toMatch(/operator-named --file-scope/);
+    }
+
+    const ok = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: path,
+      fileScope: ["packages/core/src/swarm/readiness.ts"],
+      verifyCommands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(ok.ok).toBe(true);
+    const raw = JSON.parse(readFileSync(path, "utf8")) as {
+      plan: { metadata: { swarm: Record<string, unknown> } };
+    };
+    expect(raw.plan.metadata.swarm.file_scope).toEqual(["packages/core/src/swarm/readiness.ts"]);
+    expect(raw.plan.metadata.swarm.depends_on).toEqual([]);
+    expect(raw.plan.metadata.swarm).not.toHaveProperty("expected_outputs");
+
+    const after = readinessReport(project, [path], { soloHeadless: true });
+    expect(after.exitCode).toBe(0);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("readinessMain --scaffold persists and --solo-headless clears ceremony gaps", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-main-"));
+    const path = writeStory(project, "main-a", {});
+    const code = readinessMain([
+      "--project-root",
+      project,
+      "--scaffold",
+      path,
+      "--file-scope",
+      "src/main.ts",
+      "--verify-command",
+      "pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts",
+      "--size",
+      "small",
+      "--file-scope-confidence",
+      "high",
+      "--readiness",
+      "ready",
+      "--parallel-safe",
+      "true",
+    ]);
+    expect(code).toBe(0);
+    const rel = "xbrief/active/main-a.xbrief.json";
+    expect(readinessMain(["--project-root", project, "--solo-headless", rel])).toBe(0);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("enforceGates passes soloHeadless only for N=1 cohorts", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-enf-"));
+    const path = writeStory(project, "enf-a", {
+      readiness: "ready",
+      parallel_safe: true,
+      file_scope: ["src/e.ts"],
+      verify_commands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
+      depends_on: [],
+      size: "small",
+      file_scope_confidence: "high",
+    });
+    const story: ResolvedStory = {
+      token: path,
+      story_id: "enf-a",
+      path,
+      relpath: "xbrief/active/enf-a.xbrief.json",
+    };
+    const seen: Array<boolean | undefined> = [];
+    const fail = enforceGates(
+      [story, { ...story, story_id: "enf-b", token: "b" }],
+      project,
+      () => ({
+        exitCode: 0,
+        message: "ok",
+      }),
+      (_p, _r, options) => {
+        seen.push(options?.soloHeadless);
+        return { exitCode: 1, report: "missing ceremony" };
+      },
+    );
+    expect(fail).not.toBeNull();
+    expect(seen[0]).toBe(false);
+
+    seen.length = 0;
+    const ok = enforceGates(
+      [story],
+      project,
+      () => ({ exitCode: 0, message: "ok" }),
+      (_p, _r, options) => {
+        seen.push(options?.soloHeadless);
+        return { exitCode: 0, report: "ready" };
+      },
+    );
+    expect(ok).toBeNull();
+    expect(seen[0]).toBe(true);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("re-scaffold without depends-on preserves prior dependencies", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-dep-"));
+    const path = writeStory(project, "dep-a", {
+      readiness: "ready",
+      parallel_safe: true,
+      file_scope: ["src/old.ts"],
+      verify_commands: ["npm test"],
+      depends_on: ["prior-blocker"],
+      size: "small",
+      file_scope_confidence: "high",
+    });
+    const ok = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: path,
+      fileScope: ["src/new.ts"],
+      verifyCommands: ["pnpm exec vitest run packages/core/src/swarm/readiness-branches.test.ts"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(ok.ok).toBe(true);
+    const raw = JSON.parse(readFileSync(path, "utf8")) as {
+      plan: { metadata: { swarm: Record<string, unknown> } };
+    };
+    expect(raw.plan.metadata.swarm.depends_on).toEqual(["prior-blocker"]);
+    expect(raw.plan.metadata.swarm.file_scope).toEqual(["src/new.ts"]);
+    if (ok.ok) {
+      expect(ok.writtenKeys).not.toContain("depends_on");
+    }
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("scaffold refuses out-of-project absolute and ../ paths", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-bound-"));
+    const path = writeStory(project, "bound-a", {});
+    const outside = join(tmpdir(), `sw-3718-outside-${Date.now()}.json`);
+    writeFileSync(outside, JSON.stringify({ plan: { metadata: { kind: "story" } } }), "utf8");
+    const absRefuse = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: outside,
+      fileScope: ["src/a.ts"],
+      verifyCommands: ["npm test"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(absRefuse.ok).toBe(false);
+    if (!absRefuse.ok) {
+      expect(absRefuse.error).toMatch(/outside the project boundary/);
+    }
+    const escapeRefuse = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: "../escape.xbrief.json",
+      fileScope: ["src/a.ts"],
+      verifyCommands: ["npm test"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(escapeRefuse.ok).toBe(false);
+    if (!escapeRefuse.ok) {
+      expect(escapeRefuse.error).toMatch(/outside the project boundary/);
+    }
+    const inProject = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: path,
+      fileScope: ["src/a.ts"],
+      verifyCommands: ["npm test"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(inProject.ok).toBe(true);
+    rmSync(outside, { force: true });
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("scaffold refuses non-story JSON", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-nonstory-"));
+    mkdirSync(join(project, "xbrief", "active"), { recursive: true });
+    const junk = join(project, "xbrief", "active", "junk.xbrief.json");
+    writeFileSync(junk, JSON.stringify({ not: "a-plan" }), "utf8");
+    const noPlan = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: junk,
+      fileScope: ["src/a.ts"],
+      verifyCommands: ["npm test"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(noPlan.ok).toBe(false);
+    if (!noPlan.ok) {
+      expect(noPlan.error).toMatch(/non-story JSON/);
+    }
+    const epic = join(project, "xbrief", "active", "epic.xbrief.json");
+    writeFileSync(
+      epic,
+      JSON.stringify({ plan: { id: "epic-a", metadata: { kind: "epic" } } }),
+      "utf8",
+    );
+    const epicRefuse = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: epic,
+      fileScope: ["src/a.ts"],
+      verifyCommands: ["npm test"],
+      size: "small",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(epicRefuse.ok).toBe(false);
+    if (!epicRefuse.ok) {
+      expect(epicRefuse.error).toMatch(/kind must be story/);
+    }
+    expect(JSON.parse(readFileSync(junk, "utf8"))).toEqual({ not: "a-plan" });
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("solo-headless refuses more than one targeted story", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-multi-"));
+    const a = writeStory(project, "solo-a", {
+      readiness: "ready",
+      parallel_safe: true,
+      file_scope: ["src/a.ts"],
+      verify_commands: ["npm test"],
+      depends_on: [],
+      size: "small",
+      file_scope_confidence: "high",
+    });
+    const b = writeStory(project, "solo-b", {
+      readiness: "ready",
+      parallel_safe: true,
+      file_scope: ["src/b.ts"],
+      verify_commands: ["npm test"],
+      depends_on: [],
+      size: "small",
+      file_scope_confidence: "high",
+    });
+    const multi = readinessReport(project, [a, b], { soloHeadless: true });
+    expect(multi.exitCode).toBe(2);
+    expect(multi.report).toMatch(/solo-headless refuses/);
+    expect(
+      readinessMain([
+        "--project-root",
+        project,
+        "--solo-headless",
+        "xbrief/active/solo-a.xbrief.json",
+        "xbrief/active/solo-b.xbrief.json",
+      ]),
+    ).toBe(2);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("solo-headless refuses when a requested sibling path is unloadable", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-missing-"));
+    const good = writeStory(project, "solo-ok", {
+      readiness: "ready",
+      parallel_safe: true,
+      file_scope: ["src/ok.ts"],
+      verify_commands: ["npm test"],
+      depends_on: [],
+      size: "small",
+      file_scope_confidence: "high",
+    });
+    const missing = join(project, "xbrief", "active", "solo-missing.xbrief.json");
+    const mixed = readinessReport(project, [good, missing], { soloHeadless: true });
+    expect(mixed.exitCode).toBe(2);
+    expect(mixed.report).toMatch(/solo-headless refuses/);
+    const junk = join(project, "xbrief", "active", "solo-junk.xbrief.json");
+    writeFileSync(junk, "{not-json", "utf8");
+    const badJson = readinessReport(project, [good, junk], { soloHeadless: true });
+    expect(badJson.exitCode).toBe(2);
+    expect(badJson.report).toMatch(/solo-headless refuses/);
+    expect(
+      readinessMain([
+        "--project-root",
+        project,
+        "--solo-headless",
+        "xbrief/active/solo-ok.xbrief.json",
+        "xbrief/active/solo-missing.xbrief.json",
+      ]),
+    ).toBe(2);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("scaffold rejects invalid --size values", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-3718-size-"));
+    const path = writeStory(project, "size-a", {});
+    const huge = scaffoldSwarmDraft({
+      projectRoot: project,
+      vbriefPath: path,
+      fileScope: ["src/a.ts"],
+      verifyCommands: ["npm test"],
+      size: "huge",
+      fileScopeConfidence: "high",
+      readiness: "ready",
+      parallelSafe: true,
+    });
+    expect(huge.ok).toBe(false);
+    if (!huge.ok) {
+      expect(huge.error).toMatch(/small|medium|large/);
+      expect(huge.error).toMatch(/huge/);
+    }
+    expect(
+      readinessMain([
+        "--project-root",
+        project,
+        "--scaffold",
+        path,
+        "--file-scope",
+        "src/a.ts",
+        "--verify-command",
+        "npm test",
+        "--size",
+        "huge",
+        "--file-scope-confidence",
+        "high",
+        "--parallel-safe",
+        "true",
+      ]),
+    ).toBe(1);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("missingRequiredSwarmFields mode locks ceremony vs load-bearing split", () => {
+    expect(missingRequiredSwarmFields({}, "solo-headless")).toEqual(
+      expect.arrayContaining([
+        "plan.metadata.swarm.file_scope",
+        "plan.metadata.swarm.verify_commands",
+        "plan.metadata.swarm.depends_on",
+        "plan.metadata.swarm.size",
+        "plan.metadata.swarm.file_scope_confidence",
+      ]),
+    );
+    expect(missingRequiredSwarmFields({}, "solo-headless")).not.toContain(
+      "plan.metadata.swarm.expected_outputs",
+    );
+    expect(missingRequiredSwarmFields({}, "concurrent")).toContain(
+      "plan.metadata.swarm.expected_outputs",
+    );
   });
 });

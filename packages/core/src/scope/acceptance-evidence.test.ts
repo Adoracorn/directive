@@ -10,10 +10,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  acceptanceWalkReportsZeroVerified,
+  SCOPE_COMPLETE_ZERO_VERIFIED_NOTICE,
+} from "../check/rapid-zero-verified.js";
 import { ITEM_CORE, scanVbrief } from "../vbrief-validate/conformance.js";
 import {
   ACCEPTANCE_DISPOSITION_KEY,
   ACCEPTANCE_EVIDENCE_KEY,
+  ACCEPTANCE_REQUIRES_KEY,
   bindPlanItemIdsToClauses,
   clauseKeyedItemId,
   evaluateAcceptanceEvidenceGate,
@@ -24,13 +29,18 @@ import {
   formatScopeStatus,
   inferRequiredStrictAxes,
   isEvidenceKindSuitable,
+  itemDeclaresMergeRequirement,
+  MERGE_POINTER_SHAPE_REMEDIATION,
   persistClauseKeyedPendingItems,
   readNamespacedAcceptanceFields,
   SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION,
+  stampDeclaredMergeEvidence,
   stampDeclaredTestEvidence,
   stampMatchAnyFileEvidence,
+  stampMergeFromCompletionProvenance,
   stampNamespacedDisposition,
   stampNamespacedEvidence,
+  TEST_POINTER_SHAPE_REMEDIATION,
   UAT_POINTER_SHAPE_REMEDIATION,
 } from "./acceptance-evidence.js";
 import { promotePath } from "./promote-path.js";
@@ -127,7 +137,67 @@ describe("acceptance evidence inference (#3240)", () => {
     expect(isEvidenceKindSuitable("merge", ["smoke"])).toBe(false);
     expect(isEvidenceKindSuitable("review", ["uat"])).toBe(false);
     expect(isEvidenceKindSuitable("smoke", ["smoke"])).toBe(true);
-    expect(isEvidenceKindSuitable("merge", [])).toBe(true);
+    // Empty-axis / undeclared must refuse kind:merge (#5105 dual).
+    expect(isEvidenceKindSuitable("merge", [])).toBe(false);
+    expect(isEvidenceKindSuitable("merge", [], { mergeDeclared: true })).toBe(true);
+  });
+
+  it("admits explicit merge outside STRICT_ACCEPTANCE_AXES (#5105)", () => {
+    expect(itemDeclaresMergeRequirement({ [ACCEPTANCE_REQUIRES_KEY]: "merge" })).toBe(true);
+    expect(itemDeclaresMergeRequirement({ requires: "merge" })).toBe(true);
+    expect(itemDeclaresMergeRequirement({ requiredEvidenceKind: "merge" })).toBe(true);
+    expect(itemDeclaresMergeRequirement({ acceptanceAxis: "merge" })).toBe(true);
+    expect(itemDeclaresMergeRequirement({ title: "merge lands on master" })).toBe(false);
+    expect(
+      inferRequiredStrictAxes({ [ACCEPTANCE_REQUIRES_KEY]: "merge", title: "smoke after deploy" }),
+    ).toEqual([]);
+    expect(inferRequiredStrictAxes({ requires: "smoke" })).toEqual(["smoke"]);
+  });
+
+  it("keeps explicit strict axis when merge is also declared (#5105 Greptile P1)", () => {
+    // requires=merge alone still short-circuits free-text; co-declared acceptanceAxis
+    // must not be hidden — otherwise kind:merge could complete a smoke criterion.
+    expect(
+      inferRequiredStrictAxes({
+        [ACCEPTANCE_REQUIRES_KEY]: "merge",
+        "x-directive/acceptanceAxis": "smoke",
+      }),
+    ).toEqual(["smoke"]);
+    expect(
+      inferRequiredStrictAxes({
+        [ACCEPTANCE_REQUIRES_KEY]: "merge",
+        acceptanceAxis: "uat",
+      }),
+    ).toEqual(["uat"]);
+    expect(
+      isEvidenceKindSuitable("merge", ["smoke"], {
+        mergeDeclared: itemDeclaresMergeRequirement({
+          [ACCEPTANCE_REQUIRES_KEY]: "merge",
+          "x-directive/acceptanceAxis": "smoke",
+        }),
+      }),
+    ).toBe(false);
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        withEvidence(
+          {
+            title: "Smoke after merge",
+            status: "pending",
+            [ACCEPTANCE_REQUIRES_KEY]: "merge",
+            "x-directive/acceptanceAxis": "smoke",
+          },
+          {
+            kind: "merge",
+            pointer: "abc1234",
+            recorded_at: "2026-09-28T12:00:00Z",
+            recorded_by: "ci",
+          },
+        ),
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.outcome).toBe("invalid");
+    expect(gate.reports[0]?.detail).toMatch(/smoke|not suitable|merge\/review/i);
   });
 
   it("rejects single-axis evidence when multiple strict axes are required", () => {
@@ -276,7 +346,7 @@ describe("acceptance evidence gate (#3240 / #3305)", () => {
         },
         {
           kind: "merge",
-          pointer: "merge:abc123",
+          pointer: "abc1234",
           recorded_at: "2026-08-10T12:00:00Z",
           recorded_by: "ci",
         },
@@ -286,6 +356,47 @@ describe("acceptance evidence gate (#3240 / #3305)", () => {
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/not suitable|merge\/review|smoke/i);
     expect(readFileSync(file, "utf8")).toContain("pending");
+  });
+
+  it("refuses undeclared kind:merge on empty-axis criteria (#5105)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        withEvidence(
+          { title: "Works for solo and external contributions.", status: "pending" },
+          {
+            kind: "merge",
+            pointer: "abc1234",
+            recorded_at: "2026-09-28T12:00:00Z",
+            recorded_by: "ci",
+          },
+        ),
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.outcome).toBe("invalid");
+    expect(gate.reports[0]?.detail).toMatch(/explicit requires|kind:merge|#5105/i);
+  });
+
+  it("accepts declared merge with kind:merge sha pointer (#5105)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        withEvidence(
+          {
+            title: "Merge lands on delivery",
+            status: "pending",
+            [ACCEPTANCE_REQUIRES_KEY]: "merge",
+          },
+          {
+            kind: "merge",
+            pointer: "abc1234",
+            recorded_at: "2026-09-28T12:00:00Z",
+            recorded_by: "ci",
+          },
+        ),
+      ],
+    });
+    expect(gate.ok).toBe(true);
+    expect(gate.reports[0]?.outcome).toBe("evidence");
   });
 
   it("allows waived disposition with human-origin provenance without full evidence", () => {
@@ -340,6 +451,59 @@ describe("acceptance evidence gate (#3240 / #3305)", () => {
     const result = runTransition("complete", file);
     expect(result.ok).toBe(false);
     expect(result.message).toMatch(/human-origin/);
+    // Invalid-object path keeps the kind list disclosure (#4877 clause 2).
+    expect(result.message).toMatch(
+      /must be human-origin \(kind operator-cli\|operator-session\|human-event \+ non-agent actor\)/,
+    );
+  });
+
+  it("missing provenance discloses a recordable GrantOrigin shape (#4877)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        {
+          title: "needs disposition",
+          status: "pending",
+          [ACCEPTANCE_DISPOSITION_KEY]: {
+            disposition: "waived",
+            reason: "operator waived",
+            recorded_at: "2026-08-10T12:00:00Z",
+            // provenance missing → missing-path refusal
+          },
+        },
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.detail).toMatch(
+      /disposition\.provenance is required \(\{kind: operator-cli\|operator-session\|human-event, actor: <non-agent, e\.g\. operator@example\.com>\}\)/,
+    );
+    // Must not invite the bare self-asserted string.
+    expect(gate.reports[0]?.detail).not.toMatch(/required \(human-origin\)/);
+    expect(gate.message).toMatch(
+      /provenance \{kind: operator-cli\|operator-session\|human-event, actor: <non-agent, e\.g\. operator@example\.com>\}/,
+    );
+    expect(gate.message).not.toMatch(/provenance \(human-origin\)/);
+  });
+
+  it("bare human-origin string provenance still fails closed (#4877)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        {
+          title: "bare string",
+          status: "pending",
+          [ACCEPTANCE_DISPOSITION_KEY]: {
+            disposition: "waived",
+            reason: "operator waived",
+            provenance: "human-origin",
+            recorded_at: "2026-08-10T12:00:00Z",
+          },
+        },
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    // Non-object re-enters missing-path (asRecord null), now with GrantOrigin shape.
+    expect(gate.reports[0]?.detail).toMatch(
+      /disposition\.provenance is required \(\{kind: operator-cli\|operator-session\|human-event, actor: <non-agent, e\.g\. operator@example\.com>\}\)/,
+    );
   });
 
   it("accepts suitable smoke evidence and lists criteria on success", () => {
@@ -421,32 +585,192 @@ describe("acceptance evidence gate (#3240 / #3305)", () => {
     expect(gate.message).toMatch(/items\[2\]\.subItems\[0\]/);
   });
 
-  it("already-terminal items skip typed evidence re-check (#3240 / #3305 policy)", () => {
+  it("landing-set terminals without typed evidence refuse completed/ entry (#4879)", () => {
+    const landing = [
+      "completed",
+      "complete",
+      "failed",
+      "cancelled",
+      "blocked",
+      "draft",
+      "approved",
+      "auto",
+    ] as const;
+    for (const status of landing) {
+      const gate = evaluateAcceptanceEvidenceGate({
+        items: [
+          {
+            title: `landing ${status}`,
+            status,
+            narrative: { Result: "pre-marked", Verification: "manual" },
+          },
+        ],
+      });
+      expect({ status, ok: gate.ok, outcome: gate.reports[0]?.outcome }).toEqual({
+        status,
+        ok: false,
+        outcome: "missing",
+      });
+      expect(gate.reports[0]?.detail).toMatch(/#4879|blocks completed\/ entry/);
+    }
+  });
+
+  it("landing-set bare evidence and disposition-only still refuse (#4879)", () => {
+    const bare = evaluateAcceptanceEvidenceGate({
+      items: [{ title: "terminal bare", status: "completed", evidence: testEvidence }],
+    });
+    expect(bare.ok).toBe(false);
+    expect(bare.reports[0]?.outcome).toBe("missing");
+    expect(bare.reports[0]?.detail).toMatch(/bare evidence\/disposition ignored/);
+
+    const dispositionOnly = evaluateAcceptanceEvidenceGate({
+      items: [
+        withDisposition(
+          { title: "failed disposition only", status: "failed" },
+          {
+            disposition: "waived",
+            reason: "operator waived",
+            provenance: humanProv,
+            recorded_at: "2026-08-10T12:00:00Z",
+          },
+        ),
+      ],
+    });
+    expect(dispositionOnly.ok).toBe(false);
+    expect(dispositionOnly.reports[0]?.outcome).toBe("missing");
+  });
+
+  it("landing-set with namespaced evidence still skips re-check (#4879 / #3240)", () => {
     const gate = evaluateAcceptanceEvidenceGate({
       items: [
-        // Terminal with no typed evidence — explicit skip, not a silent dual success.
-        {
-          title: "legacy narrative only",
-          status: "completed",
-          narrative: { Result: "done via narrative workaround", Verification: "manual" },
-        },
-        // Terminal with bare (invalid) evidence still already_terminal, not evidence success.
-        {
-          title: "terminal bare",
-          status: "completed",
-          evidence: testEvidence,
-        },
-        // Terminal with namespaced evidence still already_terminal (not re-validated).
-        withEvidence({
-          title: "terminal namespaced",
-          status: "failed",
-        }),
+        withEvidence({ title: "terminal namespaced", status: "failed" }),
+        withEvidence(
+          { title: "valid merge pointer shape", status: "completed" },
+          {
+            kind: "merge",
+            pointer: "abc1234",
+            recorded_at: "2026-08-10T12:00:00Z",
+            recorded_by: "vitest",
+          },
+        ),
       ],
     });
     expect(gate.ok).toBe(true);
     expect(gate.reports.every((r) => r.outcome === "already_terminal")).toBe(true);
     expect(gate.reports.some((r) => r.outcome === "evidence")).toBe(false);
     expect(gate.reports[0]?.detail).toMatch(/typed evidence not re-checked/);
+  });
+
+  it("landing-set kind:uat historical test pointer still lands (#4563 / Greptile P1)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        withEvidence(
+          { title: "historical uat stamp", status: "completed" },
+          {
+            kind: "uat",
+            pointer: "packages/core/src/authz/classify.test.ts",
+            recorded_at: "2026-08-10T12:00:00Z",
+            recorded_by: "vitest",
+          },
+        ),
+      ],
+    });
+    expect(gate.ok).toBe(true);
+    expect(gate.reports[0]?.outcome).toBe("already_terminal");
+  });
+
+  it("landing-set kind:test markdown pointer is refused (Greptile P1)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        withEvidence(
+          { title: "test points at markdown", status: "completed" },
+          {
+            kind: "test",
+            pointer: "docs/notes.md",
+            recorded_at: "2026-08-10T12:00:00Z",
+            recorded_by: "vitest",
+          },
+        ),
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.outcome).toBe("missing");
+    expect(gate.reports[0]?.detail).toMatch(TEST_POINTER_SHAPE_REMEDIATION);
+    expect(gate.reports[0]?.detail).toMatch(/#4879|blocks completed\/ entry/);
+  });
+
+  it("landing-set kind:merge non-commit pointer is refused (Greptile P1)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        withEvidence(
+          { title: "merge points at PR prose", status: "completed" },
+          {
+            kind: "merge",
+            pointer: "PR #5205",
+            recorded_at: "2026-08-10T12:00:00Z",
+            recorded_by: "vitest",
+          },
+        ),
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.outcome).toBe("missing");
+    expect(gate.reports[0]?.detail).toMatch(MERGE_POINTER_SHAPE_REMEDIATION);
+    expect(gate.reports[0]?.detail).toMatch(/#4879|blocks completed\/ entry/);
+  });
+
+  it("landing-set empty {} evidence does not count as typed evidence (#4879 Greptile P1)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        {
+          title: "completed empty evidence object",
+          status: "completed",
+          [ACCEPTANCE_EVIDENCE_KEY]: {},
+        },
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.outcome).toBe("missing");
+    expect(gate.reports[0]?.detail).toMatch(/malformed|#4879|blocks completed\/ entry/);
+    expect(gate.reports[0]?.outcome).not.toBe("already_terminal");
+  });
+
+  it("missing or unrecognized item.status no longer skips typed provenance (#3819)", () => {
+    for (const status of ["", "done", "bogus"] as const) {
+      const gate = evaluateAcceptanceEvidenceGate({
+        items: [{ title: `outside ${status || "empty"}`, status }],
+      });
+      expect({ status, ok: gate.ok, outcome: gate.reports[0]?.outcome }).toEqual({
+        status,
+        ok: false,
+        outcome: "missing",
+      });
+      expect(gate.reports[0]?.outcome).not.toBe("already_terminal");
+    }
+  });
+
+  it("recognized fail/cancel/historical terminals still skip when landing evidence is present (#3819)", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [withEvidence({ title: "failed with evidence", status: "failed" })],
+    });
+    expect(gate.ok).toBe(true);
+    expect(gate.reports[0]?.outcome).toBe("already_terminal");
+  });
+
+  it("scope:complete refuses pre-marked completed without typed evidence (#4879)", () => {
+    root = makeRepo();
+    const file = writeActive(root, "premarked.xbrief.json", [
+      {
+        title: "pre-marked",
+        status: "completed",
+        narrative: { Result: "narrative only", Verification: "manual" },
+      },
+    ]);
+    const result = runTransition("complete", file);
+    expect(result.ok).toBe(false);
+    expect(result.message).toMatch(/#4879|Acceptance evidence required|#3240/);
+    expect(existsSync(join(root, "xbrief", "completed", "premarked.xbrief.json"))).toBe(false);
+    expect(existsSync(file)).toBe(true);
   });
 
   it("fail/cancel still auto-advance without acceptance evidence", () => {
@@ -711,6 +1035,31 @@ describe("scope:complete acceptance parity with verify:ac (#3497)", () => {
     expect(walk.ok).toBe(true);
     expect(walk.predicate).toBe("executable-pass");
     expect(walk.message).not.toContain(SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION);
+  });
+
+  it("refuses a zero-verified complete walk without executable-pass (#4870)", () => {
+    const walk = evaluateScopeCompleteAcceptanceWalk(
+      {
+        id: "4870-zero-verified",
+        title: "zero verified no executable oracle",
+        acceptance: {
+          commands: [],
+          none_stated: true,
+          source_rung: "derived",
+          ambiguity_attestation: "none_found",
+          clauses: unverifiableClauses,
+        },
+        metadata: {
+          swarm: { file_scope: ["packages/core/src"] },
+        },
+        items: [],
+      },
+      { ...walkOptions, runner: greenRunner },
+    );
+    expect(walk.ok).toBe(false);
+    expect(walk.predicate).not.toBe("executable-pass");
+    expect(walk.message).toContain(SCOPE_COMPLETE_ZERO_VERIFIED_NOTICE.trim());
+    expect(acceptanceWalkReportsZeroVerified(walk.message)).toBe(true);
   });
 
   it("completes end to end through scope:complete with a green stated command (#3497)", () => {
@@ -1659,7 +2008,7 @@ describe("#4732 ingest/promote clause-id bind and declared test stamp", () => {
           { title: "UAT sign-off", status: "pending" },
           {
             kind: "merge",
-            pointer: "merge:abc",
+            pointer: "abc1234",
             recorded_at: "2026-09-17T12:00:00Z",
             recorded_by: "ci",
           },
@@ -2058,5 +2407,299 @@ describe("fence evidence.pointer (#4840)", () => {
     const listing = formatAcceptanceCompletionListing(gate.reports);
     expect(listing).toContain(`pointer=${fenceUntrustedAcceptanceText(inject)}`);
     expect(listing).not.toMatch(/pointer=«untrusted:[^»]*\n/);
+  });
+});
+
+describe("kind-versus-pointer coherence (#5105)", () => {
+  it("refuses kind:test pointing at markdown or CHANGELOG", () => {
+    for (const pointer of ["docs/note.md", "CHANGELOG.md", "PR 5105"]) {
+      const gate = evaluateAcceptanceEvidenceGate({
+        items: [
+          withEvidence(
+            { title: "unit", status: "pending" },
+            {
+              kind: "test",
+              pointer,
+              recorded_at: "2026-09-28T12:00:00Z",
+              recorded_by: "t",
+            },
+          ),
+        ],
+      });
+      expect({ pointer, ok: gate.ok, detail: gate.reports[0]?.detail }).toEqual({
+        pointer,
+        ok: false,
+        detail: TEST_POINTER_SHAPE_REMEDIATION,
+      });
+    }
+  });
+
+  it("refuses kind:merge with a non-sha pointer", () => {
+    const gate = evaluateAcceptanceEvidenceGate({
+      items: [
+        withEvidence(
+          { title: "merge declared", status: "pending", [ACCEPTANCE_REQUIRES_KEY]: "merge" },
+          {
+            kind: "merge",
+            pointer: "merge:not-a-sha",
+            recorded_at: "2026-09-28T12:00:00Z",
+            recorded_by: "t",
+          },
+        ),
+      ],
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.detail).toBe(MERGE_POINTER_SHAPE_REMEDIATION);
+  });
+});
+
+describe("stampDeclaredMergeEvidence (#5105)", () => {
+  it("stamps only explicitly merge-declared criteria after ancestry verify", () => {
+    const mergeItem: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Merge tip ancestry",
+      status: "pending",
+      [ACCEPTANCE_REQUIRES_KEY]: "merge",
+    };
+    const emptyItem: Record<string, unknown> = {
+      id: clauseKeyedItemId(2),
+      title: "Behavioral undeclared",
+      status: "pending",
+    };
+    const plan: Record<string, unknown> = {
+      items: [mergeItem, emptyItem],
+      acceptance: {
+        clauses: [
+          { id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false },
+          { id: 2, text: "Behavioral undeclared", artifact_path: null, ambiguous: false },
+        ],
+      },
+    };
+    const result = stampDeclaredMergeEvidence(plan, {
+      recorded_by: "scope:complete",
+      recorded_at: "2026-09-28T12:00:00Z",
+      mergeCommit: "abcdef1",
+      projectRoot: "/repo",
+      deliveryBranch: "master",
+      verifyAncestry: () => ({ ok: true, error: null, remoteTip: "tipsha" }),
+    });
+    expect(result.stampedIds).toEqual([clauseKeyedItemId(1)]);
+    expect(mergeItem[ACCEPTANCE_EVIDENCE_KEY]).toEqual({
+      kind: "merge",
+      pointer: "abcdef1",
+      recorded_at: "2026-09-28T12:00:00Z",
+      recorded_by: "scope:complete",
+    });
+    expect(emptyItem[ACCEPTANCE_EVIDENCE_KEY]).toBeUndefined();
+    expect(result.skipped).toEqual([{ clauseId: 2, reason: "undeclared-merge" }]);
+  });
+
+  it("does not stamp when ancestry fails or merge is undeclared", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Merge tip ancestry",
+      status: "pending",
+      [ACCEPTANCE_REQUIRES_KEY]: "merge",
+    };
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false }],
+      },
+    };
+    expect(
+      stampDeclaredMergeEvidence(plan, {
+        recorded_by: "scope:complete",
+        recorded_at: "2026-09-28T12:00:00Z",
+        mergeCommit: "abcdef1",
+        projectRoot: "/repo",
+        deliveryBranch: "master",
+        verifyAncestry: () => ({ ok: false, error: "not ancestor", remoteTip: "tip" }),
+      }).skipped[0]?.reason,
+    ).toBe("ancestry-failed");
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toBeUndefined();
+  });
+
+  it("does not stamp from completionProvenance inside evaluateAcceptanceEvidenceGate", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Merge tip ancestry",
+      status: "pending",
+      [ACCEPTANCE_REQUIRES_KEY]: "merge",
+    };
+    const snapshot = structuredClone(item);
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false }],
+      },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          verifier: "scope:complete",
+        },
+      },
+    };
+    const gate = evaluateAcceptanceEvidenceGate(plan, {
+      projectRoot: "/repo",
+      verifyAncestry: () => ({ ok: true, error: null, remoteTip: "tipsha" }),
+    });
+    expect(gate.ok).toBe(false);
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toBeUndefined();
+    expect(item).toEqual(snapshot);
+  });
+
+  it("skips persist-path stamp when projectRoot is missing (no cwd fallback)", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Merge tip ancestry",
+      status: "pending",
+      [ACCEPTANCE_REQUIRES_KEY]: "merge",
+    };
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false }],
+      },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          verifier: "scope:complete",
+        },
+      },
+    };
+    const result = stampMergeFromCompletionProvenance(plan, {
+      verifyAncestry: () => ({ ok: true, error: null, remoteTip: "tipsha" }),
+    });
+    expect(result.stampedIds).toEqual([]);
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toBeUndefined();
+  });
+
+  it("skips persist-path stamp when ancestry fails", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Merge tip ancestry",
+      status: "pending",
+      [ACCEPTANCE_REQUIRES_KEY]: "merge",
+    };
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false }],
+      },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          verifier: "scope:complete",
+        },
+      },
+    };
+    const result = stampMergeFromCompletionProvenance(plan, {
+      projectRoot: "/repo",
+      verifyAncestry: () => ({ ok: false, error: "not ancestor", remoteTip: "tip" }),
+    });
+    expect(result.skipped[0]?.reason).toBe("ancestry-failed");
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toBeUndefined();
+  });
+
+  it("reuses validated provenance and does not fetch when reuseValidatedAncestry is set", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Merge tip ancestry",
+      status: "pending",
+      [ACCEPTANCE_REQUIRES_KEY]: "merge",
+    };
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Merge tip ancestry", artifact_path: null, ambiguous: false }],
+      },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          deliveryCommit: "tipsha",
+          verifier: "scope:complete",
+        },
+      },
+    };
+    let fetchCount = 0;
+    const result = stampMergeFromCompletionProvenance(plan, {
+      projectRoot: "/repo",
+      reuseValidatedAncestry: true,
+      recorded_at: "2026-09-30T12:00:00Z",
+      runGit: (_cwd, args) => {
+        if (args[0] === "fetch") {
+          fetchCount += 1;
+          return { code: 1, stdout: "", stderr: "should not fetch" };
+        }
+        return { code: 1, stdout: "", stderr: "unexpected git" };
+      },
+    });
+    expect(result.stampedIds).toEqual([clauseKeyedItemId(1)]);
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toMatchObject({
+      kind: "merge",
+      pointer: "abcdef1",
+    });
+    expect(fetchCount).toBe(0);
+  });
+
+  it("namespaced merge declaration passes scanVbrief conformance", () => {
+    const item = {
+      id: "merge-declared",
+      title: "Merge tip ancestry",
+      status: "pending",
+      [ACCEPTANCE_REQUIRES_KEY]: "merge",
+      [ACCEPTANCE_EVIDENCE_KEY]: {
+        kind: "merge",
+        pointer: "abcdef1",
+        recorded_at: "2026-09-28T12:00:00Z",
+        recorded_by: "scope:complete",
+      },
+    };
+    const findings = scanVbrief("xbrief/active/merge-declared.xbrief.json", {
+      xBRIEFInfo: { version: "0.8" },
+      plan: { title: "merge-declared", status: "running", items: [item] },
+    });
+    expect(findings).toEqual([]);
+    expect(itemDeclaresMergeRequirement(item)).toBe(true);
+  });
+
+  it("leaves empty-axis criteria unattested (visible remaining work)", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Works for solo and external contributions.",
+      status: "pending",
+    };
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [
+          {
+            id: 1,
+            text: "Works for solo and external contributions.",
+            artifact_path: null,
+            ambiguous: false,
+          },
+        ],
+      },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          verifier: "scope:complete",
+        },
+      },
+    };
+    const gate = evaluateAcceptanceEvidenceGate(plan, {
+      projectRoot: "/repo",
+      verifyAncestry: () => ({ ok: true, error: null, remoteTip: "tipsha" }),
+    });
+    expect(gate.ok).toBe(false);
+    expect(gate.reports[0]?.outcome).toBe("missing");
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toBeUndefined();
   });
 });

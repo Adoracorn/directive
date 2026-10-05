@@ -95,12 +95,20 @@ Large multi-host skills use a **host-neutral core** plus **one** per-host adapte
 | Phase 5–6 — Review + Close | [`references/core-phase-5-6.md`](references/core-phase-5-6.md) |
 | Crash recovery, prompts, anti-patterns | [`references/core-ops.md`](references/core-ops.md) |
 
-! **Grok through-merge Phase 0 / Phase 3 launch (#4529 / #4821):** dest-cwd class A residual first, stop-at after the push; then Approach 1 wait; then parent-retained closer after CLEAN. This card wins over Phase 0 / Phase 3 depth rows that still name Approach 1 sibling or parent-retained as the first partner. ⊗ Choose Approach 1 sibling or parent-retained without dest residual. Depth: Envelope selection SLA; Phase 5–6 [`references/core-phase-5-6.md`](references/core-phase-5-6.md).
+! **Grok through-merge Phase 0 / Phase 3 launch (#4529 / #4821 / #5219 / #5229):** dest-cwd class A residual first, stop-at after the push; then Approach 1 wait owner is a `spawn_subagent` review-monitor sibling (register + child-bound `pr:watch --monitor-agent-id` + `verify:review-monitor --merge-path-arm --live-wait`); then parent-retained closer after CLEAN. Approach 1 is the cheapest admitted babysit vs host `monitor` / bare shell watch (#5229); stamp host capability before CLI verify (`writeHostCapabilityStamp` / `references/host-grok-build.md`). Prefer the Approach 1 babysitter one-liner (`formatApproach1CheapestAdmissionCard`) over a parent-shell `pr:watch`. This card wins over Phase 0 / Phase 3 depth rows that still name Approach 1 sibling or parent-retained as the first partner. ⊗ Choose Approach 1 sibling or parent-retained without dest residual. ⊗ Arm merge-path with parent-shell `pr:watch` / host monitor alone when `spawn_subagent` is available. Depth: Envelope selection SLA; Phase 5–6 [`references/core-phase-5-6.md`](references/core-phase-5-6.md).
 
 ⊗ Load all host adapters “just in case.” Unused host wiring stays out of context (#2928).
 ≉ Paste full host manuals into this thin SKILL — keep detect short; depth lives in one adapter.
 
 ## Hard gates (all hosts)
+
+### Solo-worker launch path (#3032 / #3669)
+
+! **#3032 solo-worker launch path** = this skill's interactive path: Phase 0 default when no pre-approved cohort; Mode B worktrees (`.deft-scratch/worktrees/<story-id>`); envelope `dispatch_kind: solo`. Through-merge / N=1 still uses this path — not parent-as-leaf. Depth: [`references/core-phase-0.md`](references/core-phase-0.md), [`references/core-phase-1-2.md`](references/core-phase-1-2.md), [`references/core-phase-3.md`](references/core-phase-3.md).
+! Headless `task swarm:launch` is the opt-in concurrent fast-path. `task swarm:readiness` exit 0 gates **concurrent** workers only. `swarm:launch` may emit `dispatch_kind: solo` for a single ungrouped story only after concurrent-ready gates pass.
+! N=1 sequential `swarm:launch` mode is declined for first ship (#3669); multi-story sequential / `fileOverlaps` / conflict-group sequencing stays out of scope.
+⊗ Treat closed #3666 as having discharged this discoverability debt (Gate A pointer ≠ AGENTS/commands/SKILL naming).
+⊗ Invent a greenfield solo-worker CLI verb as the first remedy; ⊗ conclude no sanctioned solo path exists when `swarm:launch` / readiness refuses.
 
 ### Proceed — no scope ceremony (#4956)
 
@@ -112,6 +120,13 @@ Large multi-host skills use a **host-neutral core** plus **one** per-host adapte
 ! One isolated git worktree per parallel agent (Phase 2). Create worktrees or consume a worktree-map **before** dispatch.
 ! On **OpenClaw**, parallel leaves: worktree or worktree-map **before** `sessions_spawn`; worker cwd = that worktree; fail loud if the cohort would share the repo root (#2929). Full rules: [`references/host-openclaw.md`](references/host-openclaw.md).
 ⊗ DIY multi-leaf `sessions_spawn` without worktree prep (#2929).
+
+### Dest leaf ceremony (#5145)
+
+! Dest through-merge / worktree leaves still need their own ritual — primary checkout ritual does not satisfy dest hooks.
+! When dest `.deft/ritual-state.json` already exists, prefer `session:start --rearm` (maintainer: `task session:start -- --rearm`) over a full cold start — dest rearm Prefer-A when primary ritual top-level `finalize_owed` is already recorded (no dest `--defer-owed` required).
+! Linked dest Prefer-A inherits primary top-level `finalize_owed` (deferred or ok). `--rearm` alone on primary/main still scans unless `--defer-owed=<reason>` is set. Keep `--defer=cache_fresh=…` soft paths. Standalone linked worktrees without a primary `finalize_owed` record still fail-closed.
+⊗ Stampede N dest cold tip inventories before primary records finalize_owed / before Prefer-A is on tip. Depth: `templates/agent-prompt-preamble.md` §12.
 
 ### Next-phase tool dispatch (#2934)
 
@@ -163,8 +178,9 @@ Large multi-host skills use a **host-neutral core** plus **one** per-host adapte
 
 ! Default story / through-merge envelope is `drive-to: merge-ready`. Depth: [`references/core-phase-0.md`](references/core-phase-0.md).
 ! **Grok through-merge:** implement leaf MUST be `stop-at: pr-open`. Named leftover (class A) requires dest-cwd one-shot residual, stop-at after the push; Approach 1 remains wait owner (`pr:watch` + `verify:review-monitor` / `review-monitor:register`); parent-retained is closer plus post-merge `scope:complete` after that dest worker exists. Phase 6 monitor squash-merges via `pr:wait-mergeable-and-merge` (or parent-retained) only after CLEAN. `swarm:finalize-cohort` is leftover after merge. Dest spawn deny is `BLOCKED` or dest-cwd residual via native implementation-capable spawn (#4215) — not parent-primary. ⊗ Send class-A residual through process-only CLI `grok --cwd` (cannot edit/push). ⊗ Harvest a Grok `drive-to: merge-ready` continuation as that partner. ⊗ Parent-inline residual when dest spawn is available. ⊗ Use `merge-release` as this closer. ⊗ Claim `swarm:finalize-cohort` is the product squash-merge. Related: #4421. #4821.
+! **Fresh-clone completed land (#4714):** Before `swarm:launch`, each selected active brief MUST exist on fetched `origin/<deliveryBranch>` (human-reviewed activation PR). After product merge, Phase 6 `swarm:finalize-cohort` lands terminal briefs via a lifecycle PR; if the isolated delivery checkout lacks the active brief, it may materialize only exact bytes that match a reachable reviewed product/evidence blob from a retained dest — otherwise fail closed with source-recovery. Expected scoped closing refs without active/terminal records are not #2247 incidental skips. `verify:completed-tracked -- --issue N` on the fetched delivery tip is the close proof. ⊗ Treat GitHub-closed alone as DONE. ⊗ Copy a whole `xbrief/` tree into the lifecycle checkout.
 ! **Wait-merge is squash-after-CLEAN (#4822):** Phase 5 babysit wait is `pr:watch`. Phase 6 `pr:wait-mergeable-and-merge` runs only after CLEAN. First-probe parse of `clean_gate_holdout`; SHA-matched confidence plus class A leftover is dest residual or BLOCKED, not cap-wait. `sha_match` stays blocking `pr:watch`. ⊗ Invent a third poller. ⊗ Harvest cascade.ts. ⊗ Recut #4821 dest-worker ownership. #4820 stays CLEAN-plus-SLizard/CI.
-! **Durable live wait after stop-at:pr-open (#4882):** The Approach 1 wait owner or parent-retained closer MUST keep a still-running phase-correct wait for each open merge-path PR until CLEAN or an explicit option-C finish. Fresh sticky lease alone or Path B promise without a live wait is unarmed stand-down. Probe: `task verify:review-monitor -- --pr <N> --merge-path-arm` with `--live-wait` / `--explicit-finish`. `pr:watch --json` wrappers MUST parse full stdout (pretty multi-line valid); line-split misses CLEAN (#5015). Prefer Approach 1 / native `pr:watch`.
+! **Durable live wait after stop-at:pr-open (#4882):** The Approach 1 wait owner or parent-retained closer MUST keep a still-running phase-correct wait for each open merge-path PR until CLEAN or an explicit option-C finish. Fresh sticky lease alone or Path B promise without a live wait is unarmed stand-down. Probe: `task verify:review-monitor -- --pr <N> --merge-path-arm` with `--live-wait` / `--explicit-finish`. Multi-PR cohort inventory: `task verify:cohort-review-monitors -- --prs <csv>` (#5318); `swarm:verify-review-clean` CLEAN ≠ inventory green. `pr:watch --json` wrappers MUST parse full stdout (pretty multi-line valid); line-split misses CLEAN (#5015). Prefer Approach 1 / native `pr:watch`.
 ⊗ Stand down unarmed on an open merge-path PR, or treat lease-only / homemade line-parsed `pr-watch --json` as armed (#4882).
 
 ### Operator follow-up after dual-stop / hard stop (#3273)
@@ -236,6 +252,7 @@ Named mode **beside** dispatch-and-collect. Canon: [`../../swarm/swarm.md`](../.
 
 - ⊗ Load all host adapters “just in case” (#2928)
 - ⊗ Parallel OpenClaw `sessions_spawn` on shared repo root without worktrees (#2929)
+- ⊗ Launch N dest cold `session:start` tip inventories in parallel while finalize-owed is still scan-first (#5145)
 - ⊗ Prose-only phase handoff after cohort complete (“I will spawn…”) (#2934)
 - ⊗ Multi-sentence progress-only first response after leaf announce with zero tools / yield (#2943)
 - ⊗ N>2 near-identical assistant sentences with no tool_use / yield (FC14 / #3131 hard-stop)

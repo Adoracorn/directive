@@ -32,9 +32,25 @@ function writeXbrief(dir: string, issue: number, title: string): string {
   writeFileSync(
     path,
     JSON.stringify({
-      xBRIEFInfo: { version: "0.8" },
+      xBRIEFInfo: {
+        version: "0.8",
+        description: `Scope xBRIEF ingested from GitHub issue #${issue}`,
+      },
       plan: {
         title,
+        id: `github.issue.${issue}`,
+        narratives: {
+          Origin: `Ingested from https://github.com/deftai/directive/issues/${issue}`,
+        },
+        metadata: {
+          "x-directive/plan-id": {
+            version: 1,
+            source: "github-rest-id",
+            github_issue_id: issue,
+            origin: `deftai/directive#${issue}`,
+            id: `github.issue.${issue}`,
+          },
+        },
         references: [
           {
             uri: `https://github.com/deftai/directive/issues/${issue}`,
@@ -297,7 +313,8 @@ describe("evaluateIssues", () => {
   });
 
   it("never passes WIP census into evaluateValidity (signature lock)", () => {
-    expect(evaluateValidity.length).toBe(2);
+    // Prefer-A (#5177): worktree + issue + optional repoSlug; never a WIP census arg.
+    expect(evaluateValidity.length).toBe(3);
   });
 
   it("rejects empty issues and non-positive concurrency", async () => {

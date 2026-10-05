@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { CONSUMER_CHECK_GATES, checkGateId, FRAMEWORK_CHECK_GATES } from "./gate-lists.js";
 import {
   extractGateCause,
   formatDegradedSkipReport,
   formatNamedCauseFailure,
+  GENERIC_FALLBACK_REMEDY_PREFIX,
+  isGenericFallbackRemedy,
+  isOpaqueGateCause,
+  listCompositionGatesMissingSpecificRemedies,
+  OPAQUE_OR_GENERIC_NOTE,
   remedyForGate,
 } from "./named-cause.js";
+import { auditCheckCompositionNamedRemedies } from "./orchestrator.js";
 
 describe("named-cause gate failures (#3282)", () => {
   it("includes gate name, cause, and remedy without env values", () => {
@@ -160,10 +167,11 @@ describe("named-cause gate failures (#3282)", () => {
     );
     expect(cause).toMatch(/hang detector timeout/i);
     expect(cause).toContain("packages/core/src/hooks/scope.test.ts");
+    expect(cause).toMatch(/cursor only/i);
     expect(cause).not.toContain("deliberately-bad");
   });
 
-  it("remedies exit 124 without raising RELEASE_CHECK_TIMEOUT_MS (#4744)", () => {
+  it("remedies suite-lane exit 124 with cheapen-first deliberate-raise path (#5024 / #5239)", () => {
     const msg = formatNamedCauseFailure({
       gateId: "ts:check-lane",
       exitCode: 124,
@@ -171,8 +179,22 @@ describe("named-cause gate failures (#3282)", () => {
       stderr: "",
     });
     expect(msg.cause).toMatch(/hang detector timeout/i);
-    expect(msg.remedy).toMatch(/do not raise RELEASE_CHECK_TIMEOUT_MS/);
+    expect(msg.remedy).toMatch(/throughput shortfall/i);
+    expect(msg.remedy).toMatch(/cursor/i);
+    expect(msg.remedy).toMatch(/cheapen remaining Windows Step 5 vitest wall-clock first/i);
+    expect(msg.remedy).toMatch(/raise RELEASE_CHECK_TIMEOUT_MS only via tracked gate change/);
+    expect(msg.remedy).not.toMatch(/do not raise RELEASE_CHECK_TIMEOUT_MS/);
     expect(msg.cause).not.toContain("deliberately-bad");
+  });
+
+  it("does not prescribe Step 5 throughput cheapen for non-suite hang remedies (#5239)", () => {
+    const remedy = remedyForGate(
+      "verify:branch",
+      "hang detector timeout (exit 124); last completed test file unknown",
+    );
+    expect(remedy).toMatch(/Investigate the timed-out gate/i);
+    expect(remedy).not.toMatch(/throughput shortfall/i);
+    expect(remedy).not.toMatch(/Windows Step 5/i);
   });
 
   it("does not treat every exit 124 as hang detector (#4744 P2)", () => {
@@ -256,8 +278,93 @@ describe("named-cause gate failures (#3282)", () => {
     expect(lines.join("\n")).toContain("exit 2 (degraded/config)");
   });
 
+  it("grows the skip reporter for ceiling unknown-state without a green pass (#5079)", () => {
+    const lines = formatDegradedSkipReport({
+      reason: "armed presentation ceiling",
+      skipHeadline: "check: skipped 2 composed gate(s) as cannot-evaluate (#5079):",
+      skipped: [
+        {
+          id: "verify:intent-constraint",
+          cause: "N/A — no changed production .ts/.js files",
+          remedy: "refuse or escalate under an armed ceiling",
+        },
+        {
+          id: "verify:observable-scope",
+          cause: "inferred-defaults-warn",
+          remedy: "refuse or escalate under an armed ceiling",
+        },
+      ],
+      exitCode: 1,
+    });
+    expect(lines.join("\n")).toContain("cannot-evaluate");
+    expect(lines.join("\n")).toContain("verify:intent-constraint");
+    expect(lines.join("\n")).toContain("skipped required gates are not a green pass");
+    expect(lines.join("\n")).toContain("exit 1");
+  });
+
+  it("names a remedy for verify:presentation-coverage", () => {
+    expect(remedyForGate("verify:presentation-coverage", "cannot evaluate")).toMatch(
+      /armed presentation ceiling/,
+    );
+  });
+
   it("returns a generic remedy for unknown gates", () => {
     expect(remedyForGate("unknown:gate", "something broke")).toMatch(/Re-run the gate/);
+    expect(isGenericFallbackRemedy(remedyForGate("unknown:gate", "something broke"))).toBe(true);
+  });
+
+  it("gives previously generic-fallback composition gates a concrete remedy (#1883)", () => {
+    const closing = formatNamedCauseFailure({
+      gateId: "verify:closing-keywords",
+      exitCode: 1,
+      stderr: "",
+      stdout: "",
+    });
+    expect(isOpaqueGateCause(closing.cause)).toBe(true);
+    expect(isGenericFallbackRemedy(closing.remedy)).toBe(false);
+    expect(closing.remedy).toMatch(/git fetch|merge base/i);
+    expect(closing.remedy).toMatch(/Tracking:|Refs|--allow-close/i);
+    expect(closing.opaqueOrGenericOnly).toBe(true);
+    expect(closing.lines.join("\n")).toContain(OPAQUE_OR_GENERIC_NOTE);
+
+    const stubs = formatNamedCauseFailure({
+      gateId: "verify:stubs",
+      exitCode: 1,
+      stderr: "stub leftover in foo.ts\n",
+      stdout: "",
+    });
+    expect(stubs.cause).toMatch(/stub leftover/i);
+    expect(isGenericFallbackRemedy(stubs.remedy)).toBe(false);
+    expect(stubs.remedy).toMatch(/stub leftover|Remove or replace/i);
+    expect(stubs.opaqueOrGenericOnly).toBe(false);
+
+    const ruleMap = formatNamedCauseFailure({
+      gateId: "docs:rule-map:check",
+      exitCode: 1,
+      stderr: "",
+      stdout: "",
+    });
+    expect(isGenericFallbackRemedy(ruleMap.remedy)).toBe(false);
+    expect(ruleMap.remedy).toMatch(/RULE-MAP|Regenerate/i);
+  });
+
+  it("keeps empty-diagnostic and generic-only cases fail-visible as the bug class (#1883)", () => {
+    const opaque = formatNamedCauseFailure({
+      gateId: "unknown:composition",
+      exitCode: 1,
+      stdout: "",
+      stderr: "",
+    });
+    expect(opaque.cause).toMatch(/without a diagnostic/);
+    expect(opaque.remedy.startsWith(GENERIC_FALLBACK_REMEDY_PREFIX)).toBe(true);
+    expect(opaque.opaqueOrGenericOnly).toBe(true);
+    expect(opaque.lines.join("\n")).toContain(OPAQUE_OR_GENERIC_NOTE);
+  });
+
+  it("covers FRAMEWORK ∪ CONSUMER composition gates with specific remedies (#1883)", () => {
+    const ids = [...new Set([...FRAMEWORK_CHECK_GATES, ...CONSUMER_CHECK_GATES].map(checkGateId))];
+    expect(listCompositionGatesMissingSpecificRemedies(ids)).toEqual([]);
+    expect(auditCheckCompositionNamedRemedies()).toEqual([]);
   });
 
   it("attributes verify:ac instead of quoting engine:_ts-build (#3449)", () => {

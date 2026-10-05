@@ -16,11 +16,26 @@ A consumer could omit Directive enforcement gates from its `check` task and CI w
 - `verify:evaluator-surface` (#4386)
 - `verify:observable-scope` (#4495) — HTML via parse5 (scripting disabled); JSX/TSX via project-resolved TypeScript. Not TypeScript or jsdom as dependencies.
 - `verify:intent-constraint` (#4541) — throw/reject/abort sites and new numeric consts in changed production .ts/.js versus a merge-base pin. Tests and in-scope paths are not authority.
+- `verify:presentation-ceiling` (#5056) — under a recorded `changeClass: presentation` restriction, changed paths outside the built-in presentation extension set refuse. Intent-constraint N/A is not ceiling evidence.
+- `verify:durable-effect-acquisition` (#5080) — in-class `.tsx` / `.jsx` / `.html` durable-effect acquisition under a recorded presentation ceiling. Consumes the #5056 ceiling artifact. skipped/N/A is not an exit under an armed ceiling.
 
 `verify:consumer-test-lane` is composed on `check:consumer` / `CONSUMER_CHECK_GATES` only. It is not a required framework-source enforcement gate -- the framework suite remains `ts:check-lane`.
 
 
 It fails with a concrete repair path when definitions or explicit check deps omit them. CI workflows that neither invoke the gates nor a composing entrypoint (`task check` / `deft check`) produce **warnings** by default (migration).
+
+### Gate reachability on `pull_request` (#4015)
+
+Composition presence alone is not enough: a gate job can still be skipped on the merge path. `verify:consumer-check-contract` parses each consumer workflow as a **YAML job graph** (not concatenated text), reuses the existing `run:` / `script:` extractors, and warns when:
+
+- the gate-carrying job has an `if:` that can evaluate false on `pull_request`, sets `continue-on-error: true`, or is removed by a `strategy.matrix` exclusion
+- the workflow `on.pull_request` carries `paths:` / `paths-ignore:` / `branches:` filters that can skip the whole workflow (a required context that never reports stays **pending** and blocks the merge)
+
+`if: always()` and conditions true on `pull_request` by construction are accepted. Shapes the analyzer cannot statically read — job-level or composite `uses:` indirection, and expressions referencing `github.event.*`, `vars`, or `secrets` — report **`unknown` with a reason and never read as clean**.
+
+Warn by default (same CI-surface posture). Promotion to fail-closed is a separate policy step. Requiredness / branch-protection stays on #4012.
+
+**Limits:** this is an accident detector for skippable merge-path gates, not a security control against deliberate workflow edits (#3687). GitHub expressions are not fully statically decidable, so `unknown` is a real verdict.
 
 ### Greenfield include-only Taskfile (#3218)
 

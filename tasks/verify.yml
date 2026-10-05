@@ -214,6 +214,15 @@ tasks:
         vars:
           ENGINE_CMD: 'verify:branch --project-root "{{.USER_WORKING_DIR}}" --allow-missing-project-definition'
 
+  ownership:
+    desc: "Fail closed on harm-capable WSL root vs project-owner mismatch unless DEFT_ALLOW_ROOT_WSL_RUNTIME=1 (#1617)."
+    dir: '{{.USER_WORKING_DIR}}'
+    # Prefer-B: house :engine:invoke only (runtime-verb allowlist; no build dep).
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify:ownership --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
   gh-auth:
     # Worker-envelope GitHub auth validation (#1557). Thin task wrapper over the
     # existing `github-auth-modes` engine verb, added by #3483: the swarm skill
@@ -289,6 +298,16 @@ tasks:
         vars:
           ENGINE_CMD: 'verify:forward-coverage --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
 
+  changelog-unreleased:
+    desc: "Fail-closed CHANGELOG.md [Unreleased] has at least one `- ` entry (#633). Alias of changelog-check --against-merge-base; same Unreleased language as task change:changelog:check. Framework-source merge-chokepoint only. Fails when the Unreleased `- ` set is unchanged versus merge-base."
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'changelog-check --project-root "{{.USER_WORKING_DIR}}" --against-merge-base'
+
   test-boundary:
     desc: "Test/source boundary gate (#3145): reject recognized test artifacts under production roots and production references to test/fixture roots unless allowlisted or classified production-liveness. Policy from .deft/test-boundary.policy.json or plan.policy.testBoundary; defaults are warn-only (migration). Flags: --enforce / --warn / --policy <path> / --quiet. Three-state exit (0 clean or warn / 1 violation / 2 config)."
     dir: '{{.USER_WORKING_DIR}}'
@@ -329,6 +348,16 @@ tasks:
         vars:
           ENGINE_CMD: 'verify:observable-scope --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
 
+  presentation-coverage:
+    desc: "Fail-closed presentation-coverage compositor (#5079): under a recorded presentation ceiling, cannot-evaluate on a composed required gate is refuse or escalate, never pass. Arms from any add-only or tightening head restriction. Flags: --origin-ref / --staged / --plan-id / --json / --quiet. Three-state exit (0 off-ceiling or continue / 1 refuse / 2 config). Does not accept --base-ref."
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify:presentation-coverage --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
   intent-constraint:
     desc: "Fail-closed intent-constraint snapshot (#4541): throw/reject/abort sites and new numeric consts in changed production .ts/.js versus merge-base pin. Human mint for value/unit/rejectionScope. Tests and in-scope paths are not authority. Flags: --origin-ref / --staged / --quiet. Three-state exit (0 skip/pass / 1 unapproved fact or missing mint / 2 config). Does not accept --base-ref."
     dir: '{{.USER_WORKING_DIR}}'
@@ -338,6 +367,26 @@ tasks:
       - task: :engine:invoke
         vars:
           ENGINE_CMD: 'verify:intent-constraint --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
+  presentation-ceiling:
+    desc: "Fail-closed presentation ceiling (#5056): under a recorded changeClass: presentation restriction, changed paths outside the built-in presentation extension set refuse. Arms from merge-base ceiling artifacts; first-PR add-only restrictions compose. Flags: --base-ref / --quiet. Three-state exit (0 skip or pass / 1 refuse / 2 config)."
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify:presentation-ceiling --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
+  durable-effect-acquisition:
+    desc: "Fail-closed in-class durable-effect acquisition under a presentation ceiling (#5080). Consumes the #5056 ceiling artifact. Refuses storage, cookies, non-GET or non-sentinel network, and markup submission in changed .tsx/.jsx/.html. skipped/N/A is not an exit under an armed ceiling. Flags: --origin-ref / --quiet. Three-state exit (0 off-ceiling or pass / 1 refuse / 2 config)."
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify:durable-effect-acquisition --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
 
   evaluator-surface:
     desc: "Declared evaluator-surface diff gate (#4386 / #3156): fail when Taskfile.yml, tasks/verify.yml, gate-lists, coverage config, or the detector itself changes without xbrief/evaluator-surface-disposition.json covering those paths. Disclosure only -- a commit-body issue/PR URL is not #3164 authorization. Prior color is unobserved. Flags: --base-ref / --staged / --path / --quiet. Three-state exit (0 skip or disclosed / 1 missing disposition / 2 config)."
@@ -360,7 +409,7 @@ tasks:
           ENGINE_CMD: 'verify:consumer-test-lane --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
 
   consumer-check-contract:
-    desc: "Consumer check-composition contract (#3145): fail when tasks/verify.yml or check aggregate omit required enforcement gates (verify:test-boundary, verify:class-checks, verify:scope-provenance, verify:consumer-check-contract, verify:evaluator-surface, verify:observable-scope, verify:intent-constraint). CI omissions warn by default. Flags: --framework-source / --enforce / --warn / --quiet. Three-state exit (0 clean or warn / 1 missing / 2 config)."
+    desc: "Consumer check-composition contract (#3145): fail when tasks/verify.yml or check aggregate omit required enforcement gates (verify:test-boundary, verify:class-checks, verify:scope-provenance, verify:consumer-check-contract, verify:evaluator-surface, verify:observable-scope, verify:intent-constraint, verify:presentation-ceiling, verify:durable-effect-acquisition). CI omissions warn by default. Flags: --framework-source / --enforce / --warn / --quiet. Three-state exit (0 clean or warn / 1 missing / 2 config)."
     dir: '{{.USER_WORKING_DIR}}'
     deps:
       - task: :engine:_ts-build
@@ -441,6 +490,20 @@ tasks:
       - task: :engine:invoke
         vars:
           ENGINE_CMD: 'verify:spec-prd-fresh --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
+  spec-drift:
+    desc: >-
+      Three-state semantic spec-vs-reality drift audit (#1589). Exit 0 clean /
+      1 drift / 2 unassessable. Distinct from fail-closed verify:spec-prd-fresh.
+      Advise-first; not spliced into task check in v1. Consumer alias:
+      task deft:verify:spec-drift.
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify:spec-drift --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
 
   rule-map-fresh:
     desc: "Fail-closed docs/RULE-MAP.md renderer freshness (#4095). Alias for docs:rule-map:check. Asserts byte-identical renderer output, filled grouping purposes, pack entries from named arrays, and Taskfile declaration counts. Not a consumer gate."
@@ -652,6 +715,26 @@ tasks:
         vars:
           ENGINE_CMD: 'verify:completed-write-guard --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
 
+  persisted-planning-narratives:
+    desc: "Fail-closed PROJECT-DEFINITION planning narratives gate (#5176 Prefer-A). Default = unconditional setup Phase 2 bar (empty Overview+tech stack → exit 1; missing PD → exit 2). --check-conjunct = Taskfile/check Prefer-A mirror (marker present/unreadable + empty → refuse; missing PD / scaffold-empty without marker → pass) for check:merge / check:consumer. Mid-setup parse may still accept empty strings. Remedy: deft project:write-narratives. Three-state exit (0 pass / 1 refuse / 2 config)."
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify:persisted-planning-narratives --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
+  consumer-header-placeholder:
+    desc: "Fail-closed first-ship AGENTS header placeholder gate (#4544 Prefer-A). Refuses when product-mutation completion still leaves the unmanaged header on the exact scaffold edit-me one-liner; Process-only and custom headers pass. Three-state exit (0 pass / 1 refuse / 2 config)."
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify:consumer-header-placeholder --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
   completed-tracked:
     desc: "Fail-closed completed-tracked land guard (#3264 / #1358 / #3476). Closed scoped GitHub issues with a known lifecycle xBRIEF origin must have a tracked xbrief/completed/ or xbrief/cancelled/ artifact on the delivery tip. --issue N is the drive-to DONE form. Remediation: task swarm:finalize-cohort or a lifecycle PR. Three-state exit (0 clean / 1 missing land / 2 config). Pass --skip-gh to rely on triage cache only; --tip to override delivery tip."
     dir: '{{.USER_WORKING_DIR}}'
@@ -735,6 +818,16 @@ tasks:
       - task: :engine:invoke
         vars:
           ENGINE_CMD: 'verify-review-monitor {{.CLI_ARGS}}'
+
+  cohort-review-monitors:
+    desc: "Fail-closed cohort babysit inventory (#5318): classify each listed PR armed-live / halted-explicit / unarmed via per-PR merge-path-arm --live-wait. Exit 0 only when all listed are armed-live or halted-explicit; empty/malformed PR set exit 2. swarm:verify-review-clean CLEAN does not satisfy this inventory."
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'verify-cohort-review-monitors {{.CLI_ARGS}}'
 
   l4-owner:
     desc: "Owner Continuity / L4 owner gate (#3090): exit 0 only if sticky review-owner lease is fresh or --review-cycle done (forbid freeform started/pending). Three-state exit (0 ready / 1 silent hold / 2 config)."

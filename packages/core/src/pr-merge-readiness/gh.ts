@@ -1,4 +1,8 @@
 import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ContainedWriteError, containedWrite } from "../fs/contained-write.js";
 import { defaultWhich } from "../scm/binary.js";
 import { classifyScmArgv, resolveBinaryForArgv } from "../scm/call-shape.js";
 import { ghxSpawnFallbackBinary } from "../scm/spawn-status.js";
@@ -718,4 +722,520 @@ export function fetchRequiredStatusContexts(
     error: notes.join("; "),
     resolutionFailed,
   };
+}
+
+/** Detection outcome for forge required-status-check inventory (#1517). */
+export type MergeGateEnforcementDetection = "protected" | "absent" | "unknown";
+
+/**
+ * Classify #3234 inventory into protected / absent / unknown (#1517).
+ * Non-empty contexts => protected. resolutionFailed => unknown (fail-closed).
+ * Trusted empty inventory => absent. Do not invent a second classic-404 detector.
+ */
+export function classifyMergeGateEnforcement(
+  inventory: RequiredStatusContextsResult,
+): MergeGateEnforcementDetection {
+  if (inventory.resolutionFailed) {
+    return "unknown";
+  }
+  if (inventory.contexts.length > 0) {
+    return "protected";
+  }
+  return "absent";
+}
+
+/** Durable decision outcomes for merge-gate enforcement readiness (#1517). */
+export type MergeGateEnforcementDecision =
+  | "configured"
+  | "explicit-opt-out"
+  | "cannot-configure"
+  | "deferred-not-applicable";
+
+export const MERGE_GATE_ENFORCEMENT_SCHEMA = "deft.merge-gate-enforcement.v1" as const;
+export const MERGE_GATE_ENFORCEMENT_DIR = ".deft/merge-gate-enforcement";
+
+export interface MergeGateEnforcementRecord {
+  readonly schema: typeof MERGE_GATE_ENFORCEMENT_SCHEMA;
+  readonly repo: string;
+  readonly branch: string;
+  readonly decision: MergeGateEnforcementDecision;
+  readonly recordedAt: string;
+  readonly detection: MergeGateEnforcementDetection | null;
+  readonly reason: string;
+  readonly contexts?: readonly RequiredStatusContext[];
+}
+
+export interface MergeGateEnforcementRecordResult {
+  readonly ok: boolean;
+  readonly record: MergeGateEnforcementRecord | null;
+  readonly error: string;
+}
+
+/**
+ * Unique filename segment for repo/branch scope (#1517).
+ * Base64url keeps `release/a` distinct from `release_a` (slash→underscore collapsed).
+ */
+export function encodeMergeGateScopePart(raw: string): string {
+  return Buffer.from(raw, "utf8").toString("base64url") || "_";
+}
+
+/** Repo/branch-scoped path under projectRoot for the durable readiness record (#1517). */
+export function mergeGateEnforcementRecordPath(
+  projectRoot: string,
+  repo: string,
+  branch: string,
+): string {
+  const file = `${encodeMergeGateScopePart(repo)}--${encodeMergeGateScopePart(branch)}.json`;
+  return join(projectRoot, MERGE_GATE_ENFORCEMENT_DIR, file);
+}
+
+function isMergeGateDecision(value: unknown): value is MergeGateEnforcementDecision {
+  return (
+    value === "configured" ||
+    value === "explicit-opt-out" ||
+    value === "cannot-configure" ||
+    value === "deferred-not-applicable"
+  );
+}
+
+function isMergeGateDetection(value: unknown): value is MergeGateEnforcementDetection {
+  return value === "protected" || value === "absent" || value === "unknown";
+}
+
+/** Read a durable merge-gate enforcement record (repo/branch scoped) (#1517). */
+export function readMergeGateEnforcementRecord(
+  projectRoot: string,
+  repo: string,
+  branch: string,
+): MergeGateEnforcementRecordResult {
+  const path = mergeGateEnforcementRecordPath(projectRoot, repo, branch);
+  if (!existsSync(path)) {
+    return { ok: true, record: null, error: "" };
+  }
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return { ok: false, record: null, error: "merge-gate enforcement record is not an object" };
+    }
+    const o = raw as Record<string, unknown>;
+    if (o.schema !== MERGE_GATE_ENFORCEMENT_SCHEMA) {
+      return { ok: false, record: null, error: "unsupported merge-gate enforcement schema" };
+    }
+    if (typeof o.repo !== "string" || o.repo.length === 0) {
+      return { ok: false, record: null, error: "merge-gate enforcement record missing repo" };
+    }
+    if (typeof o.branch !== "string" || o.branch.length === 0) {
+      return { ok: false, record: null, error: "merge-gate enforcement record missing branch" };
+    }
+    if (!isMergeGateDecision(o.decision)) {
+      return {
+        ok: false,
+        record: null,
+        error: "merge-gate enforcement record has invalid decision",
+      };
+    }
+    if (typeof o.recordedAt !== "string" || o.recordedAt.length === 0) {
+      return { ok: false, record: null, error: "merge-gate enforcement record missing recordedAt" };
+    }
+    if (typeof o.reason !== "string") {
+      return { ok: false, record: null, error: "merge-gate enforcement record missing reason" };
+    }
+    const detection =
+      o.detection === null || o.detection === undefined
+        ? null
+        : isMergeGateDetection(o.detection)
+          ? o.detection
+          : null;
+    if (o.detection !== null && o.detection !== undefined && detection === null) {
+      return {
+        ok: false,
+        record: null,
+        error: "merge-gate enforcement record has invalid detection",
+      };
+    }
+    const contexts = Array.isArray(o.contexts)
+      ? normalizeRequiredContexts(o.contexts as readonly (string | RequiredStatusContext)[])
+      : undefined;
+    if (o.repo !== repo || o.branch !== branch) {
+      return {
+        ok: false,
+        record: null,
+        error:
+          "merge-gate enforcement record repo/branch mismatch " +
+          `(stored ${o.repo}@${o.branch}, requested ${repo}@${branch})`,
+      };
+    }
+    const record: MergeGateEnforcementRecord = {
+      schema: MERGE_GATE_ENFORCEMENT_SCHEMA,
+      repo: o.repo,
+      branch: o.branch,
+      decision: o.decision,
+      recordedAt: o.recordedAt,
+      detection,
+      reason: o.reason,
+      ...(contexts !== undefined ? { contexts } : {}),
+    };
+    return { ok: true, record, error: "" };
+  } catch (exc: unknown) {
+    const message = exc instanceof Error ? exc.message : String(exc);
+    return { ok: false, record: null, error: `merge-gate enforcement record parse: ${message}` };
+  }
+}
+
+export interface WriteMergeGateEnforcementInput {
+  readonly projectRoot: string;
+  readonly repo: string;
+  readonly branch: string;
+  readonly decision: MergeGateEnforcementDecision;
+  readonly reason: string;
+  readonly detection?: MergeGateEnforcementDetection | null;
+  readonly contexts?: readonly RequiredStatusContext[];
+  readonly recordedAt?: string;
+}
+
+/**
+ * Persist a durable merge-gate enforcement decision (#1517).
+ * cannot-configure is allowed and stays re-checkable — never coerce a failed
+ * configure into explicit-opt-out.
+ */
+export function writeMergeGateEnforcementRecord(
+  input: WriteMergeGateEnforcementInput,
+): MergeGateEnforcementRecordResult {
+  if (!input.repo.trim() || !input.branch.trim()) {
+    return {
+      ok: false,
+      record: null,
+      error: "repo and branch are required for merge-gate enforcement record",
+    };
+  }
+  const record: MergeGateEnforcementRecord = {
+    schema: MERGE_GATE_ENFORCEMENT_SCHEMA,
+    repo: input.repo.trim(),
+    branch: input.branch.trim(),
+    decision: input.decision,
+    recordedAt: input.recordedAt ?? new Date().toISOString(),
+    detection: input.detection ?? null,
+    reason: input.reason,
+    ...(input.contexts !== undefined
+      ? { contexts: normalizeRequiredContexts(input.contexts) }
+      : {}),
+  };
+  const path = mergeGateEnforcementRecordPath(input.projectRoot, record.repo, record.branch);
+  const file = `${encodeMergeGateScopePart(record.repo)}--${encodeMergeGateScopePart(record.branch)}.json`;
+  try {
+    containedWrite({
+      root: input.projectRoot,
+      target: join(MERGE_GATE_ENFORCEMENT_DIR, file),
+      data: `${JSON.stringify(record, null, 2)}\n`,
+      mode: existsSync(path) ? "replace" : "create",
+      mkdir: true,
+    });
+    return { ok: true, record, error: "" };
+  } catch (exc: unknown) {
+    const message =
+      exc instanceof ContainedWriteError
+        ? exc.message
+        : exc instanceof Error
+          ? exc.message
+          : String(exc);
+    return { ok: false, record: null, error: `merge-gate enforcement record write: ${message}` };
+  }
+}
+
+export interface MergeGateConfigureProposal {
+  readonly contexts: readonly RequiredStatusContext[];
+  /** Candidates only — never auto-promoted into required policy (#1517). */
+  readonly candidateContexts?: readonly RequiredStatusContext[];
+  readonly pinAppIds: boolean;
+}
+
+export interface MergeGateConfigurePayloadResult {
+  readonly ok: boolean;
+  readonly payload: Record<string, unknown> | null;
+  readonly error: string;
+}
+
+/** Extract boolean from GET-shaped `{ enabled }` or bare boolean (#1517). */
+function enabledFlag(value: unknown, fallback = false): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const enabled = (value as Record<string, unknown>).enabled;
+    if (typeof enabled === "boolean") {
+      return enabled;
+    }
+  }
+  return fallback;
+}
+
+function mapLoginList(list: unknown): string[] {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const item of list) {
+    if (typeof item === "string" && item.length > 0) {
+      out.push(item);
+      continue;
+    }
+    if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+      const login = (item as Record<string, unknown>).login;
+      if (typeof login === "string" && login.length > 0) {
+        out.push(login);
+      }
+    }
+  }
+  return out;
+}
+
+function mapSlugList(list: unknown, preferLoginFallback = false): string[] {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const item of list) {
+    if (typeof item === "string" && item.length > 0) {
+      out.push(item);
+      continue;
+    }
+    if (item !== null && typeof item === "object" && !Array.isArray(item)) {
+      const o = item as Record<string, unknown>;
+      const slug = typeof o.slug === "string" ? o.slug : null;
+      const login = typeof o.login === "string" ? o.login : null;
+      const pick = slug ?? (preferLoginFallback ? login : null);
+      if (pick !== null && pick.length > 0) {
+        out.push(pick);
+      }
+    }
+  }
+  return out;
+}
+
+function mapRequiredPullRequestReviews(raw: unknown): Record<string, unknown> | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const o = raw as Record<string, unknown>;
+  const mapped: Record<string, unknown> = {};
+  if (typeof o.dismiss_stale_reviews === "boolean") {
+    mapped.dismiss_stale_reviews = o.dismiss_stale_reviews;
+  }
+  if (typeof o.require_code_owner_reviews === "boolean") {
+    mapped.require_code_owner_reviews = o.require_code_owner_reviews;
+  }
+  if (typeof o.required_approving_review_count === "number") {
+    mapped.required_approving_review_count = o.required_approving_review_count;
+  }
+  if (typeof o.require_last_push_approval === "boolean") {
+    mapped.require_last_push_approval = o.require_last_push_approval;
+  }
+  if (o.dismissal_restrictions !== null && typeof o.dismissal_restrictions === "object") {
+    const dr = o.dismissal_restrictions as Record<string, unknown>;
+    mapped.dismissal_restrictions = {
+      users: mapLoginList(dr.users),
+      teams: mapSlugList(dr.teams),
+      apps: mapSlugList(dr.apps, true),
+    };
+  }
+  if (
+    o.bypass_pull_request_allowances !== null &&
+    typeof o.bypass_pull_request_allowances === "object"
+  ) {
+    const ba = o.bypass_pull_request_allowances as Record<string, unknown>;
+    mapped.bypass_pull_request_allowances = {
+      users: mapLoginList(ba.users),
+      teams: mapSlugList(ba.teams),
+      apps: mapSlugList(ba.apps, true),
+    };
+  }
+  return mapped;
+}
+
+function mapRestrictions(raw: unknown): Record<string, unknown> | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const o = raw as Record<string, unknown>;
+  return {
+    users: mapLoginList(o.users),
+    teams: mapSlugList(o.teams),
+    apps: mapSlugList(o.apps, true),
+  };
+}
+
+/**
+ * Map classic GET protection objects into PUT-safe booleans / string lists (#1517).
+ * Strips URL / nested GET-only fields that invalidate the Update branch protection body.
+ */
+export function mapBranchProtectionGetToPutBody(
+  existingProtection: Record<string, unknown> | null,
+  requiredStatusChecks: Record<string, unknown>,
+): Record<string, unknown> {
+  const src = existingProtection ?? {};
+  return {
+    required_status_checks: requiredStatusChecks,
+    enforce_admins: enabledFlag(src.enforce_admins, false),
+    required_pull_request_reviews: mapRequiredPullRequestReviews(src.required_pull_request_reviews),
+    restrictions: mapRestrictions(src.restrictions),
+    required_linear_history: enabledFlag(src.required_linear_history, false),
+    allow_force_pushes: enabledFlag(src.allow_force_pushes, false),
+    allow_deletions: enabledFlag(src.allow_deletions, false),
+    block_creations: enabledFlag(src.block_creations, false),
+    required_conversation_resolution: enabledFlag(src.required_conversation_resolution, false),
+    lock_branch: enabledFlag(src.lock_branch, false),
+    allow_fork_syncing: enabledFlag(src.allow_fork_syncing, false),
+  };
+}
+
+/**
+ * Build a check-only classic protection body for required contexts (#1517).
+ * Refuses empty context sets. Does not encode GitHub review-count as the
+ * human-merge gate. Preserves existing required_pull_request_reviews when
+ * mapping unrelated fields from existingProtection into PUT-safe shapes.
+ */
+export function buildMergeGateConfigurePayload(
+  proposal: MergeGateConfigureProposal,
+  existingProtection: Record<string, unknown> | null = null,
+): MergeGateConfigurePayloadResult {
+  const selected = normalizeRequiredContexts(proposal.contexts);
+  if (selected.length === 0) {
+    return {
+      ok: false,
+      payload: null,
+      error:
+        "Refuse empty required-context PUT for merge-gate enforcement (#1517). " +
+        "Select operator-confirmed contexts first; discovery candidates are not policy.",
+    };
+  }
+  const checks = selected.map((c) => {
+    if (proposal.pinAppIds && c.appId != null) {
+      return { context: c.name, app_id: c.appId };
+    }
+    return { context: c.name };
+  });
+  const required_status_checks = {
+    strict: true,
+    contexts: selected.map((c) => c.name),
+    checks,
+  };
+  const payload = mapBranchProtectionGetToPutBody(existingProtection, required_status_checks);
+  return { ok: true, payload, error: "" };
+}
+
+export interface ApplyMergeGateConfigureInput {
+  readonly repo: string;
+  readonly branch: string;
+  readonly proposal: MergeGateConfigureProposal;
+  readonly runGh: RunGhFn;
+  /** When true (default), GET existing protection first and preserve unrelated fields. */
+  readonly preserveExisting?: boolean;
+}
+
+export interface ApplyMergeGateConfigureResult {
+  readonly ok: boolean;
+  /** configured on success; cannot-configure on admin/plan/write failure (not opt-out). */
+  readonly outcome: "configured" | "cannot-configure" | "refused";
+  readonly error: string;
+  readonly reRead: RequiredStatusContextsResult | null;
+}
+
+/**
+ * Optional configure helper — separate from the strategy-start decision (#1517).
+ * Never auto-promotes candidateContexts. Failed writes return cannot-configure.
+ */
+export function applyMergeGateConfigure(
+  input: ApplyMergeGateConfigureInput,
+): ApplyMergeGateConfigureResult {
+  if (
+    input.proposal.candidateContexts !== undefined &&
+    input.proposal.contexts.length === 0 &&
+    input.proposal.candidateContexts.length > 0
+  ) {
+    return {
+      ok: false,
+      outcome: "refused",
+      error:
+        "Observed/discovered check names are candidates only (#1517). " +
+        "Pass operator-confirmed contexts; do not auto-promote candidateContexts.",
+      reRead: null,
+    };
+  }
+  let existing: Record<string, unknown> | null = null;
+  if (input.preserveExisting !== false) {
+    const encoded = encodeURIComponent(input.branch);
+    const getRc = input.runGh(["gh", "api", `repos/${input.repo}/branches/${encoded}/protection`]);
+    if (getRc.returncode === 0 && getRc.stdout.trim()) {
+      try {
+        const parsed = JSON.parse(getRc.stdout) as unknown;
+        if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+          existing = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Fall through with null existing — still refuse empty PUT below.
+      }
+    }
+  }
+  const built = buildMergeGateConfigurePayload(input.proposal, existing);
+  if (!built.ok || built.payload === null) {
+    return { ok: false, outcome: "refused", error: built.error, reRead: null };
+  }
+  const encoded = encodeURIComponent(input.branch);
+  // defaultRunGh closes stdin; write JSON to a temp file and pass --input <path>
+  // so PUT bodies reach GitHub (#1517 Greptile P1).
+  const bodyDir = mkdtempSync(join(tmpdir(), "mge-put-"));
+  const bodyPath = join(bodyDir, "protection.json");
+  let putRc: RunGhResult;
+  try {
+    containedWrite({
+      root: bodyDir,
+      target: "protection.json",
+      data: `${JSON.stringify(built.payload)}\n`,
+      mode: "create",
+    });
+    putRc = input.runGh([
+      "gh",
+      "api",
+      "-X",
+      "PUT",
+      `repos/${input.repo}/branches/${encoded}/protection`,
+      "--input",
+      bodyPath,
+    ]);
+  } finally {
+    rmSync(bodyDir, { recursive: true, force: true });
+  }
+  if (putRc.returncode !== 0) {
+    const err = putRc.stderr.trim() || `exit ${putRc.returncode}`;
+    return {
+      ok: false,
+      outcome: "cannot-configure",
+      error: `merge-gate configure write failed (cannot-configure, re-checkable): ${err}`,
+      reRead: null,
+    };
+  }
+  const reRead = fetchRequiredStatusContexts(input.repo, input.branch, input.runGh);
+  if (reRead.resolutionFailed) {
+    return {
+      ok: false,
+      outcome: "cannot-configure",
+      error: `post-write inventory unknown: ${reRead.error || "resolutionFailed"}`,
+      reRead,
+    };
+  }
+  if (reRead.contexts.length === 0) {
+    return {
+      ok: false,
+      outcome: "cannot-configure",
+      error: "post-write inventory still empty; refuse claiming configured (#1517)",
+      reRead,
+    };
+  }
+  return { ok: true, outcome: "configured", error: "", reRead };
 }

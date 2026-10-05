@@ -9,6 +9,8 @@ import type { TaskRunResult } from "../cache/task-cache/types.js";
 import { defaultWhich } from "../doctor/which.js";
 import { readCorePackageVersion } from "../engine-version.js";
 import { containedRemove } from "../fs/contained-write.js";
+import { COMPOSED_GATE_IDS } from "../presentation-coverage/gates.js";
+import { parseCoverageReport } from "../presentation-coverage/report.js";
 import {
   applyProductFirstGateMode,
   EMPTY_AC_CAUSE,
@@ -36,6 +38,10 @@ import {
   evaluateConsumerGateIntegrity,
   formatConsumerGateIntegrityFailure,
 } from "./consumer-gate-integrity.js";
+import {
+  CONSUMER_HEADER_PLACEHOLDER_GATE_ID,
+  evaluateConsumerHeaderPlaceholderAtRoot,
+} from "./consumer-header-placeholder.js";
 import { type CheckOrchestratorSeams, resolveCheckTarget } from "./context.js";
 import {
   checkGateId,
@@ -44,6 +50,11 @@ import {
   isSuiteCheckGate,
 } from "./gate-lists.js";
 import { formatDegradedSkipReport, formatNamedCauseFailure, remedyForGate } from "./named-cause.js";
+import {
+  CHECK_EMPTY_PLANNING_NARRATIVES_GATE_ID,
+  checkRejectsEmptyPlanningNarratives,
+  evaluateCheckPersistedPlanningNarratives,
+} from "./persisted-planning-narratives-gate.js";
 import {
   projectHasLifecycleBrief,
   RAPID_SOFT_MISSING_NO_BRIEF_NOTICE,
@@ -180,9 +191,9 @@ function firstImpactingMissingFinding(
  * Modes (env / ceremony dial / hard budget — see resolveProductFirstCheckMode):
  *  - full: AC hard → hygiene hard → suite
  *  - pressure: AC hard → hygiene advisory → suite
- *  - rapid: AC only (ceremony dial rapid/minimal positive content).
+ *  - rapid: AC plus presentation compositor and durable-effect (#5056 / #5080).
  *    Exit is not 0 when that walk reports zero verified clauses (#4866).
- *    Unverifiable clauses still do not fail verify:ac. The other gates
+ *    Unverifiable clauses still do not fail verify:ac. Hygiene and suite
  *    stay off the rapid list.
  *
  * #3282: toolchain preflight enables degraded skip report when go-task/pnpm
@@ -209,6 +220,9 @@ export function dispatchCachedTaskCheck(
   const codeVersion = readCorePackageVersion();
   const sessionId = options.sessionId;
   const gateOutcomes: CheckGateOutcome[] = [];
+  let presentationArmed = false;
+  const presentationRequired = (id: string): boolean =>
+    COMPOSED_GATE_IDS.includes(id) || id === "verify:presentation-ceiling";
   let lastSuiteTeeText = "";
   let lastSuiteTeeRel: string | null = null;
   pruneSuiteTees({ projectRoot: resolvedProject });
@@ -276,6 +290,36 @@ export function dispatchCachedTaskCheck(
   if (gates.length === 0) {
     process.stderr.write(`check: no gate list for target ${target}\n`);
     return finish(2, false);
+  }
+
+  // #5176 Prefer-A: refuse empty PD narratives only with product-mutation
+  // completion (mirror #4544). Missing PD and scaffold-empty stay legal;
+  // setup Phase 2 verify stays unconditional.
+  const planning = evaluateCheckPersistedPlanningNarratives(resolvedProject);
+  if (checkRejectsEmptyPlanningNarratives(planning.narratives, planning.productMutation)) {
+    process.stderr.write(`check: ${planning.narratives.message}\n`);
+    gateOutcomes.push({
+      id: CHECK_EMPTY_PLANNING_NARRATIVES_GATE_ID,
+      status: "failed",
+      cause: planning.narratives.cause,
+      remedy: planning.narratives.remedy,
+    });
+    return finish(1, false);
+  }
+
+  // #4544 Prefer-A: fail closed when product-mutation completion still has
+  // the exact scaffold AGENTS header placeholder. Process-only / custom pass.
+  const headerPlaceholder = evaluateConsumerHeaderPlaceholderAtRoot(resolvedProject);
+  if (!headerPlaceholder.ok) {
+    process.stderr.write(`${headerPlaceholder.message}\n`);
+    gateOutcomes.push({
+      id: CONSUMER_HEADER_PLACEHOLDER_GATE_ID,
+      status: "failed",
+      exit_code: 1,
+      cause: headerPlaceholder.reason,
+      remedy: headerPlaceholder.message,
+    });
+    return finish(1, false);
   }
 
   // #3282: toolchain preflight — degraded skip when framework tools missing.
@@ -401,7 +445,7 @@ export function dispatchCachedTaskCheck(
       projectRoot: cwd,
       contract,
       codeVersion,
-      noCache: options.noCache,
+      noCache: options.noCache || gateId === "verify:presentation-coverage",
       runner: () => {
         const now = options.nowMs?.() ?? Date.now();
         const remaining = remainingForDeadline(options.deadlineAtMs, now);
@@ -507,6 +551,42 @@ export function dispatchCachedTaskCheck(
         return spawned;
       },
     });
+    const coverageReport =
+      gateId === "verify:presentation-coverage"
+        ? parseCoverageReport(lastSpawn.stdout, result.exitCode)
+        : undefined;
+    if (coverageReport !== undefined && "error" in coverageReport) {
+      process.stderr.write(`check: ${coverageReport.error}\n`);
+      gateOutcomes.push({
+        id: gateId,
+        status: "failed",
+        exit_code: 2,
+        cause: coverageReport.error,
+      });
+      return finish(2, true);
+    }
+    if (coverageReport?.armed) {
+      presentationArmed = true;
+      // A second successful evaluation cannot erase an actual earlier refusal,
+      // including an advisory pressure-mode result or an unrun required gate.
+      const prior = gateOutcomes.find(
+        (outcome) =>
+          presentationRequired(outcome.id) && (outcome.status !== "run" || outcome.exit_code !== 0),
+      );
+      if (prior !== undefined) {
+        const code = prior.exit_code !== undefined && prior.exit_code !== 0 ? prior.exit_code : 2;
+        const cause = `armed presentation coverage preserves required ${prior.id} outcome`;
+        process.stderr.write(`check: ${cause} (exit ${code})\n`);
+        gateOutcomes.push({
+          id: gateId,
+          status: "failed",
+          exit_code: code,
+          cause,
+          coverage: coverageReport.coverage,
+        });
+        return finish(code, prior.status === "skipped");
+      }
+    }
     options.onGateComplete?.(gateId, result.exitCode, result.fromCache);
 
     // Fail-fast: do not start later gates (including suite) after a failure —
@@ -544,7 +624,12 @@ export function dispatchCachedTaskCheck(
         }
         return finish(1, true);
       }
-      if (modeResolution.hygieneAdvisory && isHygieneGate(gateId) && !isProductAcGate(gateId)) {
+      if (
+        modeResolution.hygieneAdvisory &&
+        isHygieneGate(gateId) &&
+        !isProductAcGate(gateId) &&
+        !(presentationArmed && presentationRequired(gateId))
+      ) {
         process.stderr.write(
           `check: hygiene gate ${gateId} failed (exit ${result.exitCode}) but is ADVISORY ` +
             `under ${modeResolution.mode} mode — continuing (#3284)\n`,
@@ -562,7 +647,9 @@ export function dispatchCachedTaskCheck(
           id: gateId,
           status: "run",
           exit_code: result.exitCode,
-          cause: `advisory hygiene failure: ${named.cause}`,
+          cause: named.opaqueOrGenericOnly
+            ? `advisory hygiene failure: ${named.cause} (opaque-or-generic named-cause bug #1883)`
+            : `advisory hygiene failure: ${named.cause}`,
           remedy: named.remedy,
           from_cache: result.fromCache,
         });
@@ -579,12 +666,16 @@ export function dispatchCachedTaskCheck(
         spawnError: lastSpawn.spawnError,
         hangTimeout: lastSpawn.timedOut === true,
       });
+      // named.lines already carry opaque/generic-only #1883 note when applicable.
       writeLines(named.lines);
       gateOutcomes.push({
         id: gateId,
         status: "failed",
+        ...(coverageReport === undefined ? {} : { coverage: coverageReport.coverage }),
         exit_code: result.exitCode,
-        cause: named.cause,
+        cause: named.opaqueOrGenericOnly
+          ? `${named.cause} (opaque-or-generic named-cause bug #1883)`
+          : named.cause,
         remedy: named.remedy,
         from_cache: result.fromCache,
       });
@@ -670,6 +761,7 @@ export function dispatchCachedTaskCheck(
       status: "run",
       exit_code: 0,
       from_cache: result.fromCache,
+      ...(coverageReport === undefined ? {} : { coverage: coverageReport.coverage }),
     });
   }
 

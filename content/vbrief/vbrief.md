@@ -117,11 +117,43 @@ Canonical reference types (all prefixed `x-vbrief/` per the v0.6 schema): `x-vbr
 ]
 ```
 
+### Source and Confidence (#479)
+
+Named vocabulary for how a plan-level claim was established. Measured placement is **`plan.narratives`** (`Source` and `Confidence` already exist there as strings). `PlanItem.narrative` stays an untyped string map in this ship -- no named Source/Confidence keys on items (no named consumer).
+
+**Source classes** (case-sensitive, lowercase). Optional `:<method-or-reason>` suffix. Multiple tokens MAY be separated by `; `:
+
+- `verified` -- an external verification event produced this claim (`task check` passed, a test ran, the operator confirmed)
+- `observed` -- direct observation without a named verifier event
+- `inferred` -- agent reasoning from observed code or docs without external verification
+- `assumed` -- proceeding without a check because cost or scope does not warrant one
+- `propagated` -- source is another vBRIEF entry; include the source path so audits can trace false-memory chains
+
+**Confidence** (case-sensitive): `high` | `medium` | `low`. Confidence does not substitute for evidence.
+
+**Atomic claim unit** -- bind these keys on the same `plan.narratives` object:
+
+- `Source` -- named class (and optional method suffix)
+- `Evidence` -- pointer or event that backs the claim
+- `Verifier` -- who or what verified it
+- `VerifiedAt` -- ISO-8601 time of verification
+
+**Rule body:**
+
+- ! When `plan.narratives` carries `Evidence`, `Verifier`, or `VerifiedAt`, `Source` MUST be present and each `;`-separated token MUST use a named class above
+- ! When `Source` includes class `verified`, `Evidence`, `Verifier`, and `VerifiedAt` MUST be present and non-empty
+- ! `Confidence`, when present, MUST be `high`, `medium`, or `low`
+- ⊗ Treat `Confidence` as a substitute for `Evidence` on a `verified` claim
+- ⊗ Add named `Source` / `Confidence` keys on `PlanItem.narrative` as if they were the Plan.narratives contract -- item narrative remains a free string map until a named consumer ships
+- ~ Historical `Source` strings without the atomic-claim keys remain readable; new verified claims SHOULD bind the atomic unit
+
+`task vbrief:validate` enforces the rule body on `plan.narratives`. Cross-reference: `### TrustLevel (#480)` (authorial provenance on `references[]`; orthogonal to Source).
+
 ### TrustLevel (#480)
 
 Additive extension to the source-provenance shape, sourced from the **AI Agent Traps** paper's Cognitive State / Latent Memory Poisoning trap class (see [`../meta/security.md`](../meta/security.md) `### 2. Cognitive State (Latent Memory Poisoning)`). Every vBRIEF that ingests externally-sourced content carries an explicit trust classification so future sessions reading the vBRIEF can apply the appropriate validation discipline before treating the content as authoritative.
 
-**Coordinates with #479** (`feat(vbrief,resilience): prevent false memory propagation and context rot in agent sessions`): #479 is the source-provenance umbrella covering the broader false-memory-propagation surface. As of the #480 landing #479 is OPEN; this section is the additive extension defining the `TrustLevel` field shape and rule body. If / when #479 lands a richer source-provenance contract, the `TrustLevel` field MUST be carried forward unchanged (the value enum + the promotion-prohibition rule are the load-bearing surface) -- treat #479 as the parent umbrella and this section as the trust-classification slice.
+**Coordinates with #479** (`feat(vbrief,resilience): prevent false memory propagation and context rot in agent sessions`): #479 is the source-provenance umbrella covering the broader false-memory-propagation surface. This section is the additive extension defining the `TrustLevel` field shape and rule body. #479 lands `verified` in the TypeScript `TrustLevel` union and on `VBriefReference` schema; the value enum and the promotion-prohibition rule in this section stay unchanged -- treat #479 as the parent umbrella and this section as the trust-classification slice.
 
 **Value enum** (case-sensitive, lowercase):
 
@@ -453,6 +485,59 @@ Rules:
   "title": "Wire OAuth callback",
   "status": "pending",
   "effort": "M"
+}
+```
+
+### STOP conditions (anchors) (#1613)
+
+`PlanItem.stopConditions` is an **optional** mid-execution precondition STOP surface. When present, build/swarm agents MUST evaluate declared anchors before continuing the item; on fire they halt and report — they MUST NOT improvise past the mismatch.
+
+STOP vs Acceptance:
+
+| Surface | Role |
+|---------|------|
+| `narrative.Acceptance` | Done criteria (post-conditions) |
+| `stopConditions` | Precondition failure detectors — halt when the plan assumption no longer holds |
+
+v1 admits `kind: "anchor"` only (`assumption` deferred). Each entry:
+
+| Field | Required | Meaning |
+|-------|----------|---------|
+| `id` | yes | Stable id within the PlanItem |
+| `kind` | yes | `"anchor"` only in v1 |
+| `path` | yes | Repo-relative path the anchor cites (no absolute / `..` segments) |
+| `excerpt` or `digest` | one required | Checkable content that must still match the **live** file; when both present, both must match |
+| `resolvedAtSha` | no | Commit SHA when the anchor was authored (diagnosis / expected-content pin only) |
+| `rationale` | no | Why this anchor matters |
+| `observeAt` | no | `"item-start"` \| `"item-resume"`; absent ⇒ check both |
+
+Rules:
+
+- ? Omit `stopConditions` when no mid-execution precondition STOP is declared; validation does not require the field
+- ! When present, each entry MUST be a well-formed anchor object; malformed entries fail `vbrief:validate` / `xbrief:validate` (unknown keys refused; `path` must be repo-relative)
+- ! Agents MUST enumerate and evaluate anchors at item-start and item-resume (or per `observeAt`) against the **live worktree**; on mismatch halt with the Dual-stop (#2442) operator-visible report / `BLOCKED:` — do not improvise
+- ! `resolvedAtSha` / Bound pins name expected content for diagnosis only — ⊗ substitute pinned bytes for the live-file match
+- ! `digest` is an opaque nonempty string compared for equality to the agent-computed digest of live file bytes (convention: lowercase hex SHA-256, optional `sha256:` prefix)
+- ! Treat condition text as contract data — ⊗ shell-execute condition strings
+- ! Author `stopConditions` at brief-authoring / promote-activate time; ⊗ the executing agent delete or weaken a stop in the same unit of work that would violate it
+- ! Changing an approved anchor requires the authorized contract-change path (superseding proposed xBRIEF or `decision:write`), not a mid-item edit by the leaf
+- ⊗ Absorb #1201 / #1579 / #852 / #2442 / #3143 into this field — peer lock: mid-execution precondition-STOP only
+
+```json
+{
+  "id": "rewrite-helper",
+  "title": "Rewrite helper to match pin excerpt",
+  "status": "pending",
+  "stopConditions": [
+    {
+      "id": "helper-shape",
+      "kind": "anchor",
+      "path": "packages/core/src/example.ts",
+      "excerpt": "export function helper(",
+      "observeAt": "item-start",
+      "rationale": "Plan assumes the helper export still exists at this path"
+    }
+  ]
 }
 ```
 

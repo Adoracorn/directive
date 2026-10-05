@@ -18,7 +18,9 @@ export type CheckGateSpec =
 /**
  * Product-first AC gate (#3284): always first; `--soft-missing-xbrief` skips
  * only when no story was active this session. A same-session complete targets
- * xbrief/completed instead of skipping (#3357).
+ * xbrief/completed instead of skipping (#3357). Multi-active soft-missing
+ * selects via DEFT_ACTIVE_SCOPE / explicit path (#4285); never soft-greens past
+ * stated AC for the selected story.
  */
 export const PRODUCT_FIRST_AC_GATE: CheckGateSpec = {
   task: PRODUCT_AC_GATE_ID,
@@ -124,6 +126,8 @@ export const FRAMEWORK_CHECK_GATES: readonly CheckGateSpec[] = [
   "verify:go-freeze",
   "verify:bridge-drift",
   "verify:forward-coverage",
+  // #633: reuse changelog-check Unreleased language on the framework-source conjunct.
+  "verify:changelog-unreleased",
   // #3145: test/source boundary + approved-scope provenance + consumer gate composition
   "verify:test-boundary",
   "verify:class-checks",
@@ -134,6 +138,9 @@ export const FRAMEWORK_CHECK_GATES: readonly CheckGateSpec[] = [
   { task: "verify:evaluator-surface", args: ["--base-ref", "origin/master"] },
   "verify:observable-scope",
   "verify:intent-constraint",
+  "verify:presentation-ceiling",
+  "verify:durable-effect-acquisition",
+  { task: "verify:presentation-coverage", args: ["--json"] },
   // #3362: dead-surface detector (warn-only this release; no --enforce)
   "verify:telemetry-coverage",
   "verify:vbrief-conformance",
@@ -180,6 +187,9 @@ export const CONSUMER_CHECK_GATES: readonly CheckGateSpec[] = [
   "verify:evaluator-surface",
   "verify:observable-scope",
   "verify:intent-constraint",
+  "verify:presentation-ceiling",
+  "verify:durable-effect-acquisition",
+  { task: "verify:presentation-coverage", args: ["--json"] },
   "vbrief:validate",
   "verify-strategy-output",
   // Declared project test command last (#4386). Skip when undeclared.

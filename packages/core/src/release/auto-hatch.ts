@@ -169,6 +169,34 @@ export function extractCoverageDebtCitationsFromChangelog(
   return [...found].sort((a, b) => a - b);
 }
 
+/**
+ * Parse `--allow-skip-ci=#N` / `allow-skip-ci=#N` spend markers from CHANGELOG
+ * Unreleased + all version sections by default (#5239 S1). Unlike coverage-debt
+ * (recent-window), skip-ci unpaid reuse must see the full spend history so an
+ * older closed citation (e.g. #5107 in 0.119.10) stays unpaid after close.
+ * Pass a finite `maxVersionSections` only in tests that assert a narrow window.
+ */
+export function extractSkipCiIncidentCitationsFromChangelog(
+  changelog: string,
+  maxVersionSections: number = Number.POSITIVE_INFINITY,
+): number[] {
+  const versionHeader = /^## \[(?!Unreleased)/m;
+  const parts = changelog.split(versionHeader);
+  const versionEnd = Number.isFinite(maxVersionSections) ? maxVersionSections + 1 : undefined;
+  const windows = [parts[0] ?? "", ...parts.slice(1, versionEnd)];
+  const found = new Set<number>();
+  const re = /allow-skip-ci=#?(\d+)/gi;
+  for (const section of windows) {
+    let m: RegExpExecArray | null = re.exec(section);
+    while (m) {
+      const n = Number.parseInt(m[1] ?? "", 10);
+      if (Number.isFinite(n) && n > 0) found.add(n);
+      m = re.exec(section);
+    }
+  }
+  return [...found].sort((a, b) => a - b);
+}
+
 /** Union marker-search hits with CHANGELOG-cited open issues. */
 export function mergeOpenDebtLedger(
   markerHits: readonly number[],
@@ -353,6 +381,28 @@ export function parseExitCodeFromReason(reason: string): number | null {
   if (!m) return null;
   const n = Number.parseInt(m[1] ?? "", 10);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Count failed tests from a sanitized cause or thin reason (#4244 / #3282).
+ * Does not scan raw suite bytes — callers must pass extractGateCause output
+ * or the encoded `N failed tests` reason fragment.
+ */
+export function countFailedTestsFromSanitizedOutput(
+  output: string | null | undefined,
+): number | null {
+  if (!output) return null;
+  const testsLine = /(?:^|\n)\s*Tests\s+(\d+)\s+failed\b/i.exec(output);
+  if (testsLine) {
+    const n = Number.parseInt(testsLine[1] ?? "", 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  const encoded = /(?:^|[;(]\s*)(\d+)\s+failed tests?\b/i.exec(output);
+  if (encoded) {
+    const n = Number.parseInt(encoded[1] ?? "", 10);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 export function reasonLooksLikeTimeout(reason: string): boolean {

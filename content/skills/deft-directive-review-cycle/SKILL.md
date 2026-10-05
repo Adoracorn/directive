@@ -103,6 +103,20 @@ gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[] | selec
 
 ~ See `tools/greptile.md` for recommended dashboard and per-repo settings.
 
+! **Reviewer presence (#3630):** before the settings above (which presuppose an installed app), determine once whether a reviewer can be expected. Shared SoT: `task pr:watch` / `task pr:merge-ready` / `evaluateReviewerExpectation` (presence probe + optional `plan.policy.review.reviewers`). Doctor reports local policy/config. Empty `reviewers: []` is an explicit zero. #769 is substitution / multi-profile only — empty registry is this named terminal.
+
+## Zero-reviewer terminal (#3630)
+
+! Before entering the review-cycle / `pr:watch` poll loop, run the shared presence determination (`task pr:watch -- --one-shot` inherits it). If none can be expected, exit immediately with verdict **`NO_REVIEWER_INSTALLED`** (exit 2). This is a named non-CLEAN weather terminal, distinguishable from CLEAN, NEW_P0_P1, blocked, TIMEOUT, STALL, and CI weather. ⊗ Treat absence as "review pending". ⊗ CLEAN on empty observation.
+
+! Route to `deft-directive-pre-pr` self-review rather than skipping review. Canonical handback so parents can tell "no reviewer" apart from "reviewer said nothing.":
+
+```
+review_cycle: skipped:no-reviewer-installed
+```
+
+! A configured-but-slow reviewer (bot-review check-run, local `greptile.json` / `.greptile/config.json`, or non-empty `reviewers` policy) MUST still poll. Unreachable check-runs or in-flight CI fail-close to poll, never CLEAN. Ambiguity between slow and absent stays fail-closed to poll or to an explicit operator/policy declaration.
+
 ## Phase 1 — Deft Process Audit
 
 ! Before touching code, verify ALL prerequisites are satisfied. Fix any gaps first:
@@ -359,7 +373,7 @@ Deep-think gates (`pr:watch`, `pr:merge-ready`, `review-monitor:*`) have **three
 3. **#2878 gh-only fallback last** — only when both CLI and namespaced task probes fail, classify **missing-task: pr:watch** (or **missing-task: review-monitor**) and use the official gh-only subset below.
 
 ⊗ Treat bare `task pr:watch` / `task review-monitor:register` as the only prescribed consumer form — under include key `deft:` those un-namespaced names are absent; that probe failure is not proof the gate is unavailable if `deft` or `task deft:` works (#2893).
-⊗ Pass go-task's bare `--` separator into `deft`/`directive` CLI forms (e.g. `deft pr:watch -- --help`) — CLI parsers reject the standalone `--` and the probe fails falsely (#2893).
+⊗ Pass go-task's bare `--` separator into `deft`/`directive` CLI forms that reject it (e.g. `deft pr:watch -- --help`) — true rejectors such as `pr:watch` and sibling `project-render` reject the standalone `--` and the probe fails falsely (#2893). After #5251, `roadmap-render` ignores bare `--` (does not treat it as outPath); do not generalize that ignore to `pr:watch` or `project-render`.
 
 ### Missing gate surface / consumer gh-only fallback (#2878)
 
@@ -415,7 +429,7 @@ Review-cycle babysit wait is `pr:watch` (blocking to CLEAN, or `--one-shot` grou
 
 | Holdout | Action |
 |---------|--------|
-| `sha_match` | Blocking `pr:watch` until SHA match or cap. A leftover on a stale Last-reviewed SHA is not the current leftover. |
+| `sha_match` | Keep-wait in native `pr:watch` while Greptile Review is in flight on HEAD (#2313). Sticky tip-rot (non-HEAD Last-reviewed + no in-flight Greptile on HEAD) past the sticky-sha clock (~10 min elapsed since first sticky observation) → `GREPTILE_SHA_STALL` / `BLOCKED: greptile-sha-stall` — see § Sticky tip-rot sha_match (#5162). A leftover on a stale Last-reviewed SHA is not the current leftover. |
 | SHA-matched `confidence` + **class A** leftover (already-touched files, owned review-cycle) | Dest residual, **one-batch**. MUST NOT idle-poll or start wait-merge. Class B parks. After Dual-stop halt, wait for a #3273 phrase before another residual. |
 | SHA-matched `confidence` + 0 P0/P1 + no named leftover | Class C halt. Not cap-wait and not dest residual. |
 | Greptile CLEAN + SLizard/CI red | #4820. Do not merge that hang into this recut. |
@@ -532,6 +546,22 @@ When GitHub Actions is in a **documented major outage** (or multi-hour `ci_never
 
 Workflow failover arming (Blacksmith cancelled → GH-hosted lane) is sibling issue **#3168** — this skill owns agent thrash caps and reason codes only.
 
+### Sticky tip-rot sha_match → @greptileai review (#5162 Prefer-A Recut)
+
+! Escalate only on the narrowed sticky tip-rot signature: `clean_gate_holdout=sha_match` AND sticky Greptile summary still names a non-HEAD commit AND there is no in-flight Greptile Review check-run on current HEAD (no queued/in_progress/pending). Do **not** escalate on bare one-shot / one-poll `sha_match` during intentional keep-wait (#2313).
+
+! **Sticky-sha clock:** Prefer-A arms on elapsed time since the first sticky tip-rot observation on the current HEAD while the no-in-flight conjunct holds (default `DEFAULT_STICKY_SHA_STALL_SECONDS` ≈ 10 minutes, borrowed as a duration constant only). Do **not** wire fail-loud to Stall Detection Rubric (#564) IN_PROGRESS `startedAt` on `commit.oid` — that clock does not arm when Greptile is not in flight on HEAD.
+
+! When the narrowed trigger + sticky-sha clock fire, `pr:watch` exits `GREPTILE_SHA_STALL` (exit 2) with remedy `BLOCKED: greptile-sha-stall` (also in `--json` as `remedy`). Fail loud once — do not invent a third freestyle CLEAN/sleep poller; do not treat `sha_match` as dest residual (#4822).
+
+! **Ask-first post (keep #564):** Do **not** silent-auto-post `@greptileai review`. Surface Stall Detection Rubric (#564) escalation menu option 2 / ask the operator once; after approval (or recorded operator standing for that PR), post `@greptileai review`, then **re-enter native `pr:watch`**. Deliberate #564 recut that authorizes unsolicited agent auto-post is out of Prefer-A first-ship.
+
+⊗ Escalate bare one-poll / `--one-shot` `sha_match` as `greptile-sha-stall`.
+⊗ Wire greptile-sha-stall to Stall Rubric IN_PROGRESS `startedAt`.
+⊗ Silent-auto-post `@greptileai review` without ask / menu option 2 / recorded standing.
+⊗ Invent a freestyle CLEAN/sleep monitor after `BLOCKED: greptile-sha-stall`.
+⊗ Treat sticky `sha_match` as dest residual.
+
 ### Stall Detection Rubric (#564)
 
 ! Track per poll: `startedAt` (timestamp of the first observation of the IN_PROGRESS check run for the current commit) and `commit.oid` (head SHA being reviewed). Both fields MUST be re-recorded every time the head SHA changes -- the rubric measures elapsed time on a single commit, not across the whole review cycle.
@@ -586,8 +616,8 @@ Workflow failover arming (Blacksmith cancelled → GH-hosted lane) is sibling is
 ⊗ Emit freeform `review_cycle: started` / `pending` / `initiated` or L4 `status: pass` without **A** (or parent-retained **B** with explicit next action) or full Step 6 `done`.
 ⊗ Solve Owner Continuity via host cron-as-Approach-1 or always-block-parent-until-merge — use A/B/C above (#2876 / #3090).
 
-! **Durable live wait / unarmed stand-down (#4882):** After `stop-at: pr-open`, Path B parent-retained or Approach 1 merge-path ownership is **armed** only while a still-running phase-correct wait exists for that PR (pre-CLEAN: blocking `pr:watch` / Approach 1 child; post-CLEAN: `pr:wait-mergeable-and-merge`) **or** an explicit option-C finish was emitted. A fresh sticky lease alone, or a Path B prose promise to merge on CLEAN with no live wait, is **unarmed stand-down** — fail the turn per open merge-path PR. Machine probe: `deft verify:review-monitor -- --pr <N> --merge-path-arm` with `--live-wait` and/or `--explicit-finish` (optional `--sticky-lease`; lease-only exits 1; Tier 1 --live-wait binds to gate lease evidence for that PR). Homemade / line-parsed `pr-watch --json` wrappers and background-shell claims are **not** monitors or arms (#5015); prefer Approach 1 / native `pr:watch`. Do not invent a third poller. Core: `evaluateMergePathArm` / `parsePrWatchJsonStdout` in `@deftai/directive-core/pr-watch`.
-⊗ Stand down unarmed on an open merge-path PR, or treat lease-only / homemade line-parsed `pr-watch --json` as a live arm (#4882).
+! **Durable live wait / unarmed stand-down (#4882 / #5219 / #5229):** After `stop-at: pr-open`, Path B parent-retained or Approach 1 merge-path ownership is **armed** only while a still-running phase-correct wait exists for that PR (pre-CLEAN: blocking Approach 1 child `pr:watch --monitor-agent-id <id>`; post-CLEAN: `pr:wait-mergeable-and-merge`) **or** an explicit option-C finish was emitted. A fresh sticky lease alone, or a Path B prose promise to merge on CLEAN with no live wait, is **unarmed stand-down** — fail the turn per open merge-path PR. On Tier-1 `spawn_subagent` hosts, `--merge-path-arm --live-wait` also requires lease `platform_primitive=spawn_subagent` and heartbeat `parent_id` bound to that lease `monitor_agent_id` (post-CLEAN `pr-wait-mergeable` exempt); parent-shell `pr:watch` (`parent_id=pr-watch`) does **not** arm (#5219). Approach 1 is the **cheapest admitted** babysit vs host `monitor` / bare shell watch (#5229); write `writeHostCapabilityStamp` / `ensureHostCapabilityStampForBabysit` before CLI verify (register also stamps; stale/foreign-session stamps ignored) so the probe stays Tier 1 / `spawn_subagent`. `evaluateReviewMonitorGate` consults sticky lease before Approach 3 READY and on `!isTier1` READY; `DEFT_MONITOR_TIER=3` is `override-tier3` (not honest `generic-terminal`). Bounded deny is enforced at `pr:watch` entry without `--monitor-agent-id` when Tier 1 is provable; bespoke `%TEMP%` pollers remain a named residual unless routed through deft-hook. Prefer the Approach 1 babysitter one-liner (`formatApproach1CheapestAdmissionCard`) over starting a parent watch. Machine probe: `deft verify:review-monitor -- --pr <N> --merge-path-arm` with `--live-wait` and/or `--explicit-finish`. Cohort inventory (#5318): `deft verify:cohort-review-monitors -- --prs <csv>` at PR-open, before serial rebase/merge, after Approach 1 exit/lease release, after tip-churn, after dual-stop/conf-hold/BLOCKED halt; `swarm:verify-review-clean` CLEAN does not satisfy babysit inventory (optional `--sticky-lease`; lease-only exits 1; Tier 1 --live-wait binds to gate lease evidence for that PR). Homemade / line-parsed `pr-watch --json` wrappers and background-shell claims are **not** monitors or arms (#5015); prefer Approach 1 / native `pr:watch`. Do not invent a third poller. Keep #3984 separate (no parent-turn-shape detector). Core: `evaluateMergePathArm` / `parsePrWatchJsonStdout` in `@deftai/directive-core/pr-watch`.
+⊗ Stand down unarmed on an open merge-path PR, or treat lease-only / homemade line-parsed `pr-watch --json` / host monitor / bare shell watch as a live Approach 1 arm when `spawn_subagent` is available (#4882 / #5229).
 
 ~ **Eval / regression (#3090):** Given PR open + check SUCCESS + open inline P1s + agent text claims driving merge + turn ends with 0 subagents and no lease → **FAIL** (Owner Continuity Gate), not PASS.
 
@@ -672,7 +702,7 @@ Cross-links: swarm decision tree `skills/deft-directive-swarm/references/core-ph
 
 ! **Background dispatch (#1880 / #2876 / #3134):** Spawn the review-monitor sub-agent via the matching primitive IN THE BACKGROUND (Cursor: Task `run_in_background: true`; Claude Code: `Agent` `run_in_background: true`; Grok Build **parent**: background `spawn_subagent`, then end the parent turn — do not claim host `sessions_yield`; OpenClaw: `sessions_spawn` with parent yielding). The parent MUST remain interactive while the poller runs — never block the parent OpenClaw/Cursor/Claude Code/Grok session for >~3 min of monitor ownership. Until a measured Grok callback exists, Grok interactivity is conditional on returning the turn rather than user-facing pull-wait (#4796). Grok Build implementation leaves MUST NOT take this spawn; they block on `pr:watch` (Grok Build leaf boundary).
 
-! **Heartbeat contract for Cursor pollers (#1877 / #1166 / #2876 / #3134):** Claude Code `Agent` and OpenClaw `sessions_spawn` pollers share this contract. A Cursor `Task`, Claude Code `Agent`, or OpenClaw `sessions_spawn` review-monitor poller whose loop runs > ~3 min MUST honour the sub-agent heartbeat contract (`docs/subagent-heartbeat.md`), same as the `spawn_subagent` path — emit periodic progress so the parent can distinguish a live poller from a hung one.
+! **Heartbeat contract for Cursor pollers (#1877 / #1166 / #2876 / #3134):** Claude Code `Agent` and OpenClaw `sessions_spawn` pollers share this contract. A Cursor `Task`, Claude Code `Agent`, or OpenClaw `sessions_spawn` review-monitor poller whose loop runs > ~3 min MUST honour the sub-agent heartbeat contract (`.deft/core/docs/subagent-heartbeat.md`), same as the `spawn_subagent` path — emit periodic progress so the parent can distinguish a live poller from a hung one.
 
 ~ **Visible Control UI (OpenClaw / #3044):** When OpenClaw Control UI is the operator control plane, SHOULD spawn the review-monitor with `visible:true` when the tool surface allows so humans can inspect progress without attaching to the parent session; invisible empty settles are higher FC04 residual risk.
 
@@ -827,6 +857,8 @@ NOTES: <short>
 ! Analyze all new findings before planning any changes.
 
 ### Step 6: Exit condition check — fail-closed ReviewerStatus all-of (#1259)
+
+! **Zero-reviewer pre-loop escape (#3630):** `NO_REVIEWER_INSTALLED` is determined once before this all-of. It is not CLEAN and not `unknown` / pending. Do not enter this all-of when the presence probe already named no reviewer — route to `deft-directive-pre-pr` with `review_cycle: skipped:no-reviewer-installed`. Empty observation inside this all-of remains fail-closed (never CLEAN). #769 stays the substitution / multi-profile grain. ⊗ Bind "#769 alone covers permanent absence."
 
 ! The loop MAY exit clean ONLY when a SINGLE fresh fetch (not cached state, not a verdict assembled across earlier polls) satisfies ALL of the `ReviewerStatus` fields below. This is a **fail-closed all-of**: any field that is missing, unparsed, or ambiguous resolves to **`unknown`**, and `unknown` is NOT a pass — the agent stays in the loop and returns to Step 2. A PARTIAL or STALE Greptile review MUST NOT satisfy the exit predicate; the predicate is what prevents merging un-reviewed code while a P0/P1 finding is still in flight (#1259).
 

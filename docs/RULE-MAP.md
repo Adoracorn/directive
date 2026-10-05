@@ -8,9 +8,9 @@ Maintainer-facing map of how Directive's rules are layered and grouped. This is 
 
 ## Overview
 
-- **Rules:** 24 groupings, 278 documents
-- **Tasks:** 62 namespaces, 261 Taskfile declarations (includes + unlisted tasks/*.yml, not `task --list`)
-- **Packs:** 6 source-of-truth packs (704 entries from rules|lessons|patterns|skills|strategies|entries)
+- **Rules:** 24 groupings, 283 documents
+- **Tasks:** 64 namespaces, 275 Taskfile declarations (includes + unlisted tasks/*.yml, not `task --list`)
+- **Packs:** 6 source-of-truth packs (717 entries from rules|lessons|patterns|skills|strategies|entries)
 
 Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the Taskfile gates that enforce them), and the **Lifecycle** that ties them together.
 
@@ -19,12 +19,12 @@ Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the 
 | Grouping | Purpose | Docs | MUST | SHOULD | MUST NOT | SHOULD NOT | MAY |
 |---|--:|--:|--:|--:|--:|--:|--:|
 | ci-cd | CI runner and pipeline guidance, loaded when migrating or configuring CI. | 6 | 5 | 4 | 6 | 0 | 0 |
-| coding | Core software-development rules for agents: hygiene, testing, debugging, security, build output. | 10 | 198 | 57 | 141 | 2 | 5 |
+| coding | Core software-development rules for agents: hygiene, testing, debugging, security, build output. | 10 | 201 | 59 | 147 | 2 | 5 |
 | context | How to feed agents context well: examples, deterministic splits, spec deltas. | 8 | 42 | 67 | 30 | 16 | 13 |
-| contracts | Interface/behavioral contracts the framework enforces. | 16 | 195 | 16 | 138 | 0 | 5 |
+| contracts | Interface/behavioral contracts the framework enforces. | 16 | 200 | 16 | 140 | 0 | 5 |
 | conventions | Cross-cutting naming, formatting, and repo conventions. | 4 | 16 | 2 | 16 | 0 | 3 |
 | deployments | Provider-specific deployment playbooks (AWS, Azure, GCP, Cloudflare, Vercel, fly.io…). | 52 | 107 | 74 | 24 | 13 | 6 |
-| docs | Explanatory docs and the framework glossary. | 39 | 21 | 12 | 62 | 1 | 2 |
+| docs | Explanatory docs and the framework glossary. | 43 | 21 | 12 | 62 | 1 | 2 |
 | events | Event and signal definitions used across the framework. | 1 | 0 | 0 | 0 | 0 | 0 |
 | incidents | Incident handling and postmortem guidance. | 2 | 0 | 0 | 0 | 0 | 0 |
 | interfaces | Interface definitions and boundaries. | 4 | 119 | 66 | 37 | 2 | 9 |
@@ -33,14 +33,14 @@ Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the 
 | patterns | Reusable design/interaction patterns for agent work. | 12 | 81 | 42 | 140 | 3 | 5 |
 | platforms | Platform-specific guidance. | 2 | 94 | 63 | 19 | 16 | 12 |
 | references | External references and citations backing the guidance. | 4 | 19 | 1 | 19 | 0 | 0 |
-| resilience | Failure handling, recovery, and robustness rules. | 2 | 16 | 14 | 14 | 1 | 2 |
-| scm | Source-control conventions and Git/GitHub workflow rules. | 3 | 101 | 34 | 34 | 1 | 3 |
-| skills | Packaged multi-step agent workflows (build, release, interview, triage, review…). | 39 | 561 | 118 | 658 | 0 | 17 |
-| strategies | Higher-order approaches: interviewing, decomposition, planning, research, refactoring. | 16 | 323 | 90 | 142 | 0 | 11 |
+| resilience | Failure handling, recovery, and robustness rules. | 2 | 16 | 14 | 15 | 1 | 2 |
+| scm | Source-control conventions and Git/GitHub workflow rules. | 3 | 108 | 34 | 34 | 1 | 3 |
+| skills | Packaged multi-step agent workflows (build, release, interview, triage, review…). | 40 | 589 | 120 | 702 | 0 | 18 |
+| strategies | Higher-order approaches: interviewing, decomposition, planning, research, refactoring. | 16 | 318 | 88 | 138 | 0 | 11 |
 | swarm | Multi-agent (swarm) coordination guidance. | 1 | 75 | 15 | 22 | 0 | 0 |
-| templates | Reusable document/scaffold templates. | 11 | 99 | 10 | 49 | 1 | 5 |
+| templates | Reusable document/scaffold templates. | 11 | 101 | 10 | 54 | 1 | 5 |
 | tools | Tooling standards (telemetry, search, formatters, the Taskfile contract). | 7 | 91 | 73 | 33 | 1 | 15 |
-| vbrief | The durable state format: project definition, specification, scopes, plans. | 1 | 71 | 27 | 27 | 0 | 8 |
+| vbrief | The durable state format: project definition, specification, scopes, plans. | 1 | 81 | 28 | 30 | 0 | 9 |
 | verification | How agents prove work is done: gates, validators, coverage, review. | 4 | 39 | 22 | 26 | 0 | 4 |
 
 ### ci-cd
@@ -139,6 +139,7 @@ _Explanatory docs and the framework glossary._
 - `deft-directive-disable.md` — Use a **root file flag** to turn Directive **enforcement** off for local testing (A/B, DevHammer, ceremony vs loop) **without** permanent project opt-out and **without** deleting the deposit.
 - `delivery-attempt.md` — Deterministic pre-dispatch gate and durable attempt ledger for autonomous **delivery** and **operational-acceptance** loops.
 - `directive-lifecycle.md` — A single-picture mental model of how Deft Directive turns an idea into shipped, auditable work — and keeps doing so as the project grows. It is **not** a one-and-done pipeline; it is two connected phases that loop.
+- `durable-effect-acquisition.md` — Refs: #5080 · [Accepted design amendment](https://github.com/deftai/directive/issues/5080#issuecomment-5873701590) · [Consumer check contract](../content/docs/consumer-check-contract.md)
 - `freshness-contract.md` — Long-lived multi-agent sessions can keep executing the pre-upgrade payload they loaded earlier even after `directive update` / deposit apply succeeds and disk probes report "up to date." This product **freshness contract** is host-agnostic:
 - `full-stop.md` — Uninstall plus delete `.deft/` is not a complete stop. Leftover host hook files still deny writes after the CLI is gone. This page is the reverse-init recipe: leftover classes, then the ordered stop while the CLI still exists.
 - `gate-integrity.md` — General product and process rule for Directive fix loops, refine loops, and quality-gate repair: **when a gate is red, clear red by fixing the work under test — not by mutating the gate.**
@@ -158,12 +159,15 @@ _Explanatory docs and the framework glossary._
 - `operator-log-hygiene-consumer-pack-stub.md` — Skeleton for **consumer projects** that want a ship-gate for operator-facing logs. Wire this into *your* check aggregate only if you opt in.
 - `orphan-active-verdict-basis.md` — `verify:orphan-active` decides whether an `xbrief/active/` brief with `plan.status == running` is really still live work. Until #3767 it answered that question from a triage-cache hit returned **unconditionally** — no age
 - `plan-acceptance.md` — Fields the product AC gate actually reads. Not a schema dump. Derivation (`#3323` / `#3360`) owns the stamp. Setup stays silent on this block.
+- `presentation-ceiling.md` — Refs: #5056 · Related: #4541 intent-constraint, #4545 operator scope-limit, #4774 membership, leftover(#5056) #5059
+- `presentation-coverage.md` — `deft verify:presentation-coverage` (#5079) checks that a candidate under a recorded presentation ceiling has successful required checks and merge-base authority for every changed product path. The independent…
 - `product-signal.md` — Phase 1 consented product-improvement signal under epic #2603 (#2693). Defaults **off**.
 - `project-invariants.md` — Refs: #3425 · Related: #3238 `coverage_map`, #3241 parent lineage, #516 / #3145 `file_scope`
-- `scope-provenance.md` — Refs: #3145 · #3205 · #4956 · Related: #1310, #2944 human-origin grants, #516 file scope · class checks: #4980 · generalizes under [gate-integrity.md](../content/docs/gate-integrity.md) (#3156) · UI structure:…
+- `scope-provenance.md` — Refs: #3145 · #3205 · #4956 · #4774 · #5192 · #3715 · Related: #1310, #2944 human-origin grants, #516 file scope · class checks: #4980 · generalizes under [gate-integrity.md](../content/docs/gate-integrity.md) (#3156) · UI structure:…
 - `skill-discovery-hosts.md` — Directive deposits **thin skill discovery pointers** so agent hosts that do not scan `.agents/skills/` still auto-load the same consumer skill inventory.
 - `skill-pin-policy.md` — AGENTS.md always loads; on-demand skills load only when trigger matching succeeds. Empirical and practitioner guidance (antfu/skills FAQ; directive #2484 progressive disclosure) show **false negatives** — the agent never opens a…
 - `slash-multi-host.md` — Operator guide for **host-native** Directive slash and prompt files after epic [#55](https://github.com/deftai/directive/issues/55).
+- `subagent-heartbeat.md` — Long-running `spawn_subagent` review-cycle agents on the Grok Build hybrid swarm path can go completely dark from the monitor's perspective -- the parent sees no commits, no PR comments, no completion notifications, and no
 - `task-cache.md` — **See also**: [Issue #1713](https://github.com/deftai/directive/issues/1713) | [Issue #1704](https://github.com/deftai/directive/issues/1704) (process face) | [Issue #2784](https://github.com/deftai/directive/issues/2784) (public types…
 - `test-boundary.md` — Refs: #3145 · Related: #1310 / #4009 forward-coverage, testing layout guidance
 - `writing-ste100.md` — Directive's writing bar is **clarity, simplicity, and brevity**.
@@ -306,6 +310,7 @@ _Packaged multi-step agent workflows (build, release, interview, triage, review�
 - **deft-directive-release/** (1 files)
 - **deft-directive-review-cycle/** (1 files)
 - **deft-directive-setup/** (1 files)
+- **deft-directive-spec-reconstruct/** (1 files)
 - **deft-directive-swarm/** (14 files)
 - **deft-directive-sync/** (1 files)
 - **deft-directive-triage/** (1 files)
@@ -411,6 +416,7 @@ _How agents prove work is done: gates, validators, coverage, review._
 | lifecycle | Emit behavioral framework events (review-cycle plan:approved recorder). -- task lifecycle:event -- emit plan:approved --plan-ref <url>… | 2 |
 | migrate | Migration tasks for moving projects between framework versions. | 3 |
 | occupancy | Lease-only confirmed steal (#3433/#3611). Flags: --confirm --occupant <reported-session-id>; manual/Grok owner: --session-id… | 4 |
+| ownership | WSL root-runtime ownership doctor/fix (#1617). | 2 |
 | packs | Pack-slicing surface (#1283 design, #1294 lessons pilot, #1295 skills pack, | 8 |
 | plan-sequence | Set the active ordered-plan sequence from --file JSON (#2402) | 4 |
 | policy | Inspect every registered typed-policy field on vbrief/PROJECT-DEFINITION.vbrief.json (#1148 / N8). -- task policy:show [--… | 11 |
@@ -427,7 +433,8 @@ _How agents prove work is done: gates, validators, coverage, review._
 | session | Claim occupancy and run the quick-tier ritual for one owner (#1348/#3611). Flags: --session-id <id> / --steal --confirm --occupant… | 3 |
 | setup | Wired into the parent Taskfile.yml `includes:` block under namespace key | 1 |
 | slice-record | Retrofit a slices.jsonl entry for a hand-filed cohort (#1147 / N7). Windows note (#1231): CLI_ARGS is forwarded bare to argparse so… | 2 |
-| spec | Specification render/validate tasks (vBRIEF -> SPECIFICATION). | 3 |
+| spec | Specification render/validate tasks (vBRIEF -> SPECIFICATION). | 4 |
+| subagent | Fail-closed query-before-cancel gate (#5278). Exit 0 only via status steer ack/observed window, heartbeat STALE/missing under grace, or… | 2 |
 | swarm | Report whether story vBRIEFs are ready for concurrent swarm allocation | 7 |
 | toolchain | Verify required maintainer toolchain is installed (go, uv, git, gh, node, pnpm) | 2 |
 | triage-actions | Accept an issue for triage. Records an audit entry. (#845 Story 3) | 8 |
@@ -448,7 +455,7 @@ _How agents prove work is done: gates, validators, coverage, review._
 | umbrella | Fetch umbrella ## Current shape comment (#1152) — task umbrella:current-shape <N> [-- --repo OWNER/REPO \| --json \| --strict]. Does NOT… | 1 |
 | value | Pull-based attributed-value trend readout (#1709). -- task value:show -- [--window=7d\|30d] [--format=text\|json] | 1 |
 | vbrief | Validate and manage vBRIEF lifecycle state and structure. | 6 |
-| verify | Verification gates: stub scans, session ritual, story-ready, oracles. | 65 |
+| verify | Verification gates: stub scans, session ritual, story-ready, oracles. | 74 |
 | xbrief | Validate xBRIEF lifecycle folder structure and cross-file consistency. Alias of vbrief:validate with xbrief-first naming (#3483). | 3 |
 
 ## Lifecycle
@@ -465,9 +472,9 @@ Directive turns a coding agent into an auditable process: load only the guidance
 
 | Pack | Version | Rules | MUST | SHOULD | MUST_NOT |
 |---|--:|--:|--:|--:|--:|
-| `content/packs/lessons/lessons-pack-0.1.json` | 0.1 | 49 | 0 | 0 | 0 |
+| `content/packs/lessons/lessons-pack-0.1.json` | 0.1 | 50 | 0 | 0 | 0 |
 | `content/packs/patterns/patterns-pack-0.1.json` | 0.1 | 12 | 0 | 0 | 0 |
-| `content/packs/rules/rules-pack-0.1.json` | 0.1 | 601 | 300 | 103 | 181 |
-| `content/packs/skills/skills-pack-0.1.json` | 0.1 | 25 | 0 | 0 | 0 |
+| `content/packs/rules/rules-pack-0.1.json` | 0.1 | 612 | 303 | 105 | 187 |
+| `content/packs/skills/skills-pack-0.1.json` | 0.1 | 26 | 0 | 0 | 0 |
 | `content/packs/strategies/strategies-pack-0.1.json` | 0.1 | 16 | 0 | 0 | 0 |
 | `content/packs/swarm-spec/swarm-spec-pack-0.1.json` | 0.1 | 1 | 0 | 0 | 0 |

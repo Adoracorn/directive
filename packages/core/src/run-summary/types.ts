@@ -64,7 +64,27 @@ export interface RunSummaryBaseFields {
   readonly total_tool_turns?: number;
 }
 
+/**
+ * Closed vocabulary for why a cold `session_start` JSONL line was emitted (#3921).
+ * Orthogonal to `ceremony_tier` (cold | rearm). Rearm that does not emit
+ * `session_start` stays outside the stream.
+ */
+export const SESSION_START_TRIGGERS = [
+  "cold",
+  "rearm-forced-cold",
+  "post-compact",
+  "mutation-intent",
+  "steal-recover",
+] as const;
+export type SessionStartTrigger = (typeof SESSION_START_TRIGGERS)[number];
+
 export interface SessionStartRunSummaryPayload {
+  /**
+   * Why this cold `session_start` line exists (#3921). Emitter defaults
+   * missing or invalid values to `cold`. Do not treat `ceremony_tier`,
+   * process-cost, or `orientation_call_count` as this seat.
+   */
+  readonly trigger?: SessionStartTrigger;
   readonly ceremony_dial?: Record<string, unknown>;
   readonly preflight?: Record<string, unknown>;
   readonly ceremony_tier?: string;
@@ -96,6 +116,8 @@ export interface DialEscalationEvaluationRunSummaryPayload {
 }
 
 export interface CheckGateOutcome {
+  /** Actual per-path compositor evidence (#5079); never inferred from stdout prose. */
+  readonly coverage?: readonly import("../presentation-coverage/types.js").ComposedGateCoverage[];
   readonly id: string;
   readonly status: "run" | "skipped" | "failed";
   readonly exit_code?: number;
@@ -179,6 +201,10 @@ export interface AcceptanceRunSummaryPayload {
   readonly behavioral_clause_count?: number;
   /** Statement sentences that are neither a clause nor an explicit confession (#3550). */
   readonly unmapped_sentence_count?: number;
+  /** Workspace requirement_sources re-hashed this walk (#3920). */
+  readonly sources_rechecked?: number;
+  /** Workspace requirement_sources whose digest changed this walk (#3920). */
+  readonly sources_changed?: number;
 }
 
 /** Intake-time stamp: which rung locked, whether commands were stated, counts (#3323). */
@@ -194,9 +220,9 @@ export interface VerificationRunSummaryPayload {
   readonly method_fingerprint: string;
   readonly outcome: VerificationOutcome;
   /**
-   * True when both sides of the comparison were rebuilt from scratch by a
-   * different method than the one that failed. Required to resolve
-   * fail → method-change → pass (#3322).
+   * Copied from the run-summary payload as a diagnostic (#3322).
+   * Presence of this key is not a security waiver (#3925): the evaluator
+   * does not clear unresolved method-change flags from this boolean.
    */
   readonly independent_rederivation?: boolean;
 }

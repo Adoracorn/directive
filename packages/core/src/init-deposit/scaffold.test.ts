@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parseManagedSectionAttrs, renderManagedSection } from "../platform/agents-md.js";
 import { AGENTS_MANAGED_CLOSE } from "../platform/constants.js";
 import { installerManagedGuardErePatterns } from "./hygiene.js";
 import {
@@ -193,6 +194,9 @@ describe("init-deposit scaffold", () => {
     await depositNeutralization(project, io);
 
     expect(readFileSync(join(project, ".gitattributes"), "utf8")).toContain(
+      ".deft/core/** text=auto eol=lf",
+    );
+    expect(readFileSync(join(project, ".gitattributes"), "utf8")).not.toContain(
       ".deft/core/** text eol=lf",
     );
     expect(readFileSync(join(project, "greptile.json"), "utf8")).toContain(".deft/core/**");
@@ -253,6 +257,15 @@ describe("init-deposit scaffold", () => {
       ).toThrow(/chars/);
     });
 
+    it("closes the generation heredoc at run-block indent and requires generation >= 1 (#4120)", () => {
+      const guard = depositGuard();
+      const run = " ".repeat(10);
+      expect(guard).toContain(`${run}python3 - "$BASE_REF" "$HEAD_SHA" <<'PY'`);
+      expect(guard).toContain(`\n${run}PY\n${run}fi\n`);
+      expect(guard).not.toMatch(/\n {12}PY\n/);
+      expect(guard).toContain("head generation is not an int >= 1");
+    });
+
     it("keeps the run block loadable: no column-0 body lines, no mega-lines", () => {
       const guard = depositGuard();
       const lines = guard.split("\n");
@@ -304,6 +317,53 @@ describe("init-deposit scaffold", () => {
     const { io } = captureIo();
     writeAgentsMd(project, deftDir, io);
     expect(writeAgentsMd(project, deftDir, io)).toBe(false);
+  });
+
+  it("renders AGENTS from the deposit tree when prefer-package is stale (#5013)", () => {
+    const project = freshRoot("scaffold-agents-same-root-");
+    const deftDir = join(project, ".deft", "core");
+    mkdirSync(join(deftDir, "templates"), { recursive: true });
+    const depositTemplate = `<!-- deft:managed-section v3 -->\n# Deposit-new marker 0.119.8\n${AGENTS_MANAGED_CLOSE}\n`;
+    writeFileSync(join(deftDir, "templates", "agents-entry.md"), depositTemplate, "utf8");
+    writeFileSync(
+      join(deftDir, "package.json"),
+      JSON.stringify({ name: "@deftai/directive-content", version: "0.119.8" }),
+      "utf8",
+    );
+
+    const stalePkg = join(project, "node_modules", "@deftai", "directive-content");
+    mkdirSync(join(stalePkg, "templates"), { recursive: true });
+    writeFileSync(
+      join(stalePkg, "templates", "agents-entry.md"),
+      `<!-- deft:managed-section v3 -->\n# Stale-prefer-package marker 0.119.2\n${AGENTS_MANAGED_CLOSE}\n`,
+      "utf8",
+    );
+    writeFileSync(
+      join(stalePkg, "package.json"),
+      JSON.stringify({ name: "@deftai/directive-content", version: "0.119.2" }),
+      "utf8",
+    );
+
+    const { io } = captureIo();
+    expect(writeAgentsMd(project, deftDir, io)).toBe(true);
+    const agents = readFileSync(join(project, "AGENTS.md"), "utf8");
+    expect(agents).toContain("Deposit-new marker 0.119.8");
+    expect(agents).not.toContain("Stale-prefer-package marker 0.119.2");
+    const attrs = parseManagedSectionAttrs(agents);
+    expect(attrs?.sha).toBe("0.119.8");
+    const expectedBody = renderManagedSection(depositTemplate);
+    expect(expectedBody).not.toBeNull();
+    expect(renderManagedSection(agents)).toBe(expectedBody);
+  });
+
+  it("returns false without throw when content-tree agents template is missing (#5013)", () => {
+    const project = freshRoot("scaffold-agents-template-missing-");
+    const deftDir = join(project, ".deft", "core");
+    mkdirSync(deftDir, { recursive: true });
+    const { lines, io } = captureIo();
+    expect(writeAgentsMd(project, deftDir, io)).toBe(false);
+    expect(existsSync(join(project, "AGENTS.md"))).toBe(false);
+    expect(lines.some((line) => line.includes("template-missing"))).toBe(true);
   });
 
   it("inserts deft include into an existing top-level includes block", () => {
@@ -359,20 +419,44 @@ describe("init-deposit scaffold", () => {
     ).toContain("tag: 'v0.53.0'");
   });
 
-  it("repairs old .gitattributes entries with the LF pin", () => {
+  it("repairs old .gitattributes entries with text=auto and removes legacy text eol=lf (#5245)", () => {
     const project = freshRoot("scaffold-gitattributes-lf-");
     const { io } = captureIo();
     writeFileSync(
       join(project, ".gitattributes"),
-      ".deft/core/** linguist-generated=true\n.deft/core/** linguist-vendored=true\n",
+      ".deft/core/** text eol=lf\n.deft/core/** linguist-generated=true\n.deft/core/** linguist-vendored=true\n# consumer fixture\n*.md text\n",
       "utf8",
     );
 
     expect(ensureGitattributes(project, io)).toBe(true);
     const attrs = readFileSync(join(project, ".gitattributes"), "utf8");
-    expect(attrs).toContain(".deft/core/** text eol=lf");
+    expect(attrs).toContain(".deft/core/** text=auto eol=lf");
+    expect((attrs.match(/\.deft\/core\/\*\* text eol=lf/g) ?? []).length).toBe(0);
+    expect((attrs.match(/text=auto eol=lf/g) ?? []).length).toBe(1);
     expect(attrs.match(/linguist-generated=true/g) ?? []).toHaveLength(1);
     expect(attrs.match(/linguist-vendored=true/g) ?? []).toHaveLength(1);
+    expect(attrs).toContain("*.md text");
+  });
+
+  it("removes legacy text eol=lf even when desired lines already present (#5245)", () => {
+    const project = freshRoot("scaffold-gitattributes-legacy-only-");
+    const { io, lines } = captureIo();
+    writeFileSync(
+      join(project, ".gitattributes"),
+      [
+        ".deft/core/** text eol=lf",
+        ".deft/core/** text=auto eol=lf",
+        ".deft/core/** linguist-generated=true",
+        ".deft/core/** linguist-vendored=true",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    expect(ensureGitattributes(project, io)).toBe(true);
+    const attrs = readFileSync(join(project, ".gitattributes"), "utf8");
+    expect((attrs.match(/\.deft\/core\/\*\* text eol=lf/g) ?? []).length).toBe(0);
+    expect((attrs.match(/text=auto eol=lf/g) ?? []).length).toBe(1);
+    expect(lines.join("")).not.toMatch(/skipping/);
   });
 
   it("prunes framework self-tests and vendored TS test files", async () => {

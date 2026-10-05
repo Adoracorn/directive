@@ -7,6 +7,8 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 import { spawnSync } from "node:child_process";
 import {
+  POWERSHELL_RESTRICTED_CMD_RECOVERY,
+  probePowershellBinReachability,
   quoteWin32CommandForShell,
   resolveCommandOnPath,
   shouldUseShellForCommand,
@@ -222,5 +224,126 @@ describe("spawnCommandText (#2548 / #2555)", () => {
       stdout: "",
       stderr: "",
     });
+  });
+});
+
+describe("probePowershellBinReachability (#4659)", () => {
+  it("skips on non-windows", () => {
+    expect(probePowershellBinReachability("deft-hook", { platform: "linux" })).toEqual({
+      ok: true,
+      skipped: true,
+      source: null,
+      detail: "non-windows",
+    });
+  });
+
+  it("rejects unsafe command names", () => {
+    expect(probePowershellBinReachability("deft-hook; rm", { platform: "win32" }).ok).toBe(false);
+  });
+
+  it("fails closed when Get-Command selects a .ps1 under Restricted", () => {
+    const spawnSyncFn = vi.fn(() => ({
+      status: 0,
+      stdout: "SRC|C:\\npm\\deft-hook.ps1\n",
+      stderr: "",
+      error: undefined,
+      signal: null,
+      output: [],
+      pid: 1,
+    })) as unknown as typeof import("node:child_process").spawnSync;
+    const result = probePowershellBinReachability("deft-hook", {
+      platform: "win32",
+      env: { SystemRoot: "C:\\Windows" },
+      spawnSyncFn,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.source?.toLowerCase().endsWith(".ps1")).toBe(true);
+    expect(POWERSHELL_RESTRICTED_CMD_RECOVERY).toMatch(/#4654/);
+    expect(POWERSHELL_RESTRICTED_CMD_RECOVERY).toMatch(/Do not set ExecutionPolicy Bypass/);
+  });
+
+  it("passes when Restricted Get-Command selects .cmd even if --help exits 2", () => {
+    // Real deft-hook.cmd rejects --help with exit 2; that must not fail the probe.
+    const spawnSyncFn = vi.fn(() => ({
+      status: 2,
+      stdout: "SRC|C:\\npm\\deft-hook.cmd\n",
+      stderr: "unrecognized argument: --help\n",
+      error: undefined,
+      signal: null,
+      output: [],
+      pid: 1,
+    })) as unknown as typeof import("node:child_process").spawnSync;
+    const result = probePowershellBinReachability("deft-hook", {
+      platform: "win32",
+      env: { SystemRoot: "C:\\Windows" },
+      spawnSyncFn,
+    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        skipped: false,
+        source: expect.stringMatching(/\.cmd$/i),
+      }),
+    );
+  });
+
+  it("fails closed when Restricted selects .cmd but launch fails (not --help exit 2)", () => {
+    const spawnSyncFn = vi.fn(() => ({
+      status: 1,
+      stdout: "SRC|C:\\npm\\deft-hook.cmd\n",
+      stderr: "The system cannot execute the specified program.\n",
+      error: undefined,
+      signal: null,
+      output: [],
+      pid: 1,
+    })) as unknown as typeof import("node:child_process").spawnSync;
+    const result = probePowershellBinReachability("deft-hook", {
+      platform: "win32",
+      env: { SystemRoot: "C:\\Windows" },
+      spawnSyncFn,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.source?.toLowerCase().endsWith(".cmd")).toBe(true);
+    expect(result.detail).toMatch(/launch failed|status=1/i);
+  });
+
+  it("fails closed when Restricted selects .cmd then the probe times out", () => {
+    const spawnSyncFn = vi.fn(() => ({
+      status: null,
+      stdout: "SRC|C:\\npm\\deft-hook.cmd\n",
+      stderr: "",
+      error: Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }),
+      signal: "SIGTERM",
+      output: [],
+      pid: 1,
+    })) as unknown as typeof import("node:child_process").spawnSync;
+    const result = probePowershellBinReachability("deft-hook", {
+      platform: "win32",
+      env: { SystemRoot: "C:\\Windows" },
+      spawnSyncFn,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.source?.toLowerCase().endsWith(".cmd")).toBe(true);
+    expect(result.detail).toMatch(/launch failed|status=null|ETIMEDOUT/i);
+  });
+
+  it("names Restricted policy refusal without recommending Bypass", () => {
+    const spawnSyncFn = vi.fn(() => ({
+      status: 1,
+      stdout: "",
+      stderr: "PSSecurityException: running scripts is disabled",
+      error: undefined,
+      signal: null,
+      output: [],
+      pid: 1,
+    })) as unknown as typeof import("node:child_process").spawnSync;
+    const result = probePowershellBinReachability("deft-hook", {
+      platform: "win32",
+      env: { SystemRoot: "C:\\Windows" },
+      spawnSyncFn,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.detail).toMatch(/Restricted|\.ps1/i);
+    expect(POWERSHELL_RESTRICTED_CMD_RECOVERY).toMatch(/postinstall|\.cmd|#4654/);
   });
 });

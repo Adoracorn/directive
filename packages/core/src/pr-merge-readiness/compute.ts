@@ -3,6 +3,8 @@ import {
   parseCommentsAdded,
 } from "../content-contracts/skills/greptile-detector.js";
 import { resolveMinGreptileConfidence } from "../policy/min-greptile-confidence.js";
+import { resolveReviewers } from "../policy/reviewers.js";
+import { evaluate as evaluateCloseoutAttestable } from "../pr-closeout-attestable/evaluate.js";
 import type { CiGateOptions } from "./ci-gate.js";
 import { buildCiSummaryLine, evaluateCiGate } from "./ci-gate.js";
 import {
@@ -15,6 +17,7 @@ import {
 import { evaluateGates, isMergeReady } from "./evaluate.js";
 import {
   type CheckRunRecord,
+  classifyMergeGateEnforcement,
   fetchCheckRunsRest,
   fetchGreptileBodyRest,
   fetchGreptileCommentBody,
@@ -22,10 +25,16 @@ import {
   fetchPrHeadSha,
   fetchPrHeadShaRest,
   fetchRequiredStatusContexts,
+  type MergeGateEnforcementDecision,
+  type MergeGateEnforcementDetection,
+  type MergeGateEnforcementRecord,
   normalizeRequiredContexts,
   type RequiredStatusContext,
+  type RequiredStatusContextsResult,
+  readMergeGateEnforcementRecord,
   requiredContextLabel,
   resolveRepo,
+  writeMergeGateEnforcementRecord,
 } from "./gh.js";
 import {
   fetchUnresolvedGreptileInlineFindings,
@@ -43,6 +52,13 @@ import {
 } from "./mergeability.js";
 import { emptyVerdict, parseGreptileBody } from "./parse.js";
 import { attachPlatformStatusUrls } from "./platform-status.js";
+import {
+  botReviewCheckPresent,
+  evaluateReviewerExpectation,
+  MERGE_READY_NO_REVIEWER_FAILURE,
+  REVIEWER_STATE_NO_REVIEWER_INSTALLED,
+  reviewerConfigPresent,
+} from "./reviewer-presence.js";
 import type { SlizardGateOptions } from "./slizard-gate.js";
 import { evaluateSlizardGate, isSlizardCheck } from "./slizard-gate.js";
 import type { GateResult, GreptileVerdict, RunGhFn } from "./types.js";
@@ -93,6 +109,13 @@ export type FetchRequiredContextsFn = (
   resolutionFailed?: boolean;
 };
 
+/** Thin closeout invoker seam for `pr:merge-ready` (#3875 / supersedes #3781 single site). */
+export type CloseoutAttestableGateFn = (
+  projectRoot: string,
+  prNumber: number,
+  repo: string | null,
+) => { readonly code: 0 | 1 | 2; readonly message: string };
+
 export interface ComputeGateOptions extends CiGateOptions, SlizardGateOptions {
   /** Override the GitHub-mergeability read (defaults to the REST reader). */
   readonly fetchMergeabilityFn?: FetchMergeabilityFn;
@@ -102,8 +125,8 @@ export interface ComputeGateOptions extends CiGateOptions, SlizardGateOptions {
    */
   readonly disableMergeabilityReconcile?: boolean;
   /**
-   * Project root for resolving plan.policy.review.minGreptileConfidence (#3095).
-   * Defaults to process.cwd() when omitted.
+   * Project root for resolving plan.policy.review.minGreptileConfidence (#3095)
+   * and for the #3875 closeout invoker. Defaults to process.cwd() when omitted.
    */
   readonly projectRoot?: string | null;
   /**
@@ -116,6 +139,14 @@ export interface ComputeGateOptions extends CiGateOptions, SlizardGateOptions {
    * REST fetch. Production callers leave unset; tests inject hermetic lists.
    */
   readonly fetchRequiredContextsFn?: FetchRequiredContextsFn;
+  /**
+   * When true, skip the #3875 closeout invoker (tests that only score Greptile).
+   * Must be set explicitly — inherited `VITEST=true` does not skip. Production
+   * merge-ready always runs closeout after a Greptile-clean verdict.
+   */
+  readonly skipCloseoutAttestable?: boolean;
+  /** Injectable closeout evaluator; production uses `evaluateCloseoutAttestable`. */
+  readonly closeoutAttestableFn?: CloseoutAttestableGateFn;
 }
 
 function resolvedMinConfidence(options: ComputeGateOptions): number {
@@ -342,6 +373,7 @@ function loadInlineGreptileFindings(
       unresolvedThreadCount: 0,
       error:
         resolved.error || "repo unresolved for inline reviewThreads lookup; pass --repo OWNER/REPO",
+      resolutionKnown: true,
     };
   }
   if (thinHtmlSummary) {
@@ -372,9 +404,15 @@ function finalizeVerdictGate(
   partialData.min_greptile_confidence = minConfidence;
   let greptileReviewTerminalOnHead = false;
   let commentsAdded: number | null = null;
+  let checkRunsUnknown = true;
+  let botCheckPresent = false;
+  let ciReadyState: string | null = null;
   if (resolved.repo !== null) {
     const check = fetchCheckRunsRest(headSha, resolved.repo, runGh);
     if (check.summary !== null) {
+      checkRunsUnknown = false;
+      botCheckPresent = botReviewCheckPresent(check.checkRuns);
+      ciReadyState = evaluateCiGate(check.checkRuns, {}).summary.ready_state;
       const greptileRun = check.checkRuns.find((run) => run.name === "Greptile Review");
       greptileReviewTerminalOnHead = isGreptileReviewTerminal(
         greptileRun?.status,
@@ -385,11 +423,28 @@ function finalizeVerdictGate(
       partialData.greptile_comments_added = commentsAdded;
     }
   }
+  const root = options.projectRoot ?? process.cwd();
+  const commentOnHead =
+    verdict.found && verdict.lastReviewedSha !== null && verdict.lastReviewedSha === headSha;
+  const expectation = evaluateReviewerExpectation({
+    policyReviewers: resolveReviewers(root).reviewers,
+    reviewCommentPresent: commentOnHead,
+    botReviewCheckPresent: botCheckPresent,
+    reviewerConfigPresent: reviewerConfigPresent(root),
+    checkRunsUnknown,
+    ciReadyState,
+  });
+  partialData.reviewer_ready_state = expectation.state;
+  partialData.review_cycle_handback = expectation.handback;
   const failures = evaluateGates(prNumber, headSha, verdict, inline, {
     minConfidence,
     greptileReviewTerminalOnHead,
     commentsAdded,
+    reviewerReadyState: expectation.state,
   });
+  const noReviewerInstalled =
+    expectation.state === REVIEWER_STATE_NO_REVIEWER_INSTALLED ||
+    failures.includes(MERGE_READY_NO_REVIEWER_FAILURE);
 
   if (failures.length === 0) {
     const ci = applyCiGateForHead(prNumber, resolved.repo, headSha, runGh, options);
@@ -417,9 +472,11 @@ function finalizeVerdictGate(
   // #2260 reconciliation: the verdict gate failed. If the block is a HARD
   // finding (genuine P0/P1, ERRORED, low confidence on the current head), keep
   // blocking. Only reconcile a SOFT block (verdict absent / stale head SHA).
+  // #3630: no-reviewer is a named hard terminal — GitHub CLEAN must not drop it.
   if (
     options.disableMergeabilityReconcile === true ||
     resolved.repo === null ||
+    noReviewerInstalled ||
     !verdictBlockIsSoftOnly(verdict, headSha, inline, minConfidence)
   ) {
     return { failures, partialData };
@@ -686,6 +743,67 @@ function errorResult(
 }
 
 /** Run the primary->fallback1->fallback2 cascade and return a result. */
+function defaultCloseoutAttestable(
+  projectRoot: string,
+  prNumber: number,
+  repo: string | null,
+): { code: 0 | 1 | 2; message: string } {
+  const result = evaluateCloseoutAttestable(projectRoot, prNumber, { repo });
+  return { code: result.code, message: result.message };
+}
+
+/**
+ * After a Greptile-clean primary/fallback1 verdict, run the closeout invoker
+ * (#3875). One evaluator, N thin invokers — supersedes #3781's single cascade
+ * call site. Config errors (exit 2) surface as `via=error`.
+ */
+function applyCloseoutAttestableGate(result: GateResult, options: ComputeGateOptions): GateResult {
+  // Explicit opt-out only — never inherit VITEST=true to skip the gate (#3875).
+  if (options.skipCloseoutAttestable === true) {
+    return result;
+  }
+  if (result.via === VIA_ERROR || result.via === VIA_FALLBACK2) {
+    return result;
+  }
+  if (!isMergeReady(result.failures)) {
+    return result;
+  }
+
+  const projectRoot = options.projectRoot ?? process.cwd();
+  const closeoutFn = options.closeoutAttestableFn ?? defaultCloseoutAttestable;
+  const closeout = closeoutFn(projectRoot, result.prNumber, result.repo);
+  if (closeout.code === 0) {
+    return result;
+  }
+
+  const message =
+    closeout.message.trim().length > 0
+      ? closeout.message.trim()
+      : `verify:pr-closeout-attestable refused PR #${result.prNumber} (code ${closeout.code})`;
+
+  if (closeout.code === 2) {
+    return {
+      ...result,
+      failures: [...result.failures, message],
+      via: VIA_ERROR,
+      error: message,
+      partialData: {
+        ...result.partialData,
+        closeout_attestable: { code: 2, message },
+      },
+    };
+  }
+
+  return {
+    ...result,
+    failures: [...result.failures, message],
+    partialData: {
+      ...result.partialData,
+      closeout_attestable: { code: 1, message },
+    },
+  };
+}
+
 export function computeGateResult(
   prNumber: number,
   repo: string | null,
@@ -694,12 +812,12 @@ export function computeGateResult(
 ): GateResult {
   let { result, partial } = computePrimary(prNumber, repo, runGh, options);
   if (result !== null) {
-    return result;
+    return applyCloseoutAttestableGate(result, options);
   }
 
   ({ result, partial } = computeFallback1(prNumber, repo, partial, runGh, options));
   if (result !== null) {
-    return result;
+    return applyCloseoutAttestableGate(result, options);
   }
 
   ({ result, partial } = computeFallback2(prNumber, repo, partial, runGh));
@@ -711,3 +829,229 @@ export function computeGateResult(
 }
 
 export { buildGateResult, isMergeReady };
+
+/** Strategy-start options for forge merge-gate enforcement readiness (#1517). */
+export interface MergeGateEnforcementStrategyStartOptions {
+  readonly projectRoot: string;
+  /** When false / unset with no GitHub remote, record/return deferred-not-applicable. */
+  readonly scmReady: boolean;
+  /** owner/repo when a GitHub remote is resolved; null/empty => deferred-not-applicable. */
+  readonly repo: string | null;
+  readonly branch: string;
+  readonly runGh: RunGhFn;
+  readonly fetchRequiredContextsFn?: FetchRequiredContextsFn;
+  /**
+   * When detection is protected and no durable record exists, auto-persist
+   * configured (decision-and-record half; configure remains optional).
+   */
+  readonly autoRecordConfigured?: boolean;
+}
+
+export interface MergeGateEnforcementStrategyStartResult {
+  readonly ok: boolean;
+  readonly decision: MergeGateEnforcementDecision | null;
+  readonly detection: MergeGateEnforcementDetection | null;
+  readonly record: MergeGateEnforcementRecord | null;
+  readonly message: string;
+  readonly remediation: string;
+}
+
+/**
+ * Fail-closed strategy-start gate for forge required-status-check readiness (#1517).
+ * Distinct from local allowDirectCommitsToMaster / deft branch-protection.
+ * Does not grant bot-merge or change requireHumanMerge.
+ */
+export function evaluateMergeGateEnforcementAtStrategyStart(
+  options: MergeGateEnforcementStrategyStartOptions,
+): MergeGateEnforcementStrategyStartResult {
+  const repo = options.repo?.trim() || "";
+  if (!options.scmReady || repo.length === 0) {
+    const reason =
+      "SCM not ready or no GitHub remote resolved; merge-gate enforcement deferred-not-applicable (#1517)";
+    if (repo.length > 0 && options.branch.trim()) {
+      writeMergeGateEnforcementRecord({
+        projectRoot: options.projectRoot,
+        repo,
+        branch: options.branch,
+        decision: "deferred-not-applicable",
+        reason,
+        detection: null,
+      });
+    }
+    return {
+      ok: true,
+      decision: "deferred-not-applicable",
+      detection: null,
+      record: null,
+      message: reason,
+      remediation: "",
+    };
+  }
+
+  const existing = readMergeGateEnforcementRecord(options.projectRoot, repo, options.branch);
+  if (!existing.ok) {
+    return {
+      ok: false,
+      decision: null,
+      detection: null,
+      record: null,
+      message: `Merge-gate enforcement record unreadable; fail closed (#1517). ${existing.error}`,
+      remediation:
+        "Repair or remove .deft/merge-gate-enforcement/<repo>--<branch>.json, then re-run strategy start.",
+    };
+  }
+
+  if (existing.record?.decision === "explicit-opt-out") {
+    return {
+      ok: true,
+      decision: existing.record.decision,
+      detection: existing.record.detection,
+      record: existing.record,
+      message: `Merge-gate enforcement decision present: ${existing.record.decision}`,
+      remediation: "",
+    };
+  }
+
+  if (existing.record?.decision === "deferred-not-applicable") {
+    // Prior local-only deferral; re-evaluate now that SCM+repo are ready.
+  }
+
+  // cannot-configure stays re-checkable; configured re-detects live inventory (#1517).
+  const fetchFn = options.fetchRequiredContextsFn ?? fetchRequiredStatusContexts;
+  const raw = fetchFn(repo, options.branch, options.runGh);
+  // Injectors may omit resolutionFailed; normalize to required boolean (fail-closed when true).
+  const inventory: RequiredStatusContextsResult = {
+    contexts: raw.contexts,
+    sources: raw.sources,
+    error: raw.error,
+    resolutionFailed: raw.resolutionFailed === true,
+  };
+  const detection = classifyMergeGateEnforcement(inventory);
+
+  if (existing.record?.decision === "configured") {
+    if (detection === "protected") {
+      return {
+        ok: true,
+        decision: "configured",
+        detection,
+        record: existing.record,
+        message:
+          "Merge-gate enforcement decision present: configured (live inventory still protected)",
+        remediation: "",
+      };
+    }
+    if (detection === "unknown") {
+      return {
+        ok: false,
+        decision: "configured",
+        detection,
+        record: existing.record,
+        message:
+          "Durable configured record exists but live forge inventory is unknown; fail closed (#1517). " +
+          (inventory.error || "resolutionFailed"),
+        remediation:
+          "Fix GitHub auth/permissions and re-run. Do not treat a stale configured record as live readiness.",
+      };
+    }
+    return {
+      ok: false,
+      decision: "configured",
+      detection,
+      record: existing.record,
+      message:
+        "Durable configured record is stale: live forge required-status-check inventory is absent (#1517).",
+      remediation:
+        "Re-configure required contexts, remove the stale .deft/merge-gate-enforcement record, or record explicit-opt-out.",
+    };
+  }
+
+  if (detection === "unknown") {
+    return {
+      ok: false,
+      decision: existing.record?.decision ?? null,
+      detection,
+      record: existing.record,
+      message:
+        "Forge required-status-check inventory unknown; fail closed at strategy start (#1517). " +
+        (inventory.error || "resolutionFailed"),
+      remediation:
+        "Fix GitHub auth/permissions and re-run. Do not record explicit-opt-out for an observation failure.",
+    };
+  }
+
+  if (detection === "protected") {
+    const contexts = normalizeRequiredContexts(inventory.contexts);
+    if (options.autoRecordConfigured !== false) {
+      const written = writeMergeGateEnforcementRecord({
+        projectRoot: options.projectRoot,
+        repo,
+        branch: options.branch,
+        decision: "configured",
+        reason: "Non-empty required contexts from fetchRequiredStatusContexts (#1517)",
+        detection,
+        contexts,
+      });
+      if (!written.ok || written.record === null) {
+        return {
+          ok: false,
+          decision: null,
+          detection,
+          record: null,
+          message:
+            "Forge required contexts are present but durable configured record write failed; fail closed (#1517). " +
+            written.error,
+          remediation:
+            "Ensure projectRoot is writable for .deft/merge-gate-enforcement/, then re-run strategy start.",
+        };
+      }
+      return {
+        ok: true,
+        decision: "configured",
+        detection,
+        record: written.record,
+        message: "Forge merge-gate enforcement ready (required contexts present)",
+        remediation: "",
+      };
+    }
+    // Existing decision==="configured" already returned above (live protected -> ok).
+    return {
+      ok: false,
+      decision: null,
+      detection,
+      record: existing.record,
+      message:
+        "Forge required contexts are present but no durable configured record exists (autoRecordConfigured=false); fail closed (#1517).",
+      remediation:
+        "Write writeMergeGateEnforcementRecord({ decision: 'configured' }) or enable autoRecordConfigured.",
+    };
+  }
+
+  // absent — need durable decision before strategies proceed
+  if (existing.record?.decision === "cannot-configure") {
+    return {
+      ok: false,
+      decision: "cannot-configure",
+      detection,
+      record: existing.record,
+      message:
+        "Required status checks are absent and prior configure was cannot-configure (re-checkable, not an opt-out) (#1517).",
+      remediation:
+        "Retry optional configure with operator-selected contexts (never empty PUT), or record explicit-opt-out. " +
+        "Readiness acceptance does not grant bot-merge or change requireHumanMerge.",
+    };
+  }
+
+  return {
+    ok: false,
+    decision: null,
+    detection,
+    record: existing.record,
+    message:
+      "Forge required-status-check inventory is absent; strategy start blocked until configured or explicit-opt-out (#1517).",
+    remediation:
+      "Detect via fetchRequiredStatusContexts (rulesets+classic). Optionally configure with operator-confirmed every-PR contexts (pin app id; never auto-promote harvested names; never empty PUT). " +
+      "Or writeMergeGateEnforcementRecord({ decision: 'explicit-opt-out' }). " +
+      "Setup Phase 2 branch-protection ON is agent-commit policy only — distinct axis. " +
+      "Directive does not assume consumer CI workflows are already scaffolded; detect-and-configure may wait for first default-branch run while decision-and-record can complete earlier.",
+  };
+}

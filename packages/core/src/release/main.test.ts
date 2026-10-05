@@ -23,6 +23,89 @@ describe("cmdRelease integration", () => {
     }
   });
 
+  it("rejects unpaid --allow-skip-ci without distinct override via runPipeline (#5239)", () => {
+    const err: string[] = [];
+    const origErr = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((c: string | Uint8Array) => {
+      err.push(String(c));
+      return true;
+    }) as typeof process.stderr.write;
+    const seams: ReleaseSeams = {
+      validateReleaseInputs: passReleaseInputs,
+      probeSkipCiIncidentLedger: () => ({
+        unpaid: [{ issue: 5239, reasons: ["changelog_spent"] }],
+      }),
+      spawnText: (_c, a) => {
+        if (a.includes("status")) return { status: 0, stdout: "", stderr: "" };
+        if (a.includes("branch") || a.includes("rev-parse") || a.includes("symbolic-ref")) {
+          return { status: 0, stdout: "master\n", stderr: "" };
+        }
+        return { status: 0, stdout: "", stderr: "" };
+      },
+      checkTagAvailable: () => [true, "ok"],
+      checkVbriefLifecycleSync: () => [true, 0, ""],
+      fileExists: (p) => p.endsWith("CHANGELOG.md") || p.endsWith("ROADMAP.md"),
+      readFile: () => CHANGELOG,
+      todayIso: () => "2026-06-19",
+    };
+    try {
+      expect(
+        cmdRelease(
+          [
+            "0.21.0",
+            "--skip-ci",
+            "--allow-skip-ci=5239",
+            "--skip-tag",
+            "--skip-release",
+            "--allow-dirty",
+            "--repo",
+            "deftai/directive",
+            "--project-root",
+            seedReleaseProjectDir(),
+            "--allow-vbrief-drift",
+          ],
+          seams,
+        ),
+      ).toBe(2);
+      expect(err.join("")).toMatch(/unpaid/);
+      expect(err.join("")).toMatch(/allow-unpaid-skip-ci=#5239/);
+    } finally {
+      process.stderr.write = origErr;
+    }
+  });
+
+  it("skips unpaid ledger probe on dry-run so offline rehearsals are not UNKNOWN-refused (#5239)", () => {
+    let probed = false;
+    const seams: ReleaseSeams = {
+      validateReleaseInputs: passReleaseInputs,
+      todayIso: () => "2026-06-19",
+      fileExists: (p) => p.endsWith("CHANGELOG.md"),
+      readFile: () => CHANGELOG,
+      probeSkipCiIncidentLedger: () => {
+        probed = true;
+        return { unpaid: [{ issue: 5239, reasons: ["open_or_unknown"] }] };
+      },
+    };
+    const code = cmdRelease(
+      [
+        "0.21.0",
+        "--dry-run",
+        "--skip-tag",
+        "--skip-release",
+        "--repo",
+        "deftai/directive",
+        "--project-root",
+        seedReleaseProjectDir(),
+        "--allow-vbrief-drift",
+        "--skip-ci",
+        "--allow-skip-ci=5239",
+      ],
+      seams,
+    );
+    expect(probed).toBe(false);
+    expect(code).toBe(0);
+  });
+
   it("runs dry-run pipeline end-to-end via seams", () => {
     const err: string[] = [];
     const origErr = process.stderr.write.bind(process.stderr);
@@ -36,6 +119,8 @@ describe("cmdRelease integration", () => {
       todayIso: () => "2026-06-19",
       fileExists: (p) => p.endsWith("CHANGELOG.md"),
       readFile: () => CHANGELOG,
+      // Avoid live gh unpaid probe on fixture citation (#5239).
+      probeSkipCiIncidentLedger: () => ({ unpaid: [] }),
     };
 
     try {
@@ -84,6 +169,8 @@ describe("pipeline verify flip failure", () => {
     };
     const seams: ReleaseSeams = {
       validateReleaseInputs: passReleaseInputs,
+      // Paid citation for this fixture — avoid live unpaid probe (#5239).
+      probeSkipCiIncidentLedger: () => ({ unpaid: [] }),
       spawnText: (_c, a) => {
         if (a.includes("status")) return { status: 0, stdout: "", stderr: "" };
         if (a.includes("branch")) return { status: 0, stdout: "master\n", stderr: "" };

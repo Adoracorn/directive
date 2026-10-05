@@ -1,12 +1,23 @@
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { evaluate as evaluateBranchPolicy } from "../branch/evaluate.js";
 import { extractIssueRef } from "../capacity/backfill.js";
 import { composeDocsImpactBody, verifyDocsImpactBodyFile } from "../docs/docs-impact.js";
 import { containedWrite } from "../fs/contained-write.js";
 import { resolveLifecycleRoot } from "../layout/resolve.js";
+import {
+  productPullRequestFromPlan,
+  stampProductPullRequestOntoPlan,
+} from "../orphan-active/running-briefs.js";
 import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
+import { policyColonInvocation } from "../policy/policy-invocation.js";
+import {
+  ENV_ALLOW_BOT_MERGE,
+  evaluateAgentMerge,
+  resolveHumanMergePolicy,
+} from "../policy/require-human-merge.js";
+import { parseAllDeftStoryMarks } from "../pr-closing-keywords/main.js";
 import { defaultRunGh, fetchClosingIssuesReferences } from "../pr-protected-issues/gh.js";
 import type { RunGhFn } from "../pr-protected-issues/types.js";
 import {
@@ -16,10 +27,28 @@ import {
   verifyDeliveryAncestry,
 } from "../scope/delivery-evidence.js";
 import type { GitRunner } from "../session/git.js";
+import { materializeRetainedBrief, SOURCE_RECOVERY_REMEDIATION } from "./brief-transport.js";
 import { completeCohort, type SweepResult } from "./complete-cohort.js";
-import { EXIT_CONFIG_ERROR, EXIT_GATE_FAILED, EXIT_OK } from "./constants.js";
-import { completedBriefReferencesIssue, resolveStories } from "./launch.js";
+import { EXIT_CONFIG_ERROR, EXIT_GATE_FAILED, EXIT_INCOMPLETE, EXIT_OK } from "./constants.js";
+import {
+  cancelledBriefReferencesIssue,
+  completedBriefReferencesIssue,
+  resolveStories,
+  terminalBriefReferencesIssue,
+} from "./launch.js";
+import {
+  evaluateLifecycleDiff,
+  expectedLifecycleRels,
+  parseStagedXbriefPaths,
+} from "./lifecycle-diff.js";
 import { runText } from "./subprocess.js";
+
+/** Structured awaiting-land state (#4919). Distinct from validation/REST failures. */
+export interface FinalizeOriginClosePending {
+  readonly kind: "origin-close";
+  readonly issues: readonly number[];
+  readonly detail: string;
+}
 
 export interface FinalizeCohortResult {
   readonly project_root: string;
@@ -38,6 +67,8 @@ export interface FinalizeCohortResult {
   readonly errors: readonly string[];
   readonly warnings: readonly string[];
   readonly ok: boolean;
+  /** Present when origin-close awaits delivery-branch land (#4919). */
+  readonly pending: FinalizeOriginClosePending | null;
 }
 
 export interface FinalizeCohortArgs {
@@ -63,6 +94,16 @@ export interface FinalizeCohortArgs {
   readonly landProbeLimit?: number;
   /** Test seam. Omitted pauses use the production wait. */
   readonly sleep?: (ms: number) => void;
+  /**
+   * #4919 owed hand-off: after opening the leftover PR, enable auto-merge and
+   * return origin-close pending without waiting for land.
+   */
+  readonly handOffLeftover?: boolean;
+  /**
+   * Retained worker dest roots that may hold an active brief absent from the
+   * isolated delivery checkout (#4714 R5). Default: the calling project root.
+   */
+  readonly retainedDests?: readonly string[];
 }
 
 function splitCsv(values: readonly string[]): string[] {
@@ -263,7 +304,8 @@ function fetchIssueClosed(issue: number, repo: string | null, runGh: RunGhFn): b
   }
 }
 
-const PROTECTED_STAYING_OPEN_LABELS = new Set([
+/** Shared with finalize-owed protected skip (#5143 / #4919). */
+export const PROTECTED_STAYING_OPEN_LABELS = new Set([
   "epic",
   "meta",
   "tracker",
@@ -331,6 +373,7 @@ function completedBriefRelpathForIssue(projectRoot: string, issue: number): stri
 function collectOriginIssueNumbers(
   storyPaths: readonly string[],
   storyTokens: readonly string[],
+  extraIssues: readonly number[] = [],
 ): number[] {
   const issues = new Set<number>();
   for (const path of storyPaths) {
@@ -345,7 +388,165 @@ function collectOriginIssueNumbers(
       issues.add(Number(token));
     }
   }
+  for (const issue of extraIssues) {
+    if (Number.isInteger(issue) && issue > 0) {
+      issues.add(issue);
+    }
+  }
   return [...issues].sort((a, b) => a - b);
+}
+
+/** Nonterminal + completed mark-reader folders (#4919 / TIP_NONTERMINAL + completed). */
+const MARK_READER_FOLDERS = [
+  "xbrief/proposed",
+  "xbrief/pending",
+  "xbrief/active",
+  "xbrief/completed",
+  "vbrief/proposed",
+  "vbrief/pending",
+  "vbrief/active",
+  "vbrief/completed",
+] as const;
+
+function originClosePendingState(
+  issues: readonly number[],
+  deliveryBranch: string,
+): FinalizeOriginClosePending {
+  return {
+    kind: "origin-close",
+    issues: [...issues],
+    detail: `origin-close pending; completed brief not yet on origin/${deliveryBranch}`,
+  };
+}
+
+/**
+ * Briefs (TIP_NONTERMINAL + completed) whose metadata.productPullRequest matches a
+ * product PR (#4864 / #4919). Equivalent durable mark to PR-body `deft-story: N`.
+ */
+function collectProductPullRequestOrigins(
+  projectRoot: string,
+  prNumbers: readonly number[],
+): { issue: number; productPr: number }[] {
+  if (prNumbers.length === 0) {
+    return [];
+  }
+  const prSet = new Set(prNumbers);
+  const byIssue = new Map<number, number>();
+  for (const folder of MARK_READER_FOLDERS) {
+    const dir = resolve(projectRoot, folder);
+    if (!existsSync(dir)) {
+      continue;
+    }
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".json")) {
+        continue;
+      }
+      const full = resolve(dir, name);
+      try {
+        const raw = JSON.parse(readFileSync(full, "utf8")) as unknown;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          continue;
+        }
+        const plan = (raw as Record<string, unknown>).plan;
+        if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+          continue;
+        }
+        const productPr = productPullRequestFromPlan(plan as Record<string, unknown>);
+        if (productPr === null || !prSet.has(productPr)) {
+          continue;
+        }
+        const issue = githubIssueFromBrief(full);
+        if (issue !== null) {
+          byIssue.set(issue, productPr);
+        }
+      } catch {
+        /* unreadable brief — skip */
+      }
+    }
+  }
+  return [...byIssue.entries()]
+    .map(([issue, productPr]) => ({ issue, productPr }))
+    .sort((a, b) => a.issue - b.issue);
+}
+
+/**
+ * PR-body `deft-story: N` may bind only when this PR is delivery for N (#4864 / #4919):
+ * TIP_NONTERMINAL or completed brief for N with metadata.productPullRequest === this PR.
+ * Absent stamp never binds (unrelated completed issue must not close).
+ */
+function deftStoryMarkBindsDelivery(projectRoot: string, issue: number, prNumber: number): boolean {
+  for (const folder of MARK_READER_FOLDERS) {
+    const dir = resolve(projectRoot, folder);
+    if (!existsSync(dir)) {
+      continue;
+    }
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".json")) {
+        continue;
+      }
+      const full = resolve(dir, name);
+      try {
+        if (githubIssueFromBrief(full) !== issue) {
+          continue;
+        }
+        const raw = JSON.parse(readFileSync(full, "utf8")) as unknown;
+        if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+          continue;
+        }
+        const plan = (raw as Record<string, unknown>).plan;
+        if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+          continue;
+        }
+        if (productPullRequestFromPlan(plan as Record<string, unknown>) === prNumber) {
+          return true;
+        }
+      } catch {
+        /* unreadable brief — try next */
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Persist productPullRequest on an active brief before leftover-complete so the
+ * completed artifact still binds this PR for deft-story origin-close (#4864).
+ */
+function stampProductPullRequestOnBriefFile(
+  projectRoot: string,
+  briefPath: string,
+  prNumber: number,
+): boolean {
+  if (!Number.isInteger(prNumber) || prNumber <= 0) {
+    return false;
+  }
+  try {
+    const raw = JSON.parse(readFileSync(briefPath, "utf8")) as unknown;
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      return false;
+    }
+    const data = raw as Record<string, unknown>;
+    const plan = data.plan;
+    if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+      return false;
+    }
+    const planObj = plan as Record<string, unknown>;
+    if (productPullRequestFromPlan(planObj) === prNumber) {
+      return true;
+    }
+    if (!stampProductPullRequestOntoPlan(planObj, prNumber)) {
+      return false;
+    }
+    containedWrite({
+      root: projectRoot,
+      target: relative(projectRoot, briefPath),
+      data: `${JSON.stringify(data, null, 2)}\n`,
+      mode: "replace",
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function listLandedCompletedRelpaths(
@@ -451,7 +652,8 @@ function labelNamesFromIssuePayload(payload: Record<string, unknown>): string[] 
   return names;
 }
 
-function isProtectedStayingOpenUmbrella(payload: Record<string, unknown>): boolean {
+/** True when origin labels mean the issue stays open (epic/tracker/umbrella) (#5143). */
+export function isProtectedStayingOpenUmbrella(payload: Record<string, unknown>): boolean {
   for (const name of labelNamesFromIssuePayload(payload)) {
     const lower = name.toLowerCase();
     if (PROTECTED_STAYING_OPEN_LABELS.has(lower) || lower.includes("umbrella")) {
@@ -470,36 +672,40 @@ function closeOriginsAfterLeftoverComplete(args: {
   readonly dryRun: boolean;
   readonly runGh: RunGhFn;
   readonly runGit: typeof runText;
-  /** After a confirmed land, a missing brief is a refusal, not a success skip. */
-  readonly missingOnBranchIsError?: boolean;
-}): { errors: string[]; warnings: string[] } {
+}): {
+  errors: string[];
+  warnings: string[];
+  /** Issues whose completed brief is not yet on the delivery tip (#4919). */
+  pendingIssues: number[];
+} {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const pendingIssues: number[] = [];
   if (args.dryRun || args.originIssues.length === 0) {
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   if (args.prNumbers.length === 0) {
     warnings.push(
       "origin-close skipped: parked-with-no-merged-PR (pass --pr of the product PR after leftover-complete land).",
     );
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   if (args.repo === null || args.repo.length === 0) {
     errors.push(
       "origin-close refused DONE: leftover-complete land requires --repo OWNER/REPO for REST GET of origin issues (#4824).",
     );
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   const parsed = parseRepo(args.repo);
   if (parsed === null) {
     errors.push(`origin-close refused DONE: invalid --repo value: ${JSON.stringify(args.repo)}`);
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
 
   const landed = listLandedCompletedRelpaths(args.projectRoot, args.deliveryBranch, args.runGit);
   if (landed.error !== null) {
     errors.push(`origin-close refused DONE: ${landed.error}.`);
-    return { errors, warnings };
+    return { errors, warnings, pendingIssues };
   }
   const prLabel = args.prNumbers.map((n) => `#${String(n)}`).join(", ");
   const commentBody = `Completed in ${prLabel}`;
@@ -507,23 +713,8 @@ function closeOriginsAfterLeftoverComplete(args: {
   for (const issue of args.originIssues) {
     const completedRel = completedBriefRelpathForIssue(args.projectRoot, issue);
     if (completedRel === null || !landed.names.has(completedRel)) {
-      const notOnBranch =
-        "#" +
-        String(issue) +
-        ": origin-close skipped; leftover-complete not on origin/" +
-        args.deliveryBranch +
-        " (#4824).";
-      if (args.missingOnBranchIsError === true) {
-        errors.push(
-          "#" +
-            String(issue) +
-            ": origin-close refused DONE: completed brief is not on origin/" +
-            args.deliveryBranch +
-            ". Issue not closed.",
-        );
-      } else {
-        warnings.push(notOnBranch);
-      }
+      // Unified pending signal (#4919): not a soft CLEAN warning and not GATE_FAILED.
+      pendingIssues.push(issue);
       continue;
     }
     const shown = args.runGit(["git", "show", `origin/${args.deliveryBranch}:${completedRel}`], {
@@ -596,10 +787,14 @@ function closeOriginsAfterLeftoverComplete(args: {
       );
     }
   }
-  return { errors, warnings };
+  return { errors, warnings, pendingIssues };
 }
 
-function deriveLabel(
+/**
+ * Shared finalize branch / claim-ref label (#4919).
+ * Same inputs → same `swarm/finalize/<label>` for finalize-cohort and finalize-owed.
+ */
+export function deriveFinalizeBranchLabel(
   label: string | null | undefined,
   prNumbers: readonly number[],
   storyTokens: readonly string[],
@@ -614,6 +809,93 @@ function deriveLabel(
     return safeSegment(storyTokens.slice(0, 3).join("-"));
   }
   return "cohort";
+}
+
+/** @deprecated Prefer deriveFinalizeBranchLabel (#4919). */
+function deriveLabel(
+  label: string | null | undefined,
+  prNumbers: readonly number[],
+  storyTokens: readonly string[],
+): string {
+  return deriveFinalizeBranchLabel(label, prNumbers, storyTokens);
+}
+
+export function finalizeClaimRef(
+  label: string | null | undefined,
+  prNumbers: readonly number[],
+  storyTokens: readonly string[],
+): string {
+  return `swarm/finalize/${deriveFinalizeBranchLabel(label, prNumbers, storyTokens)}`;
+}
+
+/** Durable finalize leftover head class (#3791). Fail-closed membership for lifecycle auto-merge. */
+export const DURABLE_FINALIZE_HEAD_PREFIX = "swarm/finalize/";
+
+/**
+ * First-ship assumption (#3791 P1): when the documented bot-merge override is on
+ * (`policy:allow-bot-merge` / `DEFT_ALLOW_BOT_MERGE` / requireHumanMerge effective false),
+ * surface-3 (branch protection / required reviewers) does not require a human reviewer
+ * on `swarm/finalize/*` for leftover auto-land. Hosts that do require reviewers need a
+ * BP/ruleset exception for this same class. Claim-stale (`FINALIZE_CLAIM_STALE_MS`) is
+ * not PR-stale. Branch prefix alone never bypasses requireHumanMerge.
+ */
+export const FINALIZE_CLASS_HUMAN_MERGE_ASSUMPTION =
+  "first-ship assumption: when bot-merge override is on, surface-3 does not require a human reviewer on swarm/finalize/* (#3791)";
+
+/** Fail-closed: only heads under the durable finalize prefix admit the lifecycle carve-out. */
+export function isDurableFinalizeHeadRef(headRef: string | null | undefined): boolean {
+  if (typeof headRef !== "string") {
+    return false;
+  }
+  const trimmed = headRef.trim();
+  return (
+    trimmed.startsWith(DURABLE_FINALIZE_HEAD_PREFIX) &&
+    trimmed.length > DURABLE_FINALIZE_HEAD_PREFIX.length
+  );
+}
+
+/**
+ * Documented lifecycle-only leftover auto-merge gate (#3791 P1).
+ * Arms only when BOTH hold:
+ * 1. fail-closed durable finalize class (`swarm/finalize/*`)
+ * 2. documented bot-merge override via the #1193 helpers (`policy:allow-bot-merge` /
+ *    `DEFT_ALLOW_BOT_MERGE` / requireHumanMerge effective false from resolveHumanMergePolicy)
+ * Not a bare branch-prefix bypass of requireHumanMerge, and not a general bot-merge remint.
+ */
+export interface FinalizeClassMergeCarveOut {
+  readonly allowed: boolean;
+  readonly assumption: string | null;
+  readonly reason: string;
+}
+
+export function evaluateFinalizeClassMergeCarveOut(
+  headRef: string | null | undefined,
+  projectRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): FinalizeClassMergeCarveOut {
+  if (!isDurableFinalizeHeadRef(headRef)) {
+    return {
+      allowed: false,
+      assumption: null,
+      reason: "head is not a durable swarm/finalize/* leftover",
+    };
+  }
+  const policy = resolveHumanMergePolicy(projectRoot, env);
+  if (policy.requireHumanMerge) {
+    return {
+      allowed: false,
+      assumption: null,
+      reason:
+        "finalize leftover needs bot-merge policy (" +
+        `${policyColonInvocation("allow-bot-merge", " -- --confirm")} / ${ENV_ALLOW_BOT_MERGE}=1) ` +
+        "or human merge (#1193 / #3791)",
+    };
+  }
+  return {
+    allowed: true,
+    assumption: FINALIZE_CLASS_HUMAN_MERGE_ASSUMPTION,
+    reason: "lifecycle-only finalize-class carve-out with bot-merge override (#3791)",
+  };
 }
 
 function storySlugs(storyPaths: readonly string[]): string {
@@ -687,19 +969,89 @@ function ensureFeatureBranch(
   return { ok: true, error: null, branch: currentBranch };
 }
 
+/**
+ * Paths completeCohort may rewrite beside the selected stories: epic parents,
+ * twin completions, and registry companions (#4714 R7).
+ */
+function derivedLifecycleRelsFromSweep(
+  projectRoot: string,
+  storyPaths: readonly string[],
+  sweep: SweepResult | null,
+): string[] {
+  const selected = new Set(storyPaths.map((p) => resolve(p)));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const addPath = (fullPath: string): void => {
+    const resolvedPath = resolve(fullPath);
+    if (selected.has(resolvedPath) || seen.has(resolvedPath)) {
+      return;
+    }
+    seen.add(resolvedPath);
+    out.push(posixProjectRel(projectRoot, resolvedPath));
+  };
+  if (sweep !== null) {
+    for (const rec of [...sweep.stories, ...sweep.parents]) {
+      if (!rec.ok || rec.path.trim().length === 0) {
+        continue;
+      }
+      addPath(rec.path);
+      // Transition records keep the pre-move path; admit the terminal twin too.
+      const rel = posixProjectRel(projectRoot, rec.path);
+      if (rel.includes("/active/") || rel.includes("/pending/")) {
+        const completed = rel
+          .replace("/active/", "/completed/")
+          .replace("/pending/", "/completed/");
+        const cancelled = rel
+          .replace("/active/", "/cancelled/")
+          .replace("/pending/", "/cancelled/");
+        out.push(completed, cancelled);
+      }
+    }
+  }
+  return [...new Set(out)].sort();
+}
+
 function commitLifecycleMoves(
   projectRoot: string,
   storyPaths: readonly string[],
   runGit: typeof runText,
+  derivedRels: readonly string[] = [],
 ): { ok: boolean; error: string | null; sha: string | null } {
   const branchCheck = evaluateBranchPolicy(projectRoot);
   if (branchCheck.exitCode !== 0) {
     return { ok: false, error: branchCheck.message, sha: null };
   }
 
-  const add = runGit(["git", "add", "-A", "xbrief/"], { cwd: projectRoot });
+  const statusBefore = runGit(["git", "status", "--short", "--", "xbrief/", "vbrief/"], {
+    cwd: projectRoot,
+  });
+  if (statusBefore.returncode !== 0) {
+    return {
+      ok: false,
+      error: `git status failed before lifecycle commit: ${statusBefore.stderr.trim()}`,
+      sha: null,
+    };
+  }
+  const storyRels = storyPaths.map((p) => posixProjectRel(projectRoot, p));
+  const allowed = expectedLifecycleRels(storyRels, derivedRels);
+  const stagedPreview = parseStagedXbriefPaths(statusBefore.stdout);
+  const diff = evaluateLifecycleDiff(stagedPreview, allowed);
+  if (!diff.ok) {
+    return { ok: false, error: diff.error, sha: null };
+  }
+
+  const add = runGit(["git", "add", "-A", "xbrief/", "vbrief/"], { cwd: projectRoot });
   if (add.returncode !== 0) {
     return { ok: false, error: `git add failed: ${add.stderr.trim()}`, sha: null };
+  }
+
+  const statusAfter = runGit(["git", "status", "--short", "--", "xbrief/", "vbrief/"], {
+    cwd: projectRoot,
+  });
+  const stagedAfter = parseStagedXbriefPaths(statusAfter.stdout);
+  const diffAfter = evaluateLifecycleDiff(stagedAfter, allowed);
+  if (!diffAfter.ok) {
+    return { ok: false, error: diffAfter.error, sha: null };
   }
 
   const slugs = storySlugs(storyPaths);
@@ -796,6 +1148,30 @@ function pushAndOpenPr(
   return { ok: true, error: null, prUrl: create.stdout.trim() };
 }
 
+function enableLeftoverAutoMerge(
+  repo: string,
+  prNumber: number,
+  runGh: RunGhFn,
+): { ok: boolean; detail: string } {
+  const result = runGh([
+    "gh",
+    "pr",
+    "merge",
+    String(prNumber),
+    "--repo",
+    repo,
+    "--auto",
+    "--squash",
+  ]);
+  if (result.returncode !== 0) {
+    return {
+      ok: false,
+      detail: result.stderr.trim() || result.stdout.trim() || "auto-merge enable failed",
+    };
+  }
+  return { ok: true, detail: "auto-merge enabled" };
+}
+
 interface LifecycleCheckout {
   readonly checkout: string;
   readonly parent: string;
@@ -882,6 +1258,7 @@ function remapStoriesToCheckout(
   evidenceByPath: ReadonlyMap<string, DeliveryEvidenceInput>,
   deliveryBranch: string,
   runGit: typeof runText,
+  retainedDests: readonly string[] = [],
 ):
   | {
       ok: true;
@@ -893,9 +1270,10 @@ function remapStoriesToCheckout(
   const paths: string[] = [];
   const evidence = new Map<string, DeliveryEvidenceInput>();
   let landedCount = 0;
+  const retainedRoots = retainedDests.length > 0 ? [...retainedDests] : [projectRoot];
   for (const storyPath of storyPaths) {
     const rel = posixProjectRel(projectRoot, storyPath);
-    const next = resolve(checkout, rel);
+    let next = resolve(checkout, rel);
     if (!existsSync(next)) {
       const completedRel = expectedCompletedRel(projectRoot, storyPath);
       const landed = listLandedCompletedRelpaths(projectRoot, deliveryBranch, runGit);
@@ -903,15 +1281,29 @@ function remapStoriesToCheckout(
         landedCount += 1;
         continue;
       }
-      return {
-        ok: false,
-        error:
-          `lifecycle checkout is missing ${rel}. ` +
-          "Refusing to move the brief in the implement worktree.",
-      };
+      const boundEvidence = evidenceByPath.get(resolve(storyPath)) ?? evidenceByPath.get(storyPath);
+      const reviewedCommit = boundEvidence?.mergeCommit ?? boundEvidence?.deliveryCommit ?? null;
+      const materialized = materializeRetainedBrief({
+        checkoutRoot: checkout,
+        projectRoot,
+        relPath: rel,
+        retainedRoots,
+        reviewedCommitIsh: reviewedCommit,
+        deliveryBranch,
+        runGit,
+      });
+      if (!materialized.ok) {
+        return {
+          ok: false,
+          error:
+            `lifecycle checkout is missing ${rel}. ${materialized.error} ` +
+            "Refusing to move the brief in the implement worktree.",
+        };
+      }
+      next = materialized.path;
     }
     paths.push(next);
-    const bound = evidenceByPath.get(resolve(storyPath));
+    const bound = evidenceByPath.get(resolve(storyPath)) ?? evidenceByPath.get(storyPath);
     if (bound !== undefined) {
       evidence.set(resolve(next), bound);
     }
@@ -923,6 +1315,27 @@ function remapStoriesToCheckout(
     };
   }
   return { ok: true, paths, evidence, alreadyLanded: landedCount > 0 && paths.length === 0 };
+}
+
+/** True when any local lifecycle brief references the issue (#4714 R6 expected-scoped). */
+function localBriefReferencesIssue(projectRoot: string, issue: number): boolean {
+  for (const folder of ["proposed", "pending", "active", "completed", "cancelled"] as const) {
+    for (const rootName of ["xbrief", "vbrief"] as const) {
+      const dir = resolve(projectRoot, rootName, folder);
+      if (!existsSync(dir)) {
+        continue;
+      }
+      for (const name of readdirSync(dir)) {
+        if (!name.endsWith(".json")) {
+          continue;
+        }
+        if (githubIssueFromBrief(resolve(dir, name)) === issue) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function originCloseRoot(checkout: string | null, projectRoot: string): string {
@@ -1137,6 +1550,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors: [],
       errors: [`project root does not exist: ${projectRoot}`],
       warnings: [],
+      pending: null,
       ok: false,
       emitJson: args.emitJson ?? false,
       exitCode: EXIT_CONFIG_ERROR,
@@ -1160,6 +1574,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors: [],
       errors: [`no xbrief/ directory under project root: ${projectRoot}`],
       warnings: [],
+      pending: null,
       ok: false,
       emitJson: args.emitJson ?? false,
       exitCode: EXIT_CONFIG_ERROR,
@@ -1171,6 +1586,8 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
   const evidenceByIssue = new Map<number, DeliveryEvidenceInput>();
   const validatedEvidence = new Map<number, DeliveryEvidenceInput>();
   const validatedPrs: number[] = [];
+  /** Full-story close intent from PR-body `deft-story: N` (#4864). Not Tracking/Refs scrape. */
+  const fullStoryCloseIssues = new Set<number>();
   let closingLookupFailed = false;
 
   if (prNumbers.length > 0 && errors.length === 0) {
@@ -1237,6 +1654,20 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
           closingIssues.add(issue);
           evidenceByIssue.set(issue, prEvidence);
         }
+
+        const prBody = typeof snap.payload.body === "string" ? snap.payload.body : "";
+        for (const issue of parseAllDeftStoryMarks(prBody)) {
+          if (!deftStoryMarkBindsDelivery(projectRoot, issue, prNumber)) {
+            errors.push(
+              `#${String(issue)}: deft-story mark on PR #${String(prNumber)} does not bind PR delivery ` +
+                `(need active or completed brief #${String(issue)} with ` +
+                `metadata.productPullRequest=${String(prNumber)}) (#4864).`,
+            );
+            continue;
+          }
+          fullStoryCloseIssues.add(issue);
+          evidenceByIssue.set(issue, prEvidence);
+        }
       }
     }
   }
@@ -1245,8 +1676,20 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     errors.push(...deliveryErrors);
   }
 
-  if (storyTokens.length === 0 && closingIssues.size === 0) {
-    errors.push("empty cohort: pass --pr <numbers> and/or --stories <ids|paths>.");
+  const productPrOrigins = collectProductPullRequestOrigins(projectRoot, validatedPrs);
+  for (const { issue, productPr } of productPrOrigins) {
+    fullStoryCloseIssues.add(issue);
+    const bound = validatedEvidence.get(productPr);
+    if (bound !== undefined) {
+      evidenceByIssue.set(issue, bound);
+    }
+  }
+
+  if (storyTokens.length === 0 && closingIssues.size === 0 && fullStoryCloseIssues.size === 0) {
+    errors.push(
+      "empty cohort: pass --pr <numbers> and/or --stories <ids|paths> " +
+        "(or record full-story close intent via deft-story: N / productPullRequest).",
+    );
   }
 
   const warnings: string[] = [];
@@ -1269,7 +1712,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     }
     for (const err of resolved.errors) {
       const m = /^#(\d+): no active story references this issue\.?$/.exec(err);
-      if (m !== null && completedBriefReferencesIssue(projectRoot, Number(m[1]))) {
+      if (m !== null && terminalBriefReferencesIssue(projectRoot, Number(m[1]))) {
         continue;
       }
       errors.push(err);
@@ -1277,10 +1720,11 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
   }
 
   // Closing-issue tokens are incidental (they come from a merged PR's structured
-  // closing refs, not the operator). A benign ref -- one whose issue is already
-  // closed OR already has a brief in completed/ -- is SKIPPED WITH A WARNING
-  // rather than aborting the whole sweep. A genuine misconfig (open issue, no
-  // active and no completed brief) is still surfaced as a hard error (#2247).
+  // closing refs, not the operator). #4714 R6: expected scoped issues without
+  // active or terminal records cannot use the #2247 closed-ref no-op. Preserve
+  // the warning only for genuinely incidental unscoped refs (no local brief
+  // reference, not full-story / productPullRequest-bound). Completed twin is
+  // still an idempotent skip.
   for (const issue of [...closingIssues].sort((a, b) => a - b)) {
     const resolved = resolveStories(projectRoot, [String(issue)]);
     if (resolved.resolved.length > 0) {
@@ -1297,43 +1741,86 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       continue;
     }
     const completedBrief = completedBriefReferencesIssue(projectRoot, issue);
-    const issueClosed = completedBrief || fetchIssueClosed(issue, repo, runGh);
-    if (completedBrief || issueClosed) {
+    const cancelledBrief = cancelledBriefReferencesIssue(projectRoot, issue);
+    if (completedBrief || cancelledBrief) {
       let dispositionNote = "";
-      if (completedBrief) {
-        try {
-          const completedDir = resolve(projectRoot, "xbrief", "completed");
-          // Best-effort surface of legacy delivery disposition for completed briefs (#3041).
-          if (existsSync(completedDir)) {
-            for (const name of readdirSync(completedDir)) {
-              if (!name.endsWith(".json")) continue;
-              const raw = JSON.parse(readFileSync(resolve(completedDir, name), "utf8")) as unknown;
-              if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
-              const plan = (raw as Record<string, unknown>).plan;
-              if (typeof plan !== "object" || plan === null || Array.isArray(plan)) continue;
-              const disposition = classifyStoredDeliveryDisposition(
-                plan as Record<string, unknown>,
-              );
-              dispositionNote = ` deliveryDisposition=${disposition}`;
-              break;
-            }
+      const terminalLabel = completedBrief ? "completed" : "cancelled";
+      try {
+        const terminalDir = resolve(
+          projectRoot,
+          "xbrief",
+          completedBrief ? "completed" : "cancelled",
+        );
+        // Best-effort surface of legacy delivery disposition for terminal briefs (#3041).
+        if (existsSync(terminalDir)) {
+          for (const name of readdirSync(terminalDir)) {
+            if (!name.endsWith(".json")) continue;
+            const raw = JSON.parse(readFileSync(resolve(terminalDir, name), "utf8")) as unknown;
+            if (raw === null || typeof raw !== "object" || Array.isArray(raw)) continue;
+            const plan = (raw as Record<string, unknown>).plan;
+            if (typeof plan !== "object" || plan === null || Array.isArray(plan)) continue;
+            const disposition = classifyStoredDeliveryDisposition(plan as Record<string, unknown>);
+            dispositionNote = ` deliveryDisposition=${disposition}`;
+            break;
           }
-        } catch {
-          /* best-effort disposition surfacing for legacy completed records */
         }
+      } catch {
+        /* best-effort disposition surfacing for legacy terminal records */
       }
-      const reason = completedBrief
-        ? `a completed brief already exists${dispositionNote}`
-        : "the issue is already closed";
       warnings.push(
-        `#${issue}: no active story references this closing issue; skipped (${reason}).`,
+        `#${issue}: no active story references this closing issue; skipped ` +
+          `(a ${terminalLabel} brief already exists${dispositionNote}).`,
+      );
+      continue;
+    }
+    const expectedScoped =
+      fullStoryCloseIssues.has(issue) || localBriefReferencesIssue(projectRoot, issue);
+    if (expectedScoped) {
+      errors.push(
+        `#${issue}: expected scoped issue has no active or terminal brief. ` +
+          `${SOURCE_RECOVERY_REMEDIATION}`,
+      );
+      continue;
+    }
+    const issueClosed = fetchIssueClosed(issue, repo, runGh);
+    if (issueClosed) {
+      warnings.push(
+        `#${issue}: no active story references this closing issue; skipped ` +
+          `(incidental unscoped ref; the issue is already closed).`,
       );
     } else {
       errors.push(`#${issue}: no active story references this closing issue.`);
     }
   }
 
-  const originIssues = collectOriginIssueNumbers(storyPaths, storyTokens);
+  // Full-story marks (#4864): same active-story attach; completed-only stays for origin-close.
+  for (const issue of [...fullStoryCloseIssues].sort((a, b) => a - b)) {
+    if (closingIssues.has(issue)) {
+      continue;
+    }
+    const resolved = resolveStories(projectRoot, [String(issue)]);
+    if (resolved.resolved.length > 0) {
+      for (const story of resolved.resolved) {
+        addStory(story.path);
+      }
+      continue;
+    }
+    const noActiveBrief = resolved.errors.some((e) => e.includes("no active story references"));
+    if (!noActiveBrief) {
+      errors.push(...resolved.errors);
+      continue;
+    }
+    const terminalBrief = terminalBriefReferencesIssue(projectRoot, issue);
+    if (!terminalBrief && !fetchIssueClosed(issue, repo, runGh)) {
+      errors.push(
+        `#${issue}: full-story close intent recorded but no active or completed brief references this issue (#4864).`,
+      );
+    }
+  }
+
+  const originIssues = collectOriginIssueNumbers(storyPaths, storyTokens, [
+    ...fullStoryCloseIssues,
+  ]);
 
   if (storyPaths.length === 0) {
     if (errors.length === 0 && originIssues.length > 0) {
@@ -1349,7 +1836,12 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       });
       errors.push(...originClose.errors);
       warnings.push(...originClose.warnings);
-      const originOk = errors.length === 0;
+      const pending =
+        originClose.pendingIssues.length > 0
+          ? originClosePendingState(originClose.pendingIssues, deliveryBranch)
+          : null;
+      const originFailed = errors.length > 0;
+      const originPending = !originFailed && pending !== null;
       return buildResponse({
         projectRoot,
         dryRun,
@@ -1366,9 +1858,10 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
         deliveryErrors,
         errors,
         warnings,
-        ok: originOk,
+        pending,
+        ok: !originFailed && !originPending,
         emitJson: args.emitJson ?? false,
-        exitCode: originOk ? EXIT_OK : EXIT_GATE_FAILED,
+        exitCode: originFailed ? EXIT_GATE_FAILED : originPending ? EXIT_INCOMPLETE : EXIT_OK,
       });
     }
     // When every closing ref was a benign skip and no real stories remain, the
@@ -1390,6 +1883,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors,
       errors,
       warnings,
+      pending: null,
       ok: cleanNoop,
       emitJson: args.emitJson ?? false,
       exitCode: cleanNoop
@@ -1418,6 +1912,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors,
       errors,
       warnings,
+      pending: null,
       ok: false,
       emitJson: args.emitJson ?? false,
       exitCode: EXIT_GATE_FAILED,
@@ -1460,6 +1955,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
   // Single-PR cohorts: every story inherits that PR's evidence when issue binding misses
   // (operator --stories + one --pr is the common finalize path).
   // Empty closingIssuesReferences: the one validated snapshot is evidence for the given N.
+  // Full-story `deft-story: N` / productPullRequest is the same bind (#4864).
   // N alone and M alone are not that invocation.
   let defaultEvidence: DeliveryEvidenceInput | null = null;
   if (validatedPrs.length === 1 && evidenceByIssue.size > 0) {
@@ -1468,7 +1964,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     validatedPrs.length === 1 &&
     closingIssues.size === 0 &&
     !closingLookupFailed &&
-    storyTokens.length > 0
+    (storyTokens.length > 0 || fullStoryCloseIssues.size > 0)
   ) {
     const solePr = validatedPrs[0];
     defaultEvidence = solePr === undefined ? null : (validatedEvidence.get(solePr) ?? null);
@@ -1482,6 +1978,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
   let commitSha: string | null = null;
   let branch: string | null = null;
   let prUrl: string | null = null;
+  let pendingOrigin: FinalizeOriginClosePending | null = null;
   let createdSweepBranch: string | null = null;
   let lifecycle: LifecycleCheckout | null = null;
   // Closure assignment is invisible to finally control flow, so a bare let stays null.
@@ -1501,6 +1998,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     prUrl: string | null;
     ok: boolean;
     exitCode: number;
+    pending?: FinalizeOriginClosePending | null;
   }) => {
     held.outcome = buildResponse({
       projectRoot,
@@ -1514,6 +2012,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       deliveryErrors,
       errors,
       warnings,
+      pending: partial.pending ?? null,
       emitJson: args.emitJson ?? false,
       ...partial,
     });
@@ -1544,6 +2043,7 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
             evidenceByPath,
             deliveryBranch,
             runGit,
+            args.retainedDests ?? [projectRoot],
           );
           if (!remapped.ok) {
             errors.push(remapped.error);
@@ -1573,6 +2073,38 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
 
     let sweep: SweepResult | null = null;
     if (!skipSweep) {
+      // Stamp on the sweep root (checkout or project) so leftover-complete preserves bind (#4864).
+      // Fail closed: stamp false → no complete/sweep and no origin-close for that delivery.
+      if (!dryRun) {
+        const stampErrors: string[] = [];
+        for (const storyPath of sweepStories) {
+          const evidence =
+            sweepEvidence.get(resolve(storyPath)) ??
+            sweepEvidence.get(storyPath) ??
+            defaultEvidence;
+          const prNumber = evidence?.prNumber;
+          if (typeof prNumber === "number" && Number.isInteger(prNumber) && prNumber > 0) {
+            if (!stampProductPullRequestOnBriefFile(sweepRoot, storyPath, prNumber)) {
+              stampErrors.push(
+                `${basename(storyPath)}: failed to stamp productPullRequest=${String(prNumber)} ` +
+                  `(already bound to another PR, or write failed); brief left active; ` +
+                  `origin not closed (#4864).`,
+              );
+            }
+          }
+        }
+        if (stampErrors.length > 0) {
+          errors.push(...stampErrors);
+          return respond({
+            sweep: null,
+            commitSha: null,
+            branch,
+            prUrl: null,
+            ok: false,
+            exitCode: EXIT_GATE_FAILED,
+          });
+        }
+      }
       const hasDelivery = sweepEvidence.size > 0 || defaultEvidence !== null;
       const sweepResult = completeCohort({
         stories: sweepStories,
@@ -1586,6 +2118,8 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
               // Ancestry already verified above; avoid double remote fetch on each story.
               assumeEvidenceValidated: true,
               verifier: "swarm:finalize-cohort",
+              // Prefer-A identity join still runs; reuse finalize's gh runner (#3675).
+              runGh,
             }
           : null,
       });
@@ -1623,7 +2157,8 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
     const closeRoot = originCloseRoot(lifecycle?.checkout ?? null, projectRoot);
 
     if (!dryRun && !noCommit && !skipSweep && errors.length === 0) {
-      const commitResult = commitLifecycleMoves(sweepRoot, storyPaths, runGit);
+      const derivedRels = derivedLifecycleRelsFromSweep(sweepRoot, storyPaths, sweep);
+      const commitResult = commitLifecycleMoves(sweepRoot, storyPaths, runGit, derivedRels);
       if (!commitResult.ok) {
         errors.push(commitResult.error ?? "commit failed");
       } else {
@@ -1648,46 +2183,89 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       }
       const lifecyclePr = prUrl === null ? null : lifecyclePrNumber(prUrl);
       if (errors.length === 0 && repo !== null && lifecyclePr !== null) {
-        // requireHumanMerge is unchanged: wait, never merge the lifecycle pull request.
-        const landed = waitForLifecycleLand({
-          projectRoot,
-          deliveryBranch,
-          alternateBase,
-          repo,
-          prNumber: lifecyclePr,
-          completedRels,
-          runGh,
-          runGit,
-          probeLimit: resolveLandProbeLimit(args.landProbeLimit),
-          sleep: args.sleep,
-        });
-        if (!landed.ok) {
-          errors.push(landed.error);
+        // Arm leftover auto-merge (#4919 / #1193 / #3791). Finalize heads require BOTH
+        // durable swarm/finalize/* membership and the documented bot-merge override
+        // (policy:allow-bot-merge / DEFT_ALLOW_BOT_MERGE / requireHumanMerge effective false).
+        // Branch prefix alone never bypasses requireHumanMerge. Non-finalize leftovers still
+        // follow evaluateAgentMerge. First-ship discharge of the original one-CI-run ask
+        // remains next-session finalize-owed + session-start blocking (#4919) with live-closer
+        // leftover-complete (#4937); residual windows stay explicit.
+        const agentMerge = evaluateAgentMerge(projectRoot);
+        const finalizeCarveOut = evaluateFinalizeClassMergeCarveOut(branch, projectRoot);
+        const isFinalizeHead = isDurableFinalizeHeadRef(branch);
+        if (isFinalizeHead) {
+          if (finalizeCarveOut.allowed) {
+            const autoMerge = enableLeftoverAutoMerge(repo, lifecyclePr, runGh);
+            if (!autoMerge.ok) {
+              warnings.push(
+                `lifecycle PR #${String(lifecyclePr)}: auto-merge not enabled (${autoMerge.detail})`,
+              );
+            } else {
+              warnings.push(
+                `lifecycle PR #${String(lifecyclePr)}: auto-merge via ${finalizeCarveOut.reason}; ` +
+                  (finalizeCarveOut.assumption ?? FINALIZE_CLASS_HUMAN_MERGE_ASSUMPTION),
+              );
+            }
+          } else {
+            warnings.push(
+              `lifecycle PR #${String(lifecyclePr)}: auto-merge skipped (${finalizeCarveOut.reason}; ` +
+                "hand-off without auto-merge)",
+            );
+          }
+        } else if (agentMerge.allowed) {
+          const autoMerge = enableLeftoverAutoMerge(repo, lifecyclePr, runGh);
+          if (!autoMerge.ok) {
+            warnings.push(
+              `lifecycle PR #${String(lifecyclePr)}: auto-merge not enabled (${autoMerge.detail})`,
+            );
+          }
         } else {
-          const originClose = closeOriginsAfterLeftoverComplete({
-            projectRoot: closeRoot,
-            deliveryBranch: landed.branch,
-            originIssues,
-            prNumbers,
+          warnings.push(
+            `lifecycle PR #${String(lifecyclePr)}: auto-merge skipped (requireHumanMerge; ` +
+              "hand-off without auto-merge)",
+          );
+        }
+        if (args.handOffLeftover === true) {
+          // Owed hand-off: leftover is open (auto-merge armed when policy allows); origin-close pending.
+          pendingOrigin = originClosePendingState(originIssues, deliveryBranch);
+        } else {
+          // Wait for land; never merge the lifecycle pull request from this command.
+          const landed = waitForLifecycleLand({
+            projectRoot,
+            deliveryBranch,
+            alternateBase,
             repo,
-            dryRun,
+            prNumber: lifecyclePr,
+            completedRels,
             runGh,
             runGit,
-            missingOnBranchIsError: true,
+            probeLimit: resolveLandProbeLimit(args.landProbeLimit),
+            sleep: args.sleep,
           });
-          errors.push(...originClose.errors);
-          warnings.push(...originClose.warnings);
+          if (!landed.ok) {
+            errors.push(landed.error);
+          } else {
+            const originClose = closeOriginsAfterLeftoverComplete({
+              projectRoot: closeRoot,
+              deliveryBranch: landed.branch,
+              originIssues,
+              prNumbers,
+              repo,
+              dryRun,
+              runGh,
+              runGit,
+            });
+            errors.push(...originClose.errors);
+            warnings.push(...originClose.warnings);
+            if (originClose.pendingIssues.length > 0) {
+              pendingOrigin = originClosePendingState(originClose.pendingIssues, landed.branch);
+            }
+          }
         }
       } else if (errors.length === 0 && noOpenPr) {
-        warnings.push(
-          "Lifecycle commit succeeded. Issue not closed: no pull request was opened, " +
-            `and the completed brief is not yet on origin/${baseBranch}.`,
-        );
+        pendingOrigin = originClosePendingState(originIssues, baseBranch);
       } else if (errors.length === 0) {
-        errors.push(
-          `lifecycle sweep is not done: the completed brief is not on origin/${deliveryBranch}. ` +
-            "Issue left open.",
-        );
+        pendingOrigin = originClosePendingState(originIssues, deliveryBranch);
       }
     } else if (alreadyLanded || dryRun || noCommit) {
       const originClose = closeOriginsAfterLeftoverComplete({
@@ -1702,21 +2280,23 @@ export function finalizeCohort(args: FinalizeCohortArgs): {
       });
       errors.push(...originClose.errors);
       warnings.push(...originClose.warnings);
+      if (originClose.pendingIssues.length > 0) {
+        pendingOrigin = originClosePendingState(originClose.pendingIssues, deliveryBranch);
+      }
     } else if (!dryRun && !noCommit) {
-      errors.push(
-        `lifecycle sweep is not done: the completed brief is not on origin/${deliveryBranch}. ` +
-          "Issue left open.",
-      );
+      pendingOrigin = originClosePendingState(originIssues, deliveryBranch);
     }
 
-    const ok = errors.length === 0;
+    const failed = errors.length > 0;
+    const incomplete = !failed && pendingOrigin !== null;
     return respond({
       sweep,
       commitSha,
       branch,
       prUrl,
-      ok,
-      exitCode: ok ? EXIT_OK : EXIT_GATE_FAILED,
+      pending: pendingOrigin,
+      ok: !failed && !incomplete,
+      exitCode: failed ? EXIT_GATE_FAILED : incomplete ? EXIT_INCOMPLETE : EXIT_OK,
     });
   } finally {
     const dropBranch = commitSha === null && prUrl === null ? createdSweepBranch : null;
@@ -1769,6 +2349,7 @@ function withReportedFailure(
     deliveryErrors: result.delivery_errors,
     errors: [...result.errors, error],
     warnings: [...result.warnings],
+    pending: result.pending,
     ok: false,
     emitJson,
     exitCode: EXIT_GATE_FAILED,
@@ -1791,6 +2372,7 @@ function buildResponse(input: {
   deliveryErrors: readonly string[];
   errors: readonly string[];
   warnings: readonly string[];
+  pending: FinalizeOriginClosePending | null;
   ok: boolean;
   emitJson: boolean;
   exitCode: number;
@@ -1811,6 +2393,7 @@ function buildResponse(input: {
     delivery_errors: input.deliveryErrors,
     errors: input.errors,
     warnings: input.warnings,
+    pending: input.pending,
     ok: input.ok,
   };
 
@@ -1879,6 +2462,14 @@ function buildResponse(input: {
       lines.push(`    - ${oneLine(err)}`);
     }
   }
+  if (input.pending !== null) {
+    lines.push(`  Pending: ${input.pending.kind} (${input.pending.detail})`);
+    if (input.pending.issues.length > 0) {
+      lines.push(
+        `  origin-close pending: ${input.pending.issues.map((n) => `#${String(n)}`).join(", ")}`,
+      );
+    }
+  }
   lines.push("");
   const skipNote =
     input.warnings.length > 0
@@ -1889,7 +2480,9 @@ function buildResponse(input: {
   lines.push(
     input.ok
       ? `Result: FINALIZE CLEAN -- cohort briefs swept to completed/.${skipNote}`
-      : "Result: FINALIZE INCOMPLETE -- see errors above.",
+      : input.pending !== null
+        ? "Result: FINALIZE INCOMPLETE -- origin-close pending."
+        : "Result: FINALIZE INCOMPLETE -- see errors above.",
   );
 
   return {

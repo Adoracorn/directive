@@ -306,10 +306,27 @@ Rationale + recurrence record + cross-references: `docs/analysis/2026-07-02-agen
 
 - ! Cascade automation on the Grok Build hybrid path MUST go through `task pr:wait-mergeable-and-merge -- <N> --repo <owner>/<repo>`. Do NOT hand-roll a `while ...; do task pr:merge-ready ...; done` shell loop or a per-cascade ad-hoc Python monitor. The helper composes the resilient wait-until-ready loop (#1368) with the Layer-3 protected-issue check (#701) and the `gh pr merge --squash --delete-branch --admin` invocation behind a single three-state exit (0 merged / 1 timeout-or-escalation / 2 config error).
 - ! Multi-PR merge cascades MUST pass `--cascade` on each `task pr:wait-mergeable-and-merge` invocation so merge-tree-clean PRs whose base SHA is behind the current target branch HEAD are refused (semantically stale pre-spine CI, #2385). After the first merge in a cascade, also pass `--require-master-ci-green` before merging the next PR. Rebase/update-branch onto the post-spine target and wait for fresh green CI before re-invoking.
-- ! The per-PR atomic gate (`task pr:merge-ready -- <N> && gh pr merge <N> --squash --delete-branch --admin`) documented in `content/skills/deft-directive-swarm/SKILL.md` Phase 5 -> 6 STILL applies for any in-cascade merge an operator runs by hand. The Wave-3 cascade surface is the automated wrapper; the per-PR atomic gate is the manual freshness-window-atomic check. The two co-exist -- one does not retire the other.
+- ! The per-PR atomic gate for a hand merge from the PR head worktree is `task pr:merge-ready -- <N> && gh pr merge <N> --squash --delete-branch` (#3875). `pr:merge-ready` invokes `verify:pr-closeout-attestable` after a Greptile-clean verdict; the ungated pre-#3875 `pr:merge-ready && gh pr merge` sequence is withdrawn. Prefer `task pr:wait-mergeable-and-merge` for automation (closeout already last before merge). Cascade `--admin` is accident-closed by that in-process invoker, not by a required check.
 - ! When `--protected <issue-numbers>` is supplied, the helper runs the protected-issue check (#701) BEFORE the wait loop. A persistent `closingIssuesReferences` link short-circuits the cascade with exit 1 (escalation) AHEAD of any `gh pr merge` call. New cascade scripts MUST preserve this ordering -- the protected-issue check is structurally a pre-condition that cannot be resolved by waiting.
 - ⊗ Hand-roll a cascade `while ... task pr:merge-ready` shell loop (or equivalent ad-hoc Python monitor) when `task pr:wait-mergeable-and-merge` is available. The Wave-1+2 hardening is in the helpers the new task composes; hand-rolled loops re-introduce the `head: None` / babysit-each-PR failure mode #1369 closes.
 - ⊗ Run `gh pr merge <N>` from inside a cascade automation script without first chaining the Layer-3 protected-issue check (#701) when the PR is known to reference any umbrella / staying-OPEN issue. The cascade surface (`task pr:wait-mergeable-and-merge` with `--protected`) is the canonical compose-point; hand-rolled merges that skip the chain re-surface the PR #700 / PR #401 persistent-link recurrence.
+
+## Closeout route table (#3875)
+
+Every prescribed merge route either invokes `verify:pr-closeout-attestable` (thin invoker over the existing evaluator) or names the control that closes the row. One evaluator, N thin invokers — supersedes #3781's single-cascade-call-site decision.
+
+| Route | Control |
+|---|---|
+| `pr:wait-mergeable-and-merge` (cascade) | In-process invoker last before `gh pr merge` (already #3781; keeps `--admin` accident-closed) |
+| `pr:merge-ready` / prescribed manual sequence | In-process invoker after Greptile-clean; hand merge from PR head worktree only |
+| Human non-admin UI/CLI | Named **accident-only / open** for first-ship (no CI required-check home chosen). `verify:orphan-active` owns post-merge. |
+| CI `pull_request` / branch-gate | Not chosen for first-ship. If added later: `pull_request` only (not `pull_request_target`). |
+| Local / `push` with no PR number | Explicit skip — orphan-active owns post-merge. |
+
+! Before closeout reads the tree, assert local HEAD equals the PR head SHA (or forge blob); exit 2 on mismatch.
+⊗ Prescribe ungated `pr:merge-ready && gh pr merge` without the closeout invoker.
+⊗ Claim a required-check home closes admin / `--admin` merges.
+
 
 ## Merge-path durable wait and pr:watch --json (#4882 / #5015)
 
@@ -368,71 +385,78 @@ auth.
 
 ### Credential-class ban on three enforcing verbs (#3858)
 
-Property: no GitHub App installation credential may drive `scm issue *`,
-`issue:ingest`, and `reconcile:issues`. Any user-bearing login is acceptable
-when no expected principal is supplied. Those three callers pass
+Property: covered paths trust provisioned credentials for the target host
+and enforce explicit worker assignments (#5016). Unassigned processes use
+gh's effective credentials. Runtime/socket labels do not authorize.
+Assigned workers keep source, delivery, and expected-user checks (#3663).
+Installation authentication may be admitted without claiming App identity
+when no user is required (#3693 recut). Those three deep callers pass
 `expectedPrincipal: null` so leftover `DEFT_EXPECTED_GITHUB_LOGIN` does not
 become an env principal match.
 
-- ! Those three callers MUST invoke the installation-class check
-  (`validateGithubAuthForWorker` / `/user` inapplicability) via
-  `requireScmReady({ depth: "deep" })`.
+- ! Those three callers MUST invoke assignment-then-auth via
+  `requireScmReady({ depth: "deep" })` in `github-auth-modes.ts` /
+  `readiness.ts`. `runGhMerge` MUST run the same fresh preflight immediately
+  before the merge subprocess. Direct `gh`/`ghx`, remote envelopes (#4997),
+  and `release/gh.ts` writers stay outside this enforcement coverage.
 - ! `doctor` and default `session:start` stay shallow; they do not call
   `requireScmReady`.
 - ! `requireScmReady` MUST honor requested authorization depth. A cached
-  shallow-ready report MUST NOT satisfy a later principal/deep request.
+  ready report MUST NOT authorize changed credentials, source, principal, or
+  target. The cache key includes the injected-token fingerprint and the
+  host-store identity (`hosts.yml` digest), so a `gh auth switch` revalidates.
+  Mutation preflight uses `force: true`.
 - ! The hermetic skip is `VITEST` only. `DEFT_SCM_SKIP_AUTH_PROBE` MUST NOT
   authorize production when a token is present.
 - ! Those three callers MUST parse `--repo` / `-R` before `requireScmReady`
   and pass that repo through, so non-checkout `--repo` does not regress.
-- ⊗ Claim identity-gated SCM authorization, or that the `repos/` GET
-  authorizes the operation.
+- ⊗ Claim identity-gated SCM authorization, universal interception, or that
+  the `repos/` GET authorizes writes. GitHub enforces permission on the
+  actual operation.
 - ! `SCM_DEPENDENT_GATES` stays a diagnostic skip-list of surfaces that will
-  not work when SCM is not ready. `pr:*` merge-path modules stay a different
-  issue.
-- ! Recorded cost: two extra REST calls (`/user` and `repos/<owner>/<name>`)
-  and up to 60 s added worst-case latency per gated process. Transient API
-  failure refuses the verb (same posture as #3422).
+  not work when SCM is not ready.
+- ! Recorded cost: `/user` (and on installation, `GET /installation/repositories`)
+  plus `repos/<owner>/<name>`, and up to 60 s added worst-case latency per
+  gated process. Transient API failure refuses the verb (same posture as #3422).
 - ! Swarm `prepareWorkerCredentialInjection` stays the expected-user
-  injected-token path. #3693 observation and #3859 classifier stay out of
-  this number.
+  injected-token path. Classifier unification, including the GROK_BUILD
+  diagnostic disagreement, stays out of credential admission.
 
 ### Making SCM gates runnable in a mismatched env
 
 1. **Host-gh (local / unsandboxed):** install GitHub CLI (or `task setup:ghx`)
    in the *execution* environment, then `gh auth login`. Host credential
    stores are not shared into agent sandboxes.
-2. **Injected-token (cloud / headless):** set `GH_TOKEN`, `GITHUB_TOKEN`, or
-   `GH_ENTERPRISE_TOKEN` in the execution env via host secrets. Runtime mode
-   `cloud-headless` infers `github_auth_mode=injected-token` (#1557).
+2. **Injected-token:** set the host-family token in the execution env via host
+   secrets (`GH_TOKEN` then `GITHUB_TOKEN` for github.com / ghe.com;
+   `GH_ENTERPRISE_TOKEN` then `GITHUB_ENTERPRISE_TOKEN` for GHES). Runtime
+   mode does not infer auth mode (#5016).
 3. **Run SCM elsewhere:** keep framework-local work in the sandbox; run
    `triage:*` / `pr:*` / `issue:ingest` from a matched authenticated shell.
 4. **Deep check:** `deft scm:status --deep` or
-   `deft github-auth-modes --json` validates API reachability and optional
-   repo access.
+   `deft github-auth-modes --json` validates selected-credential API
+   reachability and optional repo access.
 
-### Ambiguous Cursor runtime and the host-gh opt-in (#3859)
+### Runtime classification is diagnostic (#3859 / #5016)
 
 `CURSOR_AGENT` is set by local desktop Cursor, by Cursor-managed cloud VMs, and
-by Windows "My Machines" workers, so it cannot decide the runtime by itself.
+by Windows "My Machines" workers, so it cannot decide the credential source.
 
 - ! Cursor-managed VMs serve a metadata API on `CURSOR_AGENT_SOCKET` whose
-  `agent/runtime` is `managed`. A positive read classifies `cloud-headless` at
-  higher precedence than any other Cursor signal **and** than the opt-in below.
-- ⊗ Treat absence of that socket as proof of local desktop. Absence means "not
-  managed, or unreachable" and MUST NOT select host credentials -- that is the
-  marker-absence grant this rule exists to prevent.
+  `agent/runtime` is `managed`. A positive read still classifies
+  `cloud-headless` for diagnostics. Classification does not select or refuse
+  credentials.
+- ⊗ Treat socket absence as authorization, or as a host-store grant. Absence
+  is "not managed, or unreachable" and is not an auth input.
 - ! When `CURSOR_AGENT` is set and the probe does not report `managed`, the
-  runtime is **ambiguous**. Deft does not guess from `process.platform`. Host
-  credentials then require an explicit selection:
-  `DEFT_GITHUB_AUTH_MODE=host-gh`, set in the execution environment on a
-  machine you control. That opt-in is for a local manual session. An inferred
-  PREP `github_auth_mode` stamp is not a registered worker's explicit host
-  opt-in (#3663); those workers validate the independently stored assignment.
-- ! Absent that selection, behaviour is unchanged: the runtime stays
-  `cloud-headless` and SCM-dependent gates are skipped. The skip names its
-  reason (`runtime_mode_reason` in `scm:status --json`, and in the `[deft scm]`
-  session-start lines) and points at this opt-in.
+  runtime remains **ambiguous** as a diagnostic label. Unassigned sessions
+  use the provisioned effective credential. Assigned workers validate the
+  independently stored assignment (#3663). `DEFT_GITHUB_AUTH_MODE=host-gh`
+  is not an auth admission opt-in.
+- ! The GROK_BUILD / `DEFT_AGENT_RUNTIME=grok-build` disagreement between the
+  intake classifier (CI/cloud) and the platform twin (local TUI, #3469) is a
+  diagnostic limitation. Classifier unification is separate and MUST NOT
+  affect credential admission.
 - ⊗ Use an OS predicate (`process.platform === "win32"`) as a cloud
   discriminator. Cursor's managed fleet being Ubuntu is a versioned fact about
   a third party's infrastructure, not a runtime invariant.
@@ -442,8 +466,9 @@ Reason ids: `cursor-managed-runtime-probe`, `cursor-marker-runtime-ambiguous`,
 `no-runtime-marker`.
 
 Contract file: `content/contracts/scm-readiness.md`. Implementation:
+`packages/core/src/intake/github-auth-modes.ts`,
 `packages/core/src/scm/readiness.ts`,
-`packages/core/src/platform/cursor-managed-runtime.ts`.
+`packages/core/src/pr-wait-mergeable/wrappers.ts`.
 
 ## Windows / ASCII Conventions for Machine-Editable Sections
 
@@ -654,6 +679,35 @@ When `plan.policy.allowDirectCommitsToMaster = true`, the agent MUST surface at 
 Phrasing from `deft policy:show --field=allowDirectCommitsToMaster`. When OFF (default), absence of the disclosure signals enforcing state. Override paths: `deft policy:show` / `deft policy:enforce-branches` / `deft policy:allow-direct-commits -- --confirm` / `DEFT_ALLOW_DEFAULT_BRANCH_COMMIT=1`.
 
 ⊗ Begin a session that will commit/push without surfacing policy when `allowDirectCommitsToMaster=true`.
+
+## Merge-gate enforcement readiness (#1517)
+
+Forge **required-status-check** / platform merge-gate readiness is a **distinct axis** from local deft branch-protection / `allowDirectCommitsToMaster` (agent-commit policy only). Phase 2 "branch-protection ON" does not mean GitHub requires status checks.
+
+- ! Detect with existing `fetchRequiredStatusContexts` (#3234): rulesets + classic; `resolutionFailed` fail-closed; outcomes `protected` (non-empty contexts) / `absent` / `unknown`. ⊗ Invent a second classic-404-only inventory.
+- ! Decision gate is fail-closed at build/swarm strategy start when SCM is ready and a GitHub remote is resolved: call `evaluateMergeGateEnforcementAtStrategyStart` (`packages/core/src/pr-merge-readiness/compute.ts`). Setup may be an early optional surface.
+- ! Persist a durable repo/branch-scoped record under `.deft/merge-gate-enforcement/<repo>--<branch>.json`: `configured` | `explicit-opt-out` | `cannot-configure` (re-checkable, **not** an opt-out) | `deferred-not-applicable` (no-SCM / local-only).
+- ! Configure is optional and separate (`buildMergeGateConfigurePayload` / `applyMergeGateConfigure`). Never PUT an empty required-context set. Never auto-promote observed check-run names into required policy. Discovery may propose candidates; operator/authorized selection confirms; pin app id when writing; harvest only from default-branch runs if harvesting at all. Prefer every-PR unconditional contexts over neutral-exclusion heuristics.
+- ! Preserve existing human approving-review requirements and unrelated protection settings. Readiness acceptance does **not** grant bot-merge or change `requireHumanMerge`; keep `policy:allow-bot-merge` as the separate agent-merge axis. Check-only configure must not encode GitHub review-count as the human-merge gate.
+- ! Admin/plan inability to configure is `cannot-configure` and stays re-checkable; do not record a failed write as opt-out.
+- ! Directive does not assume consumer CI workflows are already scaffolded; detect-and-configure may wait for first-green / first default-branch run while the decision-and-record half can still complete earlier.
+
+## Merge-gate aggregator enrollment (#633)
+
+`Merge gate (task check)` is the CI aggregator for `task check`. Live branch protection requires only `TypeScript (build + lint + test)` (`Required?` YES). The merge-gate aggregator is `Required?` no and skips when the artifact-only predicate is true (`if: always() && needs.changes.outputs.artifact_only != 'true'`).
+
+Making `Merge gate (task check)` a required context is an **operator-owned repo-scoped ruleset** step. Directive does not empty-PUT GitHub rulesets and does not auto-promote observed check names (#1517). This remainder records the enrollment step; it does not flip live protection and does not claim live skip detection (#4912 / #4976).
+
+### Before flipping (operator)
+
+1. Confirm the required context name is exactly `Merge gate (task check)` (the aggregator). Do not require primary or failover lane names.
+2. Validate the artifact-only skip path: leftover-complete PRs whose diff is confined to `{CHANGELOG.md, xbrief/completed/**}` (#3678) skip merge-gate. A skipped required check stays pending and blocks merge. Do not require this aggregator until leftover-complete PRs have a reporting path (always-run aggregator or a required-check exception). The skip-if lock lives in `packages/core/src/content-contracts/standards/ci_lifecycle_lane.test.ts`.
+3. State admin-enforcement: ruleset `enforce` for admins when the context is required, so an admin merge cannot silently drop the aggregator. Pair with existing `requireHumanMerge`. This enrollment does not grant bot-merge.
+4. Apply via the GitHub ruleset UI or a non-empty `buildMergeGateConfigurePayload` / `applyMergeGateConfigure` with operator-selected contexts.
+
+⊗ Flip `Required?` in `.github/workflows/ci.yml` comment map to YES without the skip-path remedy.
+⊗ Empty-PUT rulesets.
+⊗ Claim this remainder detects a skipped pre-PR skill (that is leftover #4912).
 
 ## Local git hooks (#747 / #2049)
 

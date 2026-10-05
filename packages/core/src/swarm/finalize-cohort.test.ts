@@ -16,18 +16,33 @@ vi.mock("../scope/transition.js", () => ({
 }));
 
 import { CLAUSE_STAMP_IMPLEMENTATION_ONLY_REMEDIATION } from "../intake/clause-derivation.js";
+import { deriveUnmarkedFinalizeAdmit } from "../orphan-active/evaluate.js";
+import { firstMergedPrRef } from "../orphan-active/refs.js";
+import { productPullRequestFromPlan } from "../orphan-active/running-briefs.js";
 import type { RunGhFn } from "../pr-protected-issues/types.js";
 import { runTransition } from "../scope/transition.js";
-import { EXIT_CONFIG_ERROR, EXIT_OK } from "./constants.js";
-import { finalizeCohort } from "./finalize-cohort.js";
+import { EXIT_CONFIG_ERROR, EXIT_INCOMPLETE, EXIT_OK } from "./constants.js";
+import {
+  evaluateFinalizeClassMergeCarveOut,
+  FINALIZE_CLASS_HUMAN_MERGE_ASSUMPTION,
+  finalizeClaimRef,
+  finalizeCohort,
+  isDurableFinalizeHeadRef,
+} from "./finalize-cohort.js";
 import { finalizeCohortMain, parseFinalizeCohortArgv } from "./finalize-cohort-cli.js";
+import {
+  bindUnmarkedFinalizePair,
+  countPlanGithubIssueReferences,
+  discoverFinalizeOwed,
+  UNMARKED_STAMP_REMEDIATION,
+} from "./finalize-owed.js";
 import type { TextCaptureResult } from "./subprocess.js";
 
 function writeActiveStory(
   project: string,
   storyId: string,
   issueNumber: number,
-  opts: { deliveryBranch?: string } = {},
+  opts: { deliveryBranch?: string; productPullRequest?: number } = {},
 ): string {
   const full = join(project, "xbrief", "active", `${storyId}.xbrief.json`);
   mkdirSync(join(project, "xbrief", "active"), { recursive: true });
@@ -59,6 +74,9 @@ function writeActiveStory(
             type: "x-xbrief/github-issue",
           },
         ],
+        ...(opts.productPullRequest !== undefined
+          ? { metadata: { productPullRequest: opts.productPullRequest } }
+          : {}),
         items: [{ id: "i1", title: "t", status: "pending" }],
       },
     }),
@@ -67,7 +85,12 @@ function writeActiveStory(
   return full;
 }
 
-function writeCompletedStory(project: string, storyId: string, issueNumber: number): string {
+function writeCompletedStory(
+  project: string,
+  storyId: string,
+  issueNumber: number,
+  opts: { productPullRequest?: number } = {},
+): string {
   const full = join(project, "xbrief", "completed", `${storyId}.xbrief.json`);
   mkdirSync(join(project, "xbrief", "completed"), { recursive: true });
   writeFileSync(
@@ -83,7 +106,34 @@ function writeCompletedStory(project: string, storyId: string, issueNumber: numb
             type: "x-xbrief/github-issue",
           },
         ],
+        ...(opts.productPullRequest !== undefined
+          ? { metadata: { productPullRequest: opts.productPullRequest } }
+          : {}),
         items: [{ id: "i1", title: "t", status: "done" }],
+      },
+    }),
+    "utf8",
+  );
+  return full;
+}
+
+function writeCancelledStory(project: string, storyId: string, issueNumber: number): string {
+  const full = join(project, "xbrief", "cancelled", `${storyId}.xbrief.json`);
+  mkdirSync(join(project, "xbrief", "cancelled"), { recursive: true });
+  writeFileSync(
+    full,
+    JSON.stringify({
+      plan: {
+        id: storyId,
+        title: storyId,
+        status: "cancelled",
+        references: [
+          {
+            uri: `https://github.com/deftai/directive/issues/${issueNumber}`,
+            type: "x-xbrief/github-issue",
+          },
+        ],
+        items: [{ id: "i1", title: "t", status: "cancelled" }],
       },
     }),
     "utf8",
@@ -277,7 +327,7 @@ function mockRunGit(
             id: "story",
             references: [
               {
-                uri: "https://github.com/deftai/directive/issues/" + String(issue),
+                uri: `https://github.com/deftai/directive/issues/${String(issue)}`,
                 type: "x-xbrief/github-issue",
               },
             ],
@@ -306,7 +356,9 @@ function mockRunGit(
       return { returncode: 0, stdout: "abc123\n", stderr: "" };
     }
     if (joined.includes("git status --short")) {
-      return { returncode: 0, stdout: "M xbrief/active/story-a.xbrief.json\n", stderr: "" };
+      // Empty staged set keeps #4714 R7 causal-diff green under mocked transitions
+      // (runTransition does not actually move briefs in unit tests).
+      return { returncode: 0, stdout: "", stderr: "" };
     }
     if (joined.includes("git fetch") && opts.fetchFail) {
       return { returncode: 1, stdout: "", stderr: "network unreachable" };
@@ -413,7 +465,8 @@ describe("finalizeCohort", () => {
       runGh: mockRunGh({ 42: { merged: true, closingIssues: [2115] } }),
       runGit: mockRunGit(),
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
     expect(result.result.closing_issues).toEqual([2115]);
     rmSync(project, { recursive: true, force: true });
   });
@@ -440,7 +493,8 @@ describe("finalizeCohort", () => {
       }),
       runGit: mockRunGit(),
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
     expect(result.result.closing_issues).toEqual([2115]);
     expect(result.result.story_paths).toHaveLength(1);
     expect(result.result.story_paths[0]).toContain("story-real");
@@ -545,8 +599,9 @@ describe("finalizeCohort", () => {
       runGh: mockRunGh({ 103: { merged: true, closingIssues: [3041], baseRef: "master" } }),
       runGit: mockRunGit(),
     });
-    expect(result.exitCode).toBe(0);
-    expect(result.result.ok).toBe(true);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
+    expect(result.result.ok).toBe(false);
     expect(result.result.delivery_branch).toBe("master");
     expect(vi.mocked(runTransition)).toHaveBeenCalledWith(
       "complete",
@@ -686,8 +741,9 @@ describe("finalizeCohort", () => {
       runGh: mockRunGh({ 2241: { merged: true, closingIssues: [2240, 2115] } }),
       runGit: mockRunGit(),
     });
-    expect(result.exitCode).toBe(0);
-    expect(result.result.ok).toBe(true);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
+    expect(result.result.ok).toBe(false);
     expect(result.result.story_paths).toHaveLength(1);
     expect(result.result.story_paths[0]).toContain("story-2240");
     expect(result.result.warnings.some((w) => w.includes("#2115"))).toBe(true);
@@ -713,13 +769,77 @@ describe("finalizeCohort", () => {
       runGh: mockRunGh({ 2241: { merged: true, closingIssues: [2240, 8888] } }, { 8888: "closed" }),
       runGit: mockRunGit(),
     });
-    expect(result.exitCode).toBe(0);
-    expect(result.result.ok).toBe(true);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
+    expect(result.result.ok).toBe(false);
     expect(result.result.story_paths).toHaveLength(1);
-    expect(result.result.warnings.some((w) => w.includes("#8888") && w.includes("closed"))).toBe(
-      true,
-    );
+    expect(
+      result.result.warnings.some(
+        (w) => w.includes("#8888") && w.includes("incidental") && w.includes("closed"),
+      ),
+    ).toBe(true);
     expect(result.result.errors).toEqual([]);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("refuses an expected scoped closing ref with no active or terminal brief (#4714 R6)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-expected-missing-"));
+    writeActiveStory(project, "story-2240", 2240);
+    // Local non-active brief marks #7777 as expected scoped (not incidental).
+    mkdirSync(join(project, "xbrief", "proposed"), { recursive: true });
+    writeFileSync(
+      join(project, "xbrief", "proposed", "story-7777.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          id: "story-7777",
+          status: "proposed",
+          references: [
+            {
+              uri: "https://github.com/deftai/directive/issues/7777",
+              type: "x-xbrief/github-issue",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [2241],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: mockRunGh({ 2241: { merged: true, closingIssues: [2240, 7777] } }, { 7777: "closed" }),
+      runGit: mockRunGit(),
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(
+      result.result.errors.some((e) => e.includes("#7777") && e.includes("source-recovery")),
+    ).toBe(true);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("skips a closing ref whose terminal brief is cancelled, not completed (#4714 R6)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-cancelled-terminal-"));
+    writeActiveStory(project, "story-2240", 2240);
+    writeCancelledStory(project, "story-6666", 6666);
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [2241],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: mockRunGh({ 2241: { merged: true, closingIssues: [2240, 6666] } }, { 6666: "closed" }),
+      runGit: mockRunGit(),
+    });
+    expect(
+      result.result.errors.some((e) => e.includes("#6666") && e.includes("source-recovery")),
+    ).toBe(false);
+    expect(
+      result.result.warnings.some(
+        (w) => w.includes("#6666") && w.includes("cancelled brief already exists"),
+      ),
+    ).toBe(true);
     rmSync(project, { recursive: true, force: true });
   });
 
@@ -1121,7 +1241,7 @@ describe("finalizeCohort", () => {
     rmSync(project, { recursive: true, force: true });
   });
 
-  it("does not origin-close before leftover-complete land (#4824)", () => {
+  it("does not origin-close before leftover-complete land (#4824 / #4919 pending)", () => {
     const project = mkdtempSync(join(tmpdir(), "sw-finalize-origin-noland-"));
     const storyPath = writeActiveStory(project, "story-4813", 4813);
     const ghCalls: string[][] = [];
@@ -1140,10 +1260,14 @@ describe("finalizeCohort", () => {
       runGh: capturing,
       runGit: mockRunGit(),
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.ok).toBe(false);
+    expect(result.result.pending?.kind).toBe("origin-close");
+    expect(result.stdout).toContain("FINALIZE INCOMPLETE");
+    expect(result.stdout).toContain("origin-close pending");
     expect(ghCalls.some((c) => c.includes("PATCH"))).toBe(false);
     expect(result.result.warnings.some((w) => w.includes("leftover-complete not on origin"))).toBe(
-      true,
+      false,
     );
     rmSync(project, { recursive: true, force: true });
   });
@@ -1188,6 +1312,323 @@ describe("finalizeCohort", () => {
     rmSync(project, { recursive: true, force: true });
   });
 
+  it("origin-closes from PR-body deft-story mark after leftover land without --stories (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-deft-story-"));
+    // Leftover-complete preserves/stamps productPullRequest so completed briefs bind.
+    writeCompletedStory(project, "story-4864", 4864, { productPullRequest: 5100 });
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      {
+        5100: {
+          merged: true,
+          closingIssues: [],
+          body: "Tracking #4864\n\ndeft-story: 4864\n",
+        },
+      },
+      { 4864: "open" },
+    );
+    const capturing: RunGhFn = (cmd) => {
+      ghCalls.push([...cmd]);
+      return runGh(cmd);
+    };
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5100],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: capturing,
+      runGit: mockRunGit({ landedCompleted: ["xbrief/completed/story-4864.xbrief.json"] }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(
+      ghCalls.some((c) => c.includes("PATCH") && c.some((p) => p.includes("/issues/4864"))),
+    ).toBe(true);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("refuses deft-story mark when completed brief lacks productPullRequest (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-completed-absent-"));
+    writeCompletedStory(project, "story-9999", 9999);
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      {
+        5200: {
+          merged: true,
+          closingIssues: [],
+          body: "Tracking #4864\n\ndeft-story: 9999\n",
+        },
+      },
+      { 9999: "open", 4864: "open" },
+    );
+    const capturing: RunGhFn = (cmd) => {
+      ghCalls.push([...cmd]);
+      return runGh(cmd);
+    };
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5200],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: capturing,
+      runGit: mockRunGit({ landedCompleted: ["xbrief/completed/story-9999.xbrief.json"] }),
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(
+      result.result.errors.some(
+        (e) => e.includes("does not bind PR delivery") && e.includes("#9999"),
+      ),
+    ).toBe(true);
+    expect(
+      ghCalls.some((c) => c.includes("PATCH") && c.some((p) => p.includes("/issues/9999"))),
+    ).toBe(false);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("refuses deft-story mark when completed brief is bound to a different product PR (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-unbound-mark-"));
+    writeCompletedStory(project, "story-9999", 9999, { productPullRequest: 1111 });
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      {
+        5200: {
+          merged: true,
+          closingIssues: [],
+          body: "Tracking #4864\n\ndeft-story: 9999\n",
+        },
+      },
+      { 9999: "open", 4864: "open" },
+    );
+    const capturing: RunGhFn = (cmd) => {
+      ghCalls.push([...cmd]);
+      return runGh(cmd);
+    };
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5200],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: capturing,
+      runGit: mockRunGit({ landedCompleted: ["xbrief/completed/story-9999.xbrief.json"] }),
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(
+      result.result.errors.some(
+        (e) => e.includes("does not bind PR delivery") && e.includes("#9999"),
+      ),
+    ).toBe(true);
+    expect(
+      ghCalls.some((c) => c.includes("PATCH") && c.some((p) => p.includes("/issues/9999"))),
+    ).toBe(false);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("refuses deft-story mark on unrelated PR when active brief lacks matching productPullRequest (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-active-unrelated-"));
+    writeActiveStory(project, "story-4864", 4864);
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      {
+        5200: {
+          merged: true,
+          closingIssues: [],
+          body: "Tracking #4864\n\ndeft-story: 4864\n",
+        },
+      },
+      { 4864: "open" },
+    );
+    const capturing: RunGhFn = (cmd) => {
+      ghCalls.push([...cmd]);
+      return runGh(cmd);
+    };
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5200],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: capturing,
+      runGit: mockRunGit(),
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(
+      result.result.errors.some(
+        (e) => e.includes("does not bind PR delivery") && e.includes("#4864"),
+      ),
+    ).toBe(true);
+    expect(vi.mocked(runTransition)).not.toHaveBeenCalled();
+    expect(
+      ghCalls.some((c) => c.includes("PATCH") && c.some((p) => p.includes("/issues/4864"))),
+    ).toBe(false);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("binds deft-story to active brief only when productPullRequest matches the PR (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-active-bound-mark-"));
+    const storyPath = writeActiveStory(project, "story-4864", 4864, {
+      productPullRequest: 5301,
+    });
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5301],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: mockRunGh({
+        5301: {
+          merged: true,
+          closingIssues: [],
+          body: "Tracking #4864\n\ndeft-story: 4864\n",
+        },
+      }),
+      runGit: mockRunGit(),
+    });
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
+    expect(result.result.ok).toBe(false);
+    expect(result.result.story_paths).toContain(storyPath);
+    expect(vi.mocked(runTransition)).toHaveBeenCalledWith(
+      "complete",
+      storyPath,
+      expect.any(Date),
+      expect.objectContaining({
+        assumeEvidenceValidated: true,
+        deliveryEvidence: expect.objectContaining({ prNumber: 5301 }),
+      }),
+    );
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("discovers active brief productPullRequest so --pr alone is a non-empty cohort (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-active-product-pr-"));
+    const storyPath = writeActiveStory(project, "story-4864", 4864, {
+      productPullRequest: 5300,
+    });
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5300],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: mockRunGh({
+        5300: { merged: true, closingIssues: [], body: "Tracking #4864\n", baseRef: "master" },
+      }),
+      runGit: mockRunGit(),
+    });
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
+    expect(result.result.ok).toBe(false);
+    expect(result.result.story_paths).toContain(storyPath);
+    expect(vi.mocked(runTransition)).toHaveBeenCalledWith(
+      "complete",
+      storyPath,
+      expect.any(Date),
+      expect.objectContaining({
+        assumeEvidenceValidated: true,
+        deliveryEvidence: expect.objectContaining({ prNumber: 5300 }),
+      }),
+    );
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("origin-closes from completed brief productPullRequest mark (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-product-pr-"));
+    const completed = join(project, "xbrief", "completed", "story-4864.xbrief.json");
+    mkdirSync(join(project, "xbrief", "completed"), { recursive: true });
+    writeFileSync(
+      completed,
+      JSON.stringify({
+        plan: {
+          id: "story-4864",
+          title: "story-4864",
+          status: "done",
+          references: [
+            {
+              uri: "https://github.com/deftai/directive/issues/4864",
+              type: "x-xbrief/github-issue",
+            },
+          ],
+          metadata: { productPullRequest: 5101 },
+          items: [{ id: "i1", title: "t", status: "done" }],
+        },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      join(project, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          title: "Project",
+          status: "running",
+          policy: { allowDirectCommitsToMaster: false, wipCap: 10 },
+        },
+      }),
+      "utf8",
+    );
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      {
+        5101: {
+          merged: true,
+          closingIssues: [],
+          body: "Tracking #4864\n",
+        },
+      },
+      { 4864: "open" },
+    );
+    const capturing: RunGhFn = (cmd) => {
+      ghCalls.push([...cmd]);
+      return runGh(cmd);
+    };
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5101],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: capturing,
+      runGit: mockRunGit({ landedCompleted: ["xbrief/completed/story-4864.xbrief.json"] }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(
+      ghCalls.some((c) => c.includes("PATCH") && c.some((p) => p.includes("/issues/4864"))),
+    ).toBe(true);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("keeps protected umbrella open even with deft-story mark (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-umbrella-mark-"));
+    writeCompletedStory(project, "story-701", 701, { productPullRequest: 5102 });
+    const result = finalizeCohort({
+      projectRoot: project,
+      prNumbers: [5102],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: mockRunGh(
+        {
+          5102: {
+            merged: true,
+            closingIssues: [],
+            body: "Tracking #701\n\ndeft-story: 701\n",
+          },
+        },
+        { 701: "open" },
+        { 701: { labels: ["type:umbrella"], title: "Layer 3 umbrella" } },
+      ),
+      runGit: mockRunGit({ landedCompleted: ["xbrief/completed/story-701.xbrief.json"] }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(result.result.warnings.some((w) => w.includes("protected staying-OPEN umbrella"))).toBe(
+      true,
+    );
+    rmSync(project, { recursive: true, force: true });
+  });
+
   it("uses the validated snapshot as delivery evidence when closing refs are empty (#4937)", () => {
     const project = mkdtempSync(join(tmpdir(), "sw-finalize-empty-closing-"));
     const storyPath = writeActiveStory(project, "story-4937", 4937);
@@ -1201,7 +1642,8 @@ describe("finalizeCohort", () => {
       runGh: mockRunGh({ 42: { merged: true, closingIssues: [], baseRef: "master" } }),
       runGit: mockRunGit(),
     });
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.pending?.kind).toBe("origin-close");
     expect(vi.mocked(runTransition)).toHaveBeenCalledWith(
       "complete",
       storyPath,
@@ -1211,6 +1653,105 @@ describe("finalizeCohort", () => {
         deliveryEvidence: expect.objectContaining({ prNumber: 42, prBase: "master" }),
       }),
     );
+    // Leftover-complete stamps productPullRequest so completed briefs still bind (#4864).
+    const stamped = JSON.parse(readFileSync(storyPath, "utf8")) as {
+      plan: Record<string, unknown>;
+    };
+    expect(productPullRequestFromPlan(stamped.plan)).toBe(42);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("fails closed when productPullRequest stamp refuses; no complete or origin-close (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-stamp-refuse-"));
+    const storyPath = writeActiveStory(project, "story-4864", 4864, {
+      productPullRequest: 9999,
+    });
+    const before = readFileSync(storyPath, "utf8");
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      { 42: { merged: true, closingIssues: [], baseRef: "master" } },
+      { 4864: "open" },
+    );
+    const capturing: RunGhFn = (cmd) => {
+      ghCalls.push([...cmd]);
+      return runGh(cmd);
+    };
+    const result = finalizeCohort({
+      projectRoot: project,
+      storyTokens: [storyPath],
+      prNumbers: [42],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: capturing,
+      runGit: mockRunGit(),
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.result.ok).toBe(false);
+    expect(
+      result.result.errors.some(
+        (e) =>
+          e.includes("failed to stamp productPullRequest=42") && e.includes("brief left active"),
+      ),
+    ).toBe(true);
+    expect(vi.mocked(runTransition)).not.toHaveBeenCalled();
+    expect(ghCalls.some((c) => c.includes("PATCH"))).toBe(false);
+    expect(existsSync(storyPath)).toBe(true);
+    expect(readFileSync(storyPath, "utf8")).toBe(before);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("stamps productPullRequest then completes and origin-closes when bind succeeds (#4864)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-stamp-ok-"));
+    const storyPath = writeActiveStory(project, "story-4864", 4864);
+    const completedRel = "xbrief/completed/story-4864.xbrief.json";
+    const completedPath = join(project, "xbrief", "completed", "story-4864.xbrief.json");
+    vi.mocked(runTransition).mockImplementation((verb: string, path: string) => {
+      if (verb === "complete") {
+        mkdirSync(dirname(completedPath), { recursive: true });
+        writeFileSync(completedPath, readFileSync(path, "utf8"), "utf8");
+        rmSync(path, { force: true });
+      }
+      return { ok: true, message: `${verb} ok` };
+    });
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      { 42: { merged: true, closingIssues: [], baseRef: "master" } },
+      { 4864: "open" },
+    );
+    const capturing: RunGhFn = (cmd) => {
+      ghCalls.push([...cmd]);
+      return runGh(cmd);
+    };
+    const result = finalizeCohort({
+      projectRoot: project,
+      storyTokens: [storyPath],
+      prNumbers: [42],
+      repo: "deftai/directive",
+      noCommit: true,
+      deliveryBranch: "master",
+      runGh: capturing,
+      runGit: mockRunGit({ landedCompleted: [completedRel] }),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.result.ok).toBe(true);
+    expect(vi.mocked(runTransition)).toHaveBeenCalledWith(
+      "complete",
+      storyPath,
+      expect.any(Date),
+      expect.objectContaining({
+        assumeEvidenceValidated: true,
+        deliveryEvidence: expect.objectContaining({ prNumber: 42 }),
+      }),
+    );
+    expect(existsSync(storyPath)).toBe(false);
+    const stamped = JSON.parse(readFileSync(completedPath, "utf8")) as {
+      plan: Record<string, unknown>;
+    };
+    expect(productPullRequestFromPlan(stamped.plan)).toBe(42);
+    expect(
+      ghCalls.some((c) => c.includes("PATCH") && c.some((p) => p.includes("/issues/4864"))),
+    ).toBe(true);
     rmSync(project, { recursive: true, force: true });
   });
 
@@ -1367,7 +1908,8 @@ describe("finalizeCohort", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.result.errors.some((e) => e.includes("does not merge"))).toBe(true);
     expect(ghCalls.some((cmd) => cmd.includes("PATCH"))).toBe(false);
-    expect(ghCalls.some((cmd) => cmd.includes("merge"))).toBe(false);
+    // --auto arms GitHub; the command still does not merge the leftover itself (#4919).
+    expect(ghCalls.some((cmd) => cmd.includes("merge") && !cmd.includes("--auto"))).toBe(false);
     expect(existsSync(storyPath)).toBe(true);
     rmSync(project, { recursive: true, force: true });
   });
@@ -1410,7 +1952,237 @@ describe("finalizeCohort", () => {
         (cmd) => cmd.includes("PATCH") && cmd.some((part) => part.includes("/issues/4937")),
       ),
     ).toBe(true);
-    expect(ghCalls.some((cmd) => cmd.includes("merge"))).toBe(false);
+    // --auto arms GitHub; the command still does not merge the leftover itself (#4919).
+    expect(ghCalls.some((cmd) => cmd.includes("merge") && !cmd.includes("--auto"))).toBe(false);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("does not arm finalize leftover auto-merge under requireHumanMerge without bot-merge override (#3791)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-human-merge-deny-"));
+    const storyPath = writeActiveStory(project, "story-4919", 4919);
+    writeFileSync(
+      join(project, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          title: "Project",
+          status: "running",
+          policy: {
+            allowDirectCommitsToMaster: false,
+            wipCap: 10,
+            requireHumanMerge: true,
+            deliveryBranch: "master",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      {
+        42: { merged: true, closingIssues: [], baseRef: "master" },
+        9999: { merged: false, closingIssues: [], baseRef: "master" },
+      },
+      { 4919: "open" },
+    );
+    const prevBot = process.env.DEFT_ALLOW_BOT_MERGE;
+    delete process.env.DEFT_ALLOW_BOT_MERGE;
+    try {
+      expect(isDurableFinalizeHeadRef("swarm/finalize/story-4919")).toBe(true);
+      expect(isDurableFinalizeHeadRef("feature/other")).toBe(false);
+      const denied = evaluateFinalizeClassMergeCarveOut("swarm/finalize/story-4919", project);
+      expect(denied.allowed).toBe(false);
+      expect(denied.reason).toMatch(/bot-merge policy|human merge/i);
+      expect(evaluateFinalizeClassMergeCarveOut("feature/other", project).allowed).toBe(false);
+      expect(evaluateFinalizeClassMergeCarveOut("swarm/finalize/", project).allowed).toBe(false);
+      const result = finalizeCohort({
+        projectRoot: project,
+        storyTokens: [storyPath],
+        prNumbers: [42],
+        label: "story-4919",
+        repo: "deftai/directive",
+        deliveryBranch: "master",
+        handOffLeftover: true,
+        landProbeLimit: 1,
+        sleep: () => {},
+        runGit: mockRunGit(),
+        runGh: (cmd) => {
+          ghCalls.push([...cmd]);
+          return runGh(cmd);
+        },
+      });
+      expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+      expect(result.result.pending?.kind).toBe("origin-close");
+      expect(ghCalls.some((cmd) => cmd.includes("merge") && cmd.includes("--auto"))).toBe(false);
+      expect(
+        result.result.warnings.some(
+          (w) =>
+            w.includes("auto-merge skipped") &&
+            w.includes("bot-merge policy") &&
+            w.includes("human merge"),
+        ),
+      ).toBe(true);
+    } finally {
+      if (prevBot === undefined) {
+        delete process.env.DEFT_ALLOW_BOT_MERGE;
+      } else {
+        process.env.DEFT_ALLOW_BOT_MERGE = prevBot;
+      }
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("arms leftover auto-merge via finalize-class carve-out when bot-merge override is on (#3791)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-human-merge-allow-"));
+    const storyPath = writeActiveStory(project, "story-4919", 4919);
+    writeFileSync(
+      join(project, "xbrief", "PROJECT-DEFINITION.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          title: "Project",
+          status: "running",
+          policy: {
+            allowDirectCommitsToMaster: false,
+            wipCap: 10,
+            requireHumanMerge: true,
+            deliveryBranch: "master",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const ghCalls: string[][] = [];
+    const runGh = mockRunGh(
+      {
+        42: { merged: true, closingIssues: [], baseRef: "master" },
+        9999: { merged: false, closingIssues: [], baseRef: "master" },
+      },
+      { 4919: "open" },
+    );
+    const prevBot = process.env.DEFT_ALLOW_BOT_MERGE;
+    process.env.DEFT_ALLOW_BOT_MERGE = "1";
+    try {
+      const carveOut = evaluateFinalizeClassMergeCarveOut("swarm/finalize/story-4919", project);
+      expect(carveOut.allowed).toBe(true);
+      expect(carveOut.assumption).toBe(FINALIZE_CLASS_HUMAN_MERGE_ASSUMPTION);
+      expect(evaluateFinalizeClassMergeCarveOut("feature/other", project).allowed).toBe(false);
+      const result = finalizeCohort({
+        projectRoot: project,
+        storyTokens: [storyPath],
+        prNumbers: [42],
+        label: "story-4919",
+        repo: "deftai/directive",
+        deliveryBranch: "master",
+        handOffLeftover: true,
+        landProbeLimit: 1,
+        sleep: () => {},
+        runGit: mockRunGit(),
+        runGh: (cmd) => {
+          ghCalls.push([...cmd]);
+          return runGh(cmd);
+        },
+      });
+      expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+      expect(result.result.pending?.kind).toBe("origin-close");
+      expect(ghCalls.some((cmd) => cmd.includes("merge") && cmd.includes("--auto"))).toBe(true);
+      expect(
+        result.result.warnings.some(
+          (w) =>
+            w.includes("finalize-class carve-out") &&
+            w.includes(FINALIZE_CLASS_HUMAN_MERGE_ASSUMPTION),
+        ),
+      ).toBe(true);
+      expect(
+        result.result.warnings.some(
+          (w) => w.includes("auto-merge skipped") && w.includes("bot-merge policy"),
+        ),
+      ).toBe(false);
+    } finally {
+      if (prevBot === undefined) {
+        delete process.env.DEFT_ALLOW_BOT_MERGE;
+      } else {
+        process.env.DEFT_ALLOW_BOT_MERGE = prevBot;
+      }
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  it("materializes a retained active brief into the lifecycle checkout when bytes match the reviewed blob (#4714 R5)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-transport-"));
+    const storyPath = writeActiveStory(project, "story-4714", 4714);
+    const retainedBytes = readFileSync(storyPath, "utf8");
+    const inner = mockRunGit({ checkoutOmitsActive: true });
+    let materializedInCheckout = false;
+    const result = finalizeCohort({
+      projectRoot: project,
+      storyTokens: [storyPath],
+      prNumbers: [42],
+      label: "story-4714",
+      repo: "deftai/directive",
+      deliveryBranch: "master",
+      retainedDests: [project],
+      noOpenPr: true,
+      runGit: (command, options) => {
+        if (
+          command[1] === "show" &&
+          String(command[2] ?? "").includes("xbrief/active/story-4714")
+        ) {
+          return { returncode: 0, stdout: retainedBytes, stderr: "" };
+        }
+        const out = inner(command, options);
+        if (
+          options?.cwd !== undefined &&
+          options.cwd !== project &&
+          existsSync(join(options.cwd, "xbrief", "active", "story-4714.xbrief.json"))
+        ) {
+          materializedInCheckout = true;
+        }
+        return out;
+      },
+      runGh: mockRunGh({
+        42: {
+          merged: true,
+          closingIssues: [],
+          baseRef: "master",
+          mergeCommitSha: "deadbeefdelivery000000000000000000000001",
+        },
+      }),
+    });
+    expect(materializedInCheckout).toBe(true);
+    expect(vi.mocked(runTransition)).toHaveBeenCalled();
+    expect(result.result.errors).toEqual([]);
+    rmSync(project, { recursive: true, force: true });
+  });
+
+  it("fails closed with source-recovery when lifecycle checkout lacks the brief and no reviewed blob matches (#4714 R5)", () => {
+    const project = mkdtempSync(join(tmpdir(), "sw-finalize-no-source-"));
+    const storyPath = writeActiveStory(project, "story-4714b", 47140);
+    const result = finalizeCohort({
+      projectRoot: project,
+      storyTokens: [storyPath],
+      label: "story-4714b",
+      repo: "deftai/directive",
+      deliveryBranch: "master",
+      landProbeLimit: 1,
+      sleep: () => {},
+      runGit: mockRunGit({
+        checkoutOmitsActive: true,
+        showFail: true,
+      }),
+      runGh: mockRunGh({
+        42: {
+          merged: true,
+          closingIssues: [],
+          baseRef: "master",
+          mergeCommitSha: "deadbeefdelivery000000000000000000000001",
+        },
+      }),
+    });
+    expect(result.exitCode).not.toBe(0);
+    expect(
+      result.result.errors.some(
+        (e) => e.includes("lifecycle checkout is missing") && e.includes("source-recovery"),
+      ),
+    ).toBe(true);
     rmSync(project, { recursive: true, force: true });
   });
 
@@ -1554,7 +2326,7 @@ describe("finalizeCohort", () => {
     rmSync(project, { recursive: true, force: true });
   });
 
-  it("reports a successful lifecycle commit and leaves the issue open when --no-open-pr is set (#4937)", () => {
+  it("reports FINALIZE INCOMPLETE origin-close pending when --no-open-pr is set (#4937 / #4919)", () => {
     const project = mkdtempSync(join(tmpdir(), "sw-finalize-no-pr-"));
     const storyPath = writeActiveStory(project, "story-4937", 4937);
     const ghCalls: string[][] = [];
@@ -1578,19 +2350,22 @@ describe("finalizeCohort", () => {
         return runGh(cmd);
       },
     });
-    expect(result.exitCode).toBe(0);
-    expect(result.result.ok).toBe(true);
+    expect(result.exitCode).toBe(EXIT_INCOMPLETE);
+    expect(result.result.ok).toBe(false);
     expect(result.result.commit_sha).toBe("abc123");
     expect(result.result.pr_url).toBeNull();
-    expect(result.stdout).toContain("Lifecycle commit succeeded");
-    expect(result.stdout).toContain("Issue not closed");
-    expect(result.stdout).toContain("no pull request was opened");
-    expect(result.stdout).toContain("not yet on origin/master");
-    expect(result.stdout).not.toContain("FINALIZE INCOMPLETE");
+    expect(result.result.pending?.kind).toBe("origin-close");
+    expect(result.stdout).toContain("FINALIZE INCOMPLETE");
+    expect(result.stdout).toContain("origin-close pending");
     expect(ghCalls.some((cmd) => cmd.includes("pr") && cmd.includes("create"))).toBe(false);
     expect(ghCalls.some((cmd) => cmd.includes("PATCH"))).toBe(false);
     expect(ghCalls.some((cmd) => cmd.includes("merge"))).toBe(false);
     rmSync(project, { recursive: true, force: true });
+  });
+
+  it("shares claim-ref derivation with finalize-owed (#4919)", () => {
+    expect(finalizeClaimRef(null, [5100], ["4919"])).toBe("swarm/finalize/pr-5100");
+    expect(finalizeClaimRef("4919", [5100], ["4919"])).toBe("swarm/finalize/4919");
   });
 
   it("leaves the checkout in place when worktree remove fails (#4937)", () => {
@@ -1906,5 +2681,556 @@ describe("finalize-cohort sweep base and argv (#3554)", () => {
       stdout.mockRestore();
       stderr.mockRestore();
     }
+  });
+});
+
+describe("unmarked finalize compose from orphan signature (#3791 P3 / #5122)", () => {
+  it("returns null for origin 9999 plus unrelated merged PR 7 (Closes body ignored)", () => {
+    const plan = {
+      title: "unrelated-pair",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/9999",
+          type: "x-xbrief/github-issue",
+        },
+        {
+          uri: "https://github.com/deftai/directive/pull/7",
+          type: "x-xbrief/github-pr",
+        },
+      ],
+    };
+    let ghCalls = 0;
+    const runGh: RunGhFn = (cmd) => {
+      ghCalls += 1;
+      const joined = cmd.join(" ");
+      if (joined.includes("/pulls/7")) {
+        return {
+          returncode: 0,
+          stdout: JSON.stringify({
+            merged_at: "2026-09-28T18:00:00Z",
+            title: "Unrelated change",
+            body: "Closes #1234",
+          }),
+          stderr: "",
+        };
+      }
+      return { returncode: 1, stdout: "", stderr: `unexpected ${joined}` };
+    };
+    expect(deriveUnmarkedFinalizeAdmit(plan, "deftai/directive", runGh)).toBeNull();
+    expect(ghCalls).toBe(0);
+    expect(firstMergedPrRef([{ repo: "deftai/directive", number: 7 }], runGh)?.number).toBe(7);
+    expect(ghCalls).toBe(1);
+  });
+
+  it("refuses empty-prRefs closed-origin-only (out of first ship)", () => {
+    const plan = {
+      title: "closed-only",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/6",
+          type: "x-xbrief/github-issue",
+        },
+      ],
+    };
+    const runGh: RunGhFn = (cmd) => {
+      if (cmd.join(" ").includes("/issues/6")) {
+        return {
+          returncode: 0,
+          stdout: JSON.stringify({ state: "closed", labels: [] }),
+          stderr: "",
+        };
+      }
+      return { returncode: 1, stdout: "", stderr: "unexpected" };
+    };
+    expect(deriveUnmarkedFinalizeAdmit(plan, "deftai/directive", runGh)).toBeNull();
+  });
+
+  it("refuses cross-repo PR/issue pairing for unmarked admit (#3791)", () => {
+    const plan = {
+      title: "cross-repo",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/6",
+          type: "x-xbrief/github-issue",
+        },
+        {
+          uri: "https://github.com/other-org/other-repo/pull/7",
+          type: "x-xbrief/github-pr",
+        },
+      ],
+    };
+    const runGh: RunGhFn = (cmd) => {
+      const joined = cmd.join(" ");
+      if (joined.includes("other-org/other-repo/pulls/7")) {
+        return {
+          returncode: 0,
+          stdout: JSON.stringify({ merged_at: "2026-09-01T00:00:00Z" }),
+          stderr: "",
+        };
+      }
+      if (joined.includes("deftai/directive/issues/6")) {
+        return {
+          returncode: 0,
+          stdout: JSON.stringify({ state: "open", labels: [] }),
+          stderr: "",
+        };
+      }
+      return { returncode: 1, stdout: "", stderr: `unexpected ${joined}` };
+    };
+    expect(deriveUnmarkedFinalizeAdmit(plan, "deftai/directive", runGh)).toBeNull();
+  });
+
+  it("does not first-wins admit when a later PR lookup would fail (#5122)", () => {
+    const plan = {
+      title: "single-probe",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/6",
+          type: "x-xbrief/github-issue",
+        },
+        {
+          uri: "https://github.com/deftai/directive/pull/7",
+          type: "x-xbrief/github-pr",
+        },
+      ],
+    };
+    let pullLookups = 0;
+    const runGh: RunGhFn = (cmd) => {
+      const joined = cmd.join(" ");
+      if (joined.includes("/pulls/7")) {
+        pullLookups += 1;
+        if (pullLookups === 1) {
+          return {
+            returncode: 0,
+            stdout: JSON.stringify({ merged_at: "2026-09-01T00:00:00Z" }),
+            stderr: "",
+          };
+        }
+        return { returncode: 1, stdout: "", stderr: "transient" };
+      }
+      if (joined.includes("/issues/6")) {
+        return {
+          returncode: 0,
+          stdout: JSON.stringify({ state: "open", labels: [] }),
+          stderr: "",
+        };
+      }
+      return { returncode: 1, stdout: "", stderr: `unexpected ${joined}` };
+    };
+    expect(deriveUnmarkedFinalizeAdmit(plan, "deftai/directive", runGh)).toBeNull();
+    expect(pullLookups).toBe(0);
+  });
+
+  it("lists unrelated same-repo merged PR plus origin as unverified, not owed", () => {
+    const root = mkdtempSync(join(tmpdir(), "finalize-unmarked-5122-"));
+    const rel = "xbrief/active/stuck-unmarked.xbrief.json";
+    mkdirSync(join(root, "xbrief", "active"), { recursive: true });
+    writeFileSync(
+      join(root, rel),
+      JSON.stringify({
+        xBRIEFInfo: { version: "0.8" },
+        plan: {
+          title: "stuck-unmarked",
+          status: "running",
+          references: [
+            {
+              uri: "https://github.com/deftai/directive/issues/9999",
+              type: "x-xbrief/github-issue",
+            },
+            {
+              uri: "https://github.com/deftai/directive/pull/7",
+              type: "x-xbrief/github-pr",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+    const tipBlobs = new Map<string, string>([[rel, readFileSync(join(root, rel), "utf8")]]);
+    const runGit = (_projectRoot: string, args: readonly string[]) => {
+      if (args[0] === "ls-tree") {
+        const dash = args.indexOf("--");
+        const prefixes = dash >= 0 ? args.slice(dash + 1) : [];
+        const matched = [...tipBlobs.keys()].filter((p) =>
+          prefixes.some((pref) => p.startsWith(String(pref))),
+        );
+        return { code: 0, stdout: matched.join("\n"), stderr: "" };
+      }
+      if (args[0] === "show") {
+        const spec = String(args[1] ?? "");
+        const tipRel = spec.includes(":") ? spec.slice(spec.indexOf(":") + 1) : "";
+        const body = tipBlobs.get(tipRel);
+        return body !== undefined
+          ? { code: 0, stdout: body, stderr: "" }
+          : { code: 1, stdout: "", stderr: "missing" };
+      }
+      if (args[0] === "ls-remote") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      if (args[0] === "merge-base") {
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const runGh: RunGhFn = (cmd) => {
+      const joined = cmd.join(" ");
+      if (joined.includes("/pulls?")) {
+        return { returncode: 0, stdout: "[]", stderr: "" };
+      }
+      if (joined.includes("/pulls/7")) {
+        return {
+          returncode: 0,
+          stdout: JSON.stringify({
+            merged_at: "2026-09-01T00:00:00Z",
+            merge_commit_sha: "deadbeef",
+            base: { ref: "master" },
+            body: "Closes #1234",
+          }),
+          stderr: "",
+        };
+      }
+      if (joined.includes("/issues/9999")) {
+        return {
+          returncode: 0,
+          stdout: JSON.stringify({ state: "open", labels: [] }),
+          stderr: "",
+        };
+      }
+      return { returncode: 1, stdout: "", stderr: `unexpected ${joined}` };
+    };
+    const inventory = discoverFinalizeOwed(root, {
+      repo: "deftai/directive",
+      deliveryBranch: "master",
+      tip: "TIP",
+      runGit,
+      runGh,
+    });
+    expect(inventory.stories.filter((s) => s.state === "owed")).toHaveLength(0);
+    const listed = inventory.stories.filter((s) => s.relPath === rel);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.state).toBe("unverified");
+    expect(listed[0]?.blocks).toBe(false);
+    expect(listed[0]?.issue).toBe(9999);
+    expect(listed[0]?.productPr).toBe(0);
+    expect(listed[0]?.detail).toContain("productPullRequest");
+    expect(listed[0]?.detail).toContain("#4864");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("refuses two same-repo origins and does not mark owed", () => {
+    const plan = {
+      title: "two-origins",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/9999",
+          type: "x-xbrief/github-issue",
+        },
+        {
+          uri: "https://github.com/deftai/directive/issues/1111",
+          type: "x-xbrief/github-issue",
+        },
+        {
+          uri: "https://github.com/deftai/directive/pull/7",
+          type: "x-xbrief/github-pr",
+        },
+      ],
+    };
+    const bound = bindUnmarkedFinalizePair({
+      admit: { productPr: 7, issue: 9999, detail: "should-not-bind" },
+      issueFromPlan: 9999,
+      plan,
+    });
+    expect(bound.kind).toBe("refuse");
+    if (bound.kind !== "omit") {
+      expect(bound.productPr).toBe(0);
+      expect(bound.detail).toContain("multiple github-issue");
+    }
+    const root = mkdtempSync(join(tmpdir(), "finalize-two-origins-5122-"));
+    const rel = "xbrief/active/two-origins.xbrief.json";
+    mkdirSync(join(root, "xbrief", "active"), { recursive: true });
+    writeFileSync(
+      join(root, rel),
+      JSON.stringify({ xBRIEFInfo: { version: "0.8" }, plan }),
+      "utf8",
+    );
+    const tipBlobs = new Map<string, string>([[rel, readFileSync(join(root, rel), "utf8")]]);
+    const inventory = discoverFinalizeOwed(root, {
+      repo: "deftai/directive",
+      deliveryBranch: "master",
+      tip: "TIP",
+      runGit: (_projectRoot, args) => {
+        if (args[0] === "ls-tree") {
+          return { code: 0, stdout: rel, stderr: "" };
+        }
+        if (args[0] === "show") {
+          return { code: 0, stdout: tipBlobs.get(rel) ?? "", stderr: "" };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      },
+      runGh: () => ({ returncode: 0, stdout: "[]", stderr: "" }),
+    });
+    expect(inventory.stories.filter((s) => s.state === "owed")).toHaveLength(0);
+    const listed = inventory.stories.find((s) => s.relPath === rel);
+    expect(listed?.state).toBe("unverified");
+    expect(listed?.blocks).toBe(false);
+    expect(listed?.detail).toContain("multiple github-issue");
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("does not first-wins admit when two merged PRs are listed", () => {
+    const plan = {
+      title: "two-prs",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/9999",
+          type: "x-xbrief/github-issue",
+        },
+        {
+          uri: "https://github.com/deftai/directive/pull/7",
+          type: "x-xbrief/github-pr",
+        },
+        {
+          uri: "https://github.com/deftai/directive/pull/8",
+          type: "x-xbrief/github-pr",
+        },
+      ],
+    };
+    const seen: string[] = [];
+    const runGh: RunGhFn = (cmd) => {
+      seen.push(cmd.join(" "));
+      return {
+        returncode: 0,
+        stdout: JSON.stringify({ merged_at: "2026-09-01T00:00:00Z" }),
+        stderr: "",
+      };
+    };
+    expect(deriveUnmarkedFinalizeAdmit(plan, "deftai/directive", runGh)).toBeNull();
+    expect(seen.some((s) => s.includes("/pulls/7"))).toBe(false);
+    expect(seen.some((s) => s.includes("/pulls/8"))).toBe(false);
+    const bound = bindUnmarkedFinalizePair({
+      admit: null,
+      issueFromPlan: 9999,
+      plan,
+    });
+    expect(bound.kind).toBe("unverified");
+    if (bound.kind !== "omit") {
+      expect(bound.productPr).toBe(0);
+      expect(bound.detail).toBe(UNMARKED_STAMP_REMEDIATION);
+    }
+  });
+
+  it("refuses later-ship admit when issueFromPlan is null", () => {
+    const bound = bindUnmarkedFinalizePair({
+      admit: { productPr: 7, issue: 9999, detail: "synthetic later-ship" },
+      issueFromPlan: null,
+      plan: { references: [] },
+    });
+    expect(bound.kind).toBe("refuse");
+    if (bound.kind !== "omit") {
+      expect(bound.issue).toBe(0);
+      expect(bound.productPr).toBe(0);
+      expect(bound.detail).toContain("origin missing");
+    }
+  });
+
+  it("counts github-issue references only and skips junk entries", () => {
+    expect(countPlanGithubIssueReferences({})).toBe(0);
+    expect(
+      countPlanGithubIssueReferences({
+        references: [
+          "skip",
+          null,
+          {
+            uri: "https://github.com/deftai/directive/issues/9999",
+            type: "x-xbrief/github-issue",
+          },
+          {
+            uri: "https://github.com/deftai/directive/pull/7",
+            type: "x-xbrief/github-pr",
+          },
+        ],
+      }),
+    ).toBe(1);
+  });
+
+  it("counts duplicate github-issue URIs for one origin as one origin", () => {
+    expect(
+      countPlanGithubIssueReferences({
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/9999",
+            type: "x-xbrief/github-issue",
+          },
+          {
+            uri: "https://github.com/deftai/directive/issues/9999",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+      }),
+    ).toBe(1);
+    const bound = bindUnmarkedFinalizePair({
+      admit: { productPr: 7, issue: 9999, detail: "later unique pair" },
+      issueFromPlan: 9999,
+      plan: {
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/9999",
+            type: "x-xbrief/github-issue",
+          },
+          {
+            uri: "https://github.com/deftai/directive/issues/9999",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+      },
+    });
+    expect(bound).toEqual({
+      kind: "admit",
+      issue: 9999,
+      productPr: 7,
+      detail: "later unique pair",
+    });
+    const unverified = bindUnmarkedFinalizePair({
+      admit: null,
+      issueFromPlan: 9999,
+      plan: {
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/9999",
+            type: "x-xbrief/github-issue",
+          },
+          {
+            uri: "https://github.com/deftai/directive/issues/9999",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+      },
+    });
+    expect(unverified.kind).toBe("unverified");
+    if (unverified.kind !== "omit") {
+      expect(unverified.detail).toBe(UNMARKED_STAMP_REMEDIATION);
+      expect(unverified.productPr).toBe(0);
+    }
+  });
+
+  it("counts the same issue number in two repos as two origins and refuses", () => {
+    expect(
+      countPlanGithubIssueReferences({
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/42",
+            type: "x-xbrief/github-issue",
+          },
+          {
+            uri: "https://github.com/other/repo/issues/42",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+      }),
+    ).toBe(2);
+    const bound = bindUnmarkedFinalizePair({
+      admit: { productPr: 7, issue: 42, detail: "should-not-bind" },
+      issueFromPlan: 42,
+      plan: {
+        references: [
+          {
+            uri: "https://github.com/deftai/directive/issues/42",
+            type: "x-xbrief/github-issue",
+          },
+          {
+            uri: "https://github.com/other/repo/issues/42",
+            type: "x-xbrief/github-issue",
+          },
+        ],
+      },
+    });
+    expect(bound.kind).toBe("refuse");
+    if (bound.kind !== "omit") {
+      expect(bound.productPr).toBe(0);
+      expect(bound.detail).toContain("multiple github-issue");
+    }
+  });
+
+  it("refuses later-ship admit when issueFromPlan disagrees", () => {
+    const plan = {
+      title: "parser-split",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/1111",
+          type: "x-xbrief/github-issue",
+        },
+      ],
+    };
+    const bound = bindUnmarkedFinalizePair({
+      admit: { productPr: 7, issue: 9999, detail: "synthetic later-ship" },
+      issueFromPlan: 1111,
+      plan,
+    });
+    expect(bound.kind).toBe("refuse");
+    if (bound.kind !== "omit") {
+      expect(bound.issue).toBe(1111);
+      expect(bound.productPr).toBe(0);
+      expect(bound.detail).toContain("disagrees");
+    }
+  });
+
+  it("lists Tracking unmarked without stamp as unverified, not owed", () => {
+    const plan = {
+      title: "tracking-unmarked",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/issues/9999",
+          type: "x-xbrief/github-issue",
+        },
+      ],
+    };
+    expect(
+      deriveUnmarkedFinalizeAdmit(plan, "deftai/directive", () => {
+        throw new Error("no forge");
+      }),
+    ).toBeNull();
+    const bound = bindUnmarkedFinalizePair({
+      admit: null,
+      issueFromPlan: 9999,
+      plan,
+    });
+    expect(bound.kind).toBe("unverified");
+    if (bound.kind !== "omit") {
+      expect(bound.productPr).toBe(0);
+      expect(bound.detail).toBe(UNMARKED_STAMP_REMEDIATION);
+    }
+  });
+
+  it("does not take origin from x-tracking parent_issue", () => {
+    const plan = {
+      title: "tracking-parent",
+      status: "running",
+      references: [
+        {
+          uri: "https://github.com/deftai/directive/pull/7",
+          type: "x-xbrief/github-pr",
+        },
+      ],
+      metadata: { "x-tracking": { parent_issue: "#4000" } },
+    };
+    expect(
+      deriveUnmarkedFinalizeAdmit(plan, "deftai/directive", () => {
+        throw new Error("no forge");
+      }),
+    ).toBeNull();
+    const bound = bindUnmarkedFinalizePair({
+      admit: null,
+      issueFromPlan: null,
+      plan,
+    });
+    expect(bound.kind).toBe("omit");
   });
 });

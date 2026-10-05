@@ -6,7 +6,18 @@ import { mintOnePrUnitGrant } from "../one-pr-unit/mint.js";
 import { DirectiveGitHubAppStore } from "../one-pr-unit/store.js";
 import { ENV_TRIAGE_REPO } from "../triage/queue/constants.js";
 import { EXIT_CONFIG_ERROR, EXIT_HITS_FOUND, EXIT_OK } from "./constants.js";
-import { cmdPrCheckClosingKeywords, parseAllowList, parseArgs, run } from "./main.js";
+import {
+  cmdPrCheckClosingKeywords,
+  evaluateFullStoryMarkAdmission,
+  fullStoryCloseIntentFromBody,
+  isLeftoverShapedDiff,
+  isSkipActiveDeliveryShape,
+  parseAllDeftStoryMarks,
+  parseAllowList,
+  parseArgs,
+  parseDeftStoryMark,
+  run,
+} from "./main.js";
 import type { RunGhFn } from "./types.js";
 
 describe("parseAllowList", () => {
@@ -252,6 +263,10 @@ describe("run CLI --pr mode", () => {
     const calls: string[][] = [];
     const runGh: RunGhFn = (cmd) => {
       calls.push([...cmd]);
+      const joined = cmd.join(" ");
+      if (joined.includes("/files")) {
+        return { returncode: 0, stdout: "[]", stderr: "" };
+      }
       if (cmd.includes("body")) {
         return { returncode: 0, stdout: JSON.stringify({ body: "Refs #642 only." }), stderr: "" };
       }
@@ -273,6 +288,10 @@ describe("run CLI --pr mode", () => {
 
   it("finds negation hit from pr body", () => {
     const runGh: RunGhFn = (cmd) => {
+      const joined = cmd.join(" ");
+      if (joined.includes("/files")) {
+        return { returncode: 0, stdout: "[]", stderr: "" };
+      }
       if (cmd.includes("body")) {
         return {
           returncode: 0,
@@ -354,6 +373,9 @@ describe("one-PR-unit closer-set (#4494)", () => {
 
   it("live --pr single Closes without --allow-close passes (CI)", () => {
     const runGh: RunGhFn = (cmd) => {
+      if (cmd.join(" ").includes("/files")) {
+        return { returncode: 0, stdout: "[]", stderr: "" };
+      }
       if (cmd.includes("body")) {
         return {
           returncode: 0,
@@ -372,6 +394,9 @@ describe("one-PR-unit closer-set (#4494)", () => {
 
   it("live --pr five-origin comma-list without grant fails closed", () => {
     const runGh: RunGhFn = (cmd) => {
+      if (cmd.join(" ").includes("/files")) {
+        return { returncode: 0, stdout: "[]", stderr: "" };
+      }
       if (cmd.includes("body")) {
         return {
           returncode: 0,
@@ -454,8 +479,9 @@ describe("one-PR-unit closer-set (#4494)", () => {
       repo: "deftai/directive",
     });
     const runGh: RunGhFn = (cmd) => {
-      if (cmd.includes("api")) {
-        return { returncode: 0, stdout: JSON.stringify({ node_id: "PR_LEGIT" }), stderr: "" };
+      const joined = cmd.join(" ");
+      if (joined.includes("/files")) {
+        return { returncode: 0, stdout: "[]", stderr: "" };
       }
       if (cmd.includes("body")) {
         return {
@@ -463,6 +489,9 @@ describe("one-PR-unit closer-set (#4494)", () => {
           stdout: JSON.stringify({ body: "Closes #3728\nCloses #3804\n" }),
           stderr: "",
         };
+      }
+      if (cmd.includes("api")) {
+        return { returncode: 0, stdout: JSON.stringify({ node_id: "PR_LEGIT" }), stderr: "" };
       }
       return { returncode: 0, stdout: JSON.stringify({ commits: [] }), stderr: "" };
     };
@@ -602,6 +631,9 @@ describe("--allow-close running-for-N refuse (#4628)", () => {
 
   it("live --pr without --allow-close still skips intent (#3015)", () => {
     const runGh: RunGhFn = (cmd) => {
+      if (cmd.join(" ").includes("/files")) {
+        return { returncode: 0, stdout: "[]", stderr: "" };
+      }
       if (cmd.includes("body")) {
         return { returncode: 0, stdout: JSON.stringify({ body: "Closes #4494\n" }), stderr: "" };
       }
@@ -612,5 +644,181 @@ describe("--allow-close running-for-N refuse (#4628)", () => {
       EXIT_OK,
     );
     stderr.mockRestore();
+  });
+});
+
+describe("full-story mark admission shapes (#4919)", () => {
+  it("admits leftover-shaped diffs and refuses skip-active", () => {
+    expect(
+      isLeftoverShapedDiff([
+        { status: "removed", path: "xbrief/active/story.xbrief.json" },
+        { status: "added", path: "xbrief/completed/story.xbrief.json" },
+      ]),
+    ).toBe(true);
+    expect(
+      isSkipActiveDeliveryShape([
+        { status: "removed", path: "xbrief/proposed/story.xbrief.json" },
+        { status: "added", path: "xbrief/completed/story.xbrief.json" },
+      ]),
+    ).toBe(true);
+    const leftover = evaluateFullStoryMarkAdmission({
+      bodyText: "Tracking #1",
+      prNumber: 9,
+      projectRoot: ".",
+      repo: "deftai/directive",
+      files: [
+        { status: "removed", path: "xbrief/active/story.xbrief.json" },
+        { status: "added", path: "xbrief/completed/story.xbrief.json" },
+      ],
+    });
+    expect(leftover.ok).toBe(true);
+    const skip = evaluateFullStoryMarkAdmission({
+      bodyText: "Tracking #1",
+      prNumber: 9,
+      projectRoot: ".",
+      repo: "deftai/directive",
+      files: [
+        { status: "removed", path: "xbrief/proposed/story.xbrief.json" },
+        { status: "added", path: "xbrief/completed/story.xbrief.json" },
+      ],
+    });
+    expect(skip.ok).toBe(false);
+  });
+
+  it("refuses leftover exception when unrelated nonterminal briefs also change", () => {
+    expect(
+      isLeftoverShapedDiff([
+        { status: "removed", path: "xbrief/active/story.xbrief.json" },
+        { status: "added", path: "xbrief/completed/story.xbrief.json" },
+        { status: "modified", path: "xbrief/proposed/other.xbrief.json" },
+      ]),
+    ).toBe(false);
+  });
+
+  it("refuses mixed proposed→completed + source diffs (no admission bypass) (#4919)", () => {
+    const files = [
+      { status: "removed", path: "xbrief/proposed/story.xbrief.json" },
+      { status: "added", path: "xbrief/completed/story.xbrief.json" },
+      { status: "modified", path: "packages/core/src/example.ts" },
+    ];
+    expect(isSkipActiveDeliveryShape(files)).toBe(true);
+    const result = evaluateFullStoryMarkAdmission({
+      bodyText: "Tracking #1",
+      prNumber: 9,
+      projectRoot: ".",
+      repo: "deftai/directive",
+      files,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.messages.join("\n")).toMatch(/skip-active/);
+  });
+
+  it("requires each changed nonterminal brief path to bind productPullRequest", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-admission-bind-"));
+    mkdirSync(join(root, "xbrief", "active"), { recursive: true });
+    writeFileSync(
+      join(root, "xbrief", "active", "bound.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          title: "bound",
+          status: "running",
+          references: [
+            {
+              uri: "https://github.com/deftai/directive/issues/55",
+              type: "x-xbrief/github-issue",
+            },
+          ],
+          metadata: { productPullRequest: 9 },
+        },
+      }),
+      "utf8",
+    );
+    writeFileSync(
+      join(root, "xbrief", "active", "unbound.xbrief.json"),
+      JSON.stringify({
+        plan: {
+          title: "unbound",
+          status: "running",
+          references: [
+            {
+              uri: "https://github.com/deftai/directive/issues/56",
+              type: "x-xbrief/github-issue",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+    const result = evaluateFullStoryMarkAdmission({
+      bodyText: "deft-story: 55\ndeft-story: 56\n",
+      prNumber: 9,
+      projectRoot: root,
+      repo: "deftai/directive",
+      files: [
+        { status: "modified", path: "xbrief/active/bound.xbrief.json" },
+        { status: "modified", path: "xbrief/active/unbound.xbrief.json" },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    expect(result.messages.join("\n")).toContain("unbound.xbrief.json");
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("full-story close intent mark (#4864)", () => {
+  it("parses deft-story: N and ignores deft-close-intent: full", () => {
+    expect(parseDeftStoryMark("Tracking #55\n\ndeft-story: 55\n")).toBe(55);
+    expect(parseDeftStoryMark("Tracking #55\n\ndeft-close-intent: full\n")).toBeNull();
+    expect(parseAllDeftStoryMarks("deft-story: 10\ndeft-story: 20\n")).toEqual([10, 20]);
+    expect(fullStoryCloseIntentFromBody("Refs #9\ndeft-story: 9\n")).toEqual({
+      issue: 9,
+      source: "deft-story",
+    });
+  });
+
+  it("Tracking + deft-story still passes while --allow-close is refused for a running brief", () => {
+    const root = mkdtempSync(join(tmpdir(), "deft-full-story-mark-"));
+    mkdirSync(join(root, "xbrief", "active"), { recursive: true });
+    writeFileSync(
+      join(root, "xbrief", "active", "story-55.xbrief.json"),
+      JSON.stringify({
+        xBRIEFInfo: { version: "0.8" },
+        plan: {
+          title: "story",
+          status: "running",
+          references: [
+            {
+              uri: "https://github.com/deftai/directive/issues/55",
+              type: "x-xbrief/github-issue",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+    const trackingBody = join(root, "tracking.md");
+    writeFileSync(trackingBody, "Tracking #55\n\ndeft-story: 55\n", "utf8");
+    expect(
+      run(["--body-file", trackingBody, "--repo", "deftai/directive", "--project-root", root]),
+    ).toBe(EXIT_OK);
+
+    const closesBody = join(root, "closes.md");
+    writeFileSync(closesBody, "Closes #55\n\ndeft-story: 55\n", "utf8");
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    expect(
+      run([
+        "--body-file",
+        closesBody,
+        "--allow-close",
+        "55",
+        "--repo",
+        "deftai/directive",
+        "--project-root",
+        root,
+      ]),
+    ).toBe(EXIT_HITS_FOUND);
+    expect(stderr.mock.calls.join("")).toContain("Tracking");
+    stderr.mockRestore();
+    rmSync(root, { recursive: true, force: true });
   });
 });

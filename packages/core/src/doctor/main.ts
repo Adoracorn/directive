@@ -7,6 +7,7 @@ import {
 } from "../check/consumer-gate-integrity.js";
 import { contentRoot } from "../content-root.js";
 import {
+  DEFT_HOOK_COMMAND_MARKER,
   inspectSessionStartNotice,
   type SessionStartNoticeInspection,
 } from "../init-deposit/agent-hooks.js";
@@ -42,9 +43,14 @@ import {
   plan as resolvePlan,
 } from "../resolution/index.js";
 import { isLinkedWorktreePath } from "../session/main-worktree.js";
+import { occupancyLiveness, readOccupancy } from "../session/occupancy.js";
 import { type ResolveUserMdResult, resolveUserMdPath } from "../user-config/resolve-user-md.js";
 import { evaluateAgentHooks } from "../verify-env/agent-hooks.js";
 import { probeAgentHooksLive } from "../verify-env/agent-hooks-live-probe.js";
+import {
+  POWERSHELL_RESTRICTED_CMD_RECOVERY,
+  probePowershellBinReachability,
+} from "../verify-env/command-spawn.js";
 import { MIGRATED_ARTIFACT_DIR } from "../xbrief-migrate/constants.js";
 import { detectXbriefConvergence } from "../xbrief-migrate/detect.js";
 import {
@@ -55,14 +61,26 @@ import {
   resolveDoctorAgentsTemplateRootSync,
 } from "./agents-md.js";
 import {
+  checkDanglingNodeModulesLinks,
+  checkWslOwnershipGuard,
   checkXbriefEnvelopeMajorVersion,
+  DANGLING_NODE_MODULES_LINKS_CHECK,
   DOCTOR_ADVISORY_FAIL_CHECKS,
+  isDoctorAdvisoryFail,
   prefixCanonicalVendoredSignpostWarn,
   runChecks,
   SIGNPOST_ADVISORY_LABEL,
   XBRIEF_ENVELOPE_MAJOR_CHECK,
   XBRIEF_ENVELOPE_MIGRATE_COMMAND,
 } from "./checks.js";
+import {
+  checkDesignCritiqueDeposit,
+  DESIGN_CRITIQUE_DEPOSIT_CHECK,
+} from "./design-critique-deposit.js";
+
+/** #1617: re-export so doctor consumers can invoke the ownership check directly. */
+export { checkWslOwnershipGuard };
+
 import {
   CONSUMER_FRAMEWORK_DIRS,
   EXPECTED_CONTENT_DIRS,
@@ -128,6 +146,51 @@ import {
 } from "./taskfile.js";
 import type { DoctorSeams, Finding, ResolutionSummary } from "./types.js";
 import { defaultWhich } from "./which.js";
+
+/**
+ * Cold-start recovery copy for abandoned live occupancy (#4667).
+ * Mirrors README cold-start; live actor is session_id. Bare session:end with
+ * empty identity refuses; TTL claim-over and deny-embedded recipe remain.
+ * host:none / address:none are unset metadata. Does not reopen anonymous
+ * live auto-release (#3954).
+ */
+/** Help / cold-start recovery recipe (#4667). Does not assert abandonment by itself. */
+export const ABANDONED_OCCUPANCY_LEASE_RECOVERY =
+  "Occupancy lease recovery: bare session:end / occupancy:release without a presented " +
+  "session identity refuses while a lease is live. Immediate recovery when you intend to " +
+  "clear that session: occupancy:release --session-id=<id from .deft/occupancy.json> " +
+  "(read session_id from that file). Or wait for TTL claim-over. " +
+  "host:none / address:none are ordinary unset metadata, not the lock cause.";
+
+/**
+ * Tip for a present `.deft/occupancy.json` (#4667 Greptile). File presence alone
+ * is not abandonment — only stale/capped (or unreadable) leases get that label.
+ */
+export function occupancyLeaseDoctorTip(
+  projectRoot: string,
+  now: Date = new Date(),
+): string | null {
+  if (!existsSync(join(projectRoot, ".deft", "occupancy.json"))) return null;
+  const record = readOccupancy(projectRoot);
+  if (record === null) {
+    return (
+      "Occupancy lease file present but unreadable or invalid. " +
+      "Delete or rewrite `.deft/occupancy.json` — occupancy:release cannot clear a corrupt file."
+    );
+  }
+  const liveness = occupancyLiveness(record, now);
+  if (liveness === "live") {
+    return (
+      `Occupancy lease present (session ${record.sessionId}, live). ` +
+      "Do not release another owner's live lease. " +
+      ABANDONED_OCCUPANCY_LEASE_RECOVERY
+    );
+  }
+  return (
+    `Abandoned or expired occupancy lease (session ${record.sessionId}, ${liveness}). ` +
+    ABANDONED_OCCUPANCY_LEASE_RECOVERY
+  );
+}
 
 const DEFAULT_RESOLUTION_PLATFORMS = ["linux", "darwin", "win32"] as const;
 
@@ -345,6 +408,8 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
 
   if (flags.help) {
     process.stdout.write(formatDoctorHelp());
+    // Cold-start recovery copy (#4667): keep discoverable beside doctor --help.
+    process.stdout.write(`${ABANDONED_OCCUPANCY_LEASE_RECOVERY}\n`);
     return 0;
   }
 
@@ -358,7 +423,6 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
   const consumerContext = resolve(projectRoot) !== resolve(frameworkRoot);
   const whichFn = seams.whichFn ?? defaultWhich;
   const nowFn = seams.now ?? (() => new Date());
-
   // #3039: temporary test kill-switch. Active (untracked) → disabled short-circuit.
   // Tracked/committed flag → warn only and continue normal doctor (no enforcement bypass).
   const killSwitch = detectDeftDirectiveDisable(projectRoot, { skipTrackedCache: true });
@@ -466,6 +530,41 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
         },
         seams,
       );
+      // #3749: always-cheap dangling probe when node_modules exists (incl. framework repo).
+      const danglingProbe = seams.checkDanglingNodeModulesLinks ?? checkDanglingNodeModulesLinks;
+      const danglingThrottle = danglingProbe(projectRoot, {
+        packageManager: resolveDoctorPackageManager(projectRoot, seams),
+        ...(seams.isDir ? { isDir: seams.isDir } : {}),
+        ...(seams.isFile ? { isFile: seams.isFile } : {}),
+        ...(seams.readText ? { readText: seams.readText } : {}),
+      });
+      if (danglingThrottle.status === "fail") {
+        const danglingAdvisory = isDoctorAdvisoryFail(danglingThrottle.name, danglingThrottle.data);
+        if (danglingAdvisory) {
+          throttleSink.warn(`${danglingThrottle.name}: ${danglingThrottle.detail}`);
+          throttleFindings.push({
+            severity: "warning",
+            message: danglingThrottle.detail,
+            check: danglingThrottle.name,
+            status: danglingThrottle.status,
+            data: danglingThrottle.data ?? {},
+          });
+        } else {
+          throttleSink.error(`${danglingThrottle.name}: fail -- ${danglingThrottle.detail}`);
+          throttleFindings.push({
+            severity: "error",
+            message: danglingThrottle.detail,
+            check: danglingThrottle.name,
+            status: danglingThrottle.status,
+            data: danglingThrottle.data ?? {},
+          });
+        }
+      } else if (danglingThrottle.status === "pass" && !jsonMode && !quietMode) {
+        throttleSink.success(`${danglingThrottle.name}: pass`);
+      }
+      const danglingHardFail =
+        danglingThrottle.status === "fail" &&
+        !isDoctorAdvisoryFail(danglingThrottle.name, danglingThrottle.data);
       const hint = decision.dirty ? dirtyDoctorHint() : "--full forces";
       const hygieneFailed = depositHygieneFailed(seams);
       const hygieneJson = depositHygieneJson(seams);
@@ -480,22 +579,34 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
           hint,
           ...(throttleFindings.length > 0 ? { signpost_findings: throttleFindings } : {}),
           ...(hygieneJson
-            ? { deposit_hygiene: hygieneJson, ok: !hygieneFailed && !decision.dirty }
+            ? {
+                deposit_hygiene: hygieneJson,
+                ok: !hygieneFailed && !decision.dirty && !danglingHardFail,
+              }
             : {}),
         };
         process.stdout.write(`${pythonJsonDump(payload)}\n`);
       } else {
         process.stdout.write(`${renderDoctorStatusLine(decision, nowFn())}\n`);
       }
+      // #4667: throttle-skipped runs still surface lease recovery when a file is present.
+      const throttleLeaseTip = occupancyLeaseDoctorTip(projectRoot, nowFn());
+      if (throttleLeaseTip !== null && !jsonMode && !quietMode) {
+        throttleSink.info(throttleLeaseTip);
+      }
       const signpostWarnings = throttleFindings.filter((f) => f.severity === "warning").length;
-      if (hygieneFailed && !jsonMode) {
-        throttleSink.finalError("System check failed with 1 error(s) including deposit hygiene.");
+      if ((hygieneFailed || danglingHardFail) && !jsonMode) {
+        throttleSink.finalError(
+          danglingHardFail
+            ? `System check failed with dangling node_modules link(s) (${DANGLING_NODE_MODULES_LINKS_CHECK}).`
+            : "System check failed with 1 error(s) including deposit hygiene.",
+        );
       } else if (signpostWarnings > 0 && !jsonMode) {
         throttleSink.finalWarn(
           `${SIGNPOST_ADVISORY_LABEL} ${signpostWarnings} local configuration / layout note(s) above (throttle-skipped full probe).`,
         );
       }
-      return hygieneFailed || decision.dirty ? 1 : 0;
+      return hygieneFailed || decision.dirty || danglingHardFail ? 1 : 0;
     }
   }
 
@@ -571,6 +682,12 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
   }
   sink.info("Checking AGENTS.md legibility (advisory)...");
   runAgentsMdAdvisoryCheck(projectRoot, sink, addFinding, seams);
+
+  if (!jsonMode) {
+    sink.blank();
+  }
+  sink.info("Checking design-critique deposit / judgmentGates (advisory)...");
+  runDesignCritiqueDepositCheck(projectRoot, sink, addFinding);
 
   if (!jsonMode) {
     sink.blank();
@@ -830,6 +947,11 @@ export function cmdDoctor(args: readonly string[], seams: DoctorSeams = {}): num
   }
 
   sink.blank();
+  // #4667: name lease recovery when a file is present; do not assert abandonment on presence alone.
+  const leaseTip = occupancyLeaseDoctorTip(projectRoot, nowFn());
+  if (leaseTip !== null && !quietMode) {
+    sink.info(leaseTip);
+  }
   if (errorCount === 0 && warningCount === 0) {
     sink.finalSuccess("System check passed!");
     emitSessionCodaAfterFinalSuccess({
@@ -1009,6 +1131,29 @@ export function runAgentHooksLiveProbeCheck(
       });
       return;
     }
+    // Skip Restricted reachability when no host will invoke deft-hook; a stale
+    // PATH .ps1 must not mark intentionally disabled hooks non-functional.
+    if (enabledHosts.length > 0) {
+      const psReach = (
+        seams.probePowershellDeftHookReachability ??
+        (() => probePowershellBinReachability(DEFT_HOOK_COMMAND_MARKER))
+      )();
+      if (!psReach.skipped && !psReach.ok) {
+        const message =
+          `${liveCheckName}: PowerShell-visible ${DEFT_HOOK_COMMAND_MARKER} is not reachable under Restricted (${psReach.detail}). ` +
+          POWERSHELL_RESTRICTED_CMD_RECOVERY;
+        sink.warn(message);
+        addFinding({
+          severity: "warning",
+          message,
+          check: liveCheckName,
+          status: "non-functional",
+          suggestion: POWERSHELL_RESTRICTED_CMD_RECOVERY,
+          powershell_reachability: psReach,
+        });
+        return;
+      }
+    }
     const codexEnabled = result.registrations.some(
       (entry) => entry.host === "codex" && entry.status !== "disabled",
     );
@@ -1038,6 +1183,51 @@ export function runAgentHooksLiveProbeCheck(
   }
 }
 
+function reportDanglingNodeModulesLinksCheck(
+  projectRoot: string,
+  sink: ReturnType<typeof createPlainSink>,
+  addFinding: (f: Finding) => void,
+  seams: DoctorSeams,
+): void {
+  const probe = seams.checkDanglingNodeModulesLinks ?? checkDanglingNodeModulesLinks;
+  const result = probe(projectRoot, {
+    packageManager: resolveDoctorPackageManager(projectRoot, seams),
+    ...(seams.isDir ? { isDir: seams.isDir } : {}),
+    ...(seams.isFile ? { isFile: seams.isFile } : {}),
+    ...(seams.readText ? { readText: seams.readText } : {}),
+  });
+  if (result.status === "pass") {
+    sink.success(`${result.name}: pass`);
+    return;
+  }
+  if (result.status === "skip") {
+    sink.info(`${result.name}: skip -- ${result.detail}`);
+    return;
+  }
+  if (result.status === "fail") {
+    // Framework-only full-doctor path (#3749): same advisory mapping as throttle/consumer.
+    if (isDoctorAdvisoryFail(result.name, result.data)) {
+      sink.warn(`${result.name}: ${result.detail}`);
+      addFinding({
+        severity: "warning",
+        message: result.detail,
+        check: result.name,
+        status: result.status,
+        data: result.data ?? {},
+      });
+      return;
+    }
+    sink.error(`${result.name}: fail -- ${result.detail}`);
+    addFinding({
+      severity: "error",
+      message: result.detail,
+      check: result.name,
+      status: result.status,
+      data: result.data ?? {},
+    });
+  }
+}
+
 function runInstallIntegrityChecks(
   projectRoot: string,
   sink: ReturnType<typeof createPlainSink>,
@@ -1048,6 +1238,8 @@ function runInstallIntegrityChecks(
     sink.info(
       "Skipping install-integrity checks -- running inside the deft framework repo (no install manifest in the source checkout).",
     );
+    // #3749 carve-in: dangling links still run for framework source when node_modules exists.
+    reportDanglingNodeModulesLinksCheck(projectRoot, sink, addFinding, seams);
     return;
   }
   try {
@@ -1210,6 +1402,44 @@ function runAgentsMdFreshnessCheck(
  * `deft doctor` (and the `check:consumer` aggregate that depends on it) can
  * never fail-close on a judgment call about the consumer's own file.
  */
+function runDesignCritiqueDepositCheck(
+  projectRoot: string,
+  sink: ReturnType<typeof createPlainSink>,
+  addFinding: (f: Finding) => void,
+): void {
+  const result = checkDesignCritiqueDeposit(projectRoot);
+  if (result.status === "skip") {
+    sink.info(`${DESIGN_CRITIQUE_DEPOSIT_CHECK}: skip -- ${result.detail}`);
+    addFinding({
+      severity: "skip",
+      message: result.detail,
+      check: DESIGN_CRITIQUE_DEPOSIT_CHECK,
+      status: "skip",
+      data: result.data,
+    });
+    return;
+  }
+  if (result.status === "pass") {
+    sink.info(`${DESIGN_CRITIQUE_DEPOSIT_CHECK}: ${result.detail}`);
+    addFinding({
+      severity: "skip",
+      message: result.detail,
+      check: DESIGN_CRITIQUE_DEPOSIT_CHECK,
+      status: "pass",
+      data: result.data,
+    });
+    return;
+  }
+  sink.warn(result.detail);
+  addFinding({
+    severity: "warning",
+    message: result.detail,
+    check: DESIGN_CRITIQUE_DEPOSIT_CHECK,
+    status: "fail",
+    data: result.data,
+  });
+}
+
 function runAgentsMdAdvisoryCheck(
   projectRoot: string,
   sink: ReturnType<typeof createPlainSink>,

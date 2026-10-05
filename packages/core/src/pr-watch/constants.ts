@@ -42,10 +42,33 @@ export const VERDICT_CI_NEVER_SCHEDULED = "CI_NEVER_SCHEDULED";
  * Exit 2 — thrash-cap then BLOCKED; workflow arming is sibling #3168.
  */
 export const VERDICT_CI_CANCELLED_NO_FAILOVER = "CI_CANCELLED_NO_FAILOVER";
+/**
+ * No bot reviewer can be expected (presence probe and/or explicit empty
+ * plan.policy.review.reviewers) (#3630). Exit 2 — named weather terminal, not
+ * CLEAN, TIMEOUT, or STALL. Route to pre-pr self-review.
+ */
+export const VERDICT_NO_REVIEWER_INSTALLED = "NO_REVIEWER_INSTALLED";
 /** --one-shot only: a single probe with no terminal verdict yet. */
 export const VERDICT_PENDING = "PENDING";
 /** External/config fault mid-probe (unresolvable repo/HEAD, gh unavailable). */
 export const VERDICT_CONFIG = "CONFIG";
+/** Sticky tip-rot sha_match with no in-flight Greptile Review (#5162). Exit 2. */
+export const VERDICT_GREPTILE_SHA_STALL = "GREPTILE_SHA_STALL";
+/**
+ * PR already squash-/merge-landed (`merged=true` on REST pulls) (#4288).
+ * Terminal success, exit 0 — same finish-success family as CLEAN for wait owners.
+ * SHA-match / missing Last reviewed must not hold a merged PR.
+ */
+export const VERDICT_MERGED = "MERGED";
+/**
+ * PR closed without merge (`state=closed` and `merged=false`) (#4288).
+ * Terminal non-success, exit 2 — not CLEAN; workers treat as not shipped.
+ */
+export const VERDICT_CLOSED_UNMERGED = "CLOSED_UNMERGED";
+/** Fail-loud remedy string for Prefer-A Recut greptile-sha-stall (#5162). */
+export const GREPTILE_SHA_STALL_REMEDY = "BLOCKED: greptile-sha-stall";
+/** Prefer-A sticky-sha clock: elapsed since first sticky tip-rot (borrow ~10 min). */
+export const DEFAULT_STICKY_SHA_STALL_SECONDS = Number.parseInt("600", 10);
 
 export const DEFAULT_MAX_WAIT_MINUTES = 30;
 export const DEFAULT_POLL_SECONDS = 90;
@@ -69,10 +92,20 @@ export const WATCH_HELP =
   "  -h, --help            Show this help and exit 0\n" +
   "  --one-shot            Single probe (PENDING with no terminal verdict → exit 2)\n" +
   "  --json                Emit the AC-4 JSON shape on stdout\n" +
-  "  --max-wait-minutes N  Cap for the blocking poll (default: 30)\n" +
+  "  --max-wait-minutes N  Cap for the blocking poll (default: 30).\n" +
+  "                        Declared budget for #3153 wall-clock row (#3984):\n" +
+  "                        CLI flag or DEFT_PR_WATCH_MAX_WAIT_MINUTES. The\n" +
+  "                        30m default is a poll cap, not a declared envelope\n" +
+  "                        budget — dual-stop / envelope SLA bind only when\n" +
+  "                        a budget is declared.\n" +
   "  --poll-seconds N      Seconds between probes (default: 90)\n" +
   "  --repo OWNER/REPO     Override repository (default: GH_REPO / origin)\n" +
   "  --project-root PATH   Chdir before probing (optional)\n" +
+  "  --monitor-agent-id ID Stamp Approach 1 child id into wait heartbeat\n" +
+  "                        parent_id (#5219). Env fallback: DEFT_MONITOR_AGENT_ID.\n" +
+  "                        Required for Tier-1 spawn_subagent merge-path-arm\n" +
+  "                        live-wait identity join; bare parent shell pr:watch\n" +
+  "                        (parent_id=pr-watch) does not arm.\n" +
   "\n" +
   "--json notes (#4882 / #5015):\n" +
   "  Output may be pretty-printed multi-line JSON. Wrappers MUST parse the\n" +
@@ -82,10 +115,24 @@ export const WATCH_HELP =
   "  package when wrapping --json in-process.\n" +
   "\n" +
   "exit codes:\n" +
-  "  0  CLEAN       SHA-matched review, confidence >= policy min (default 4; dogfood 5), no P0/P1, CI green\n" +
+  "  0  CLEAN | MERGED  SHA-matched clean review, or REST pulls merged=true (#4288)\n" +
   "  1  NEW_P0_P1   Blocking findings on the current (SHA-matched) review\n" +
   "  2  ERRORED | STALL | TIMEOUT | CI_BLOCKED | RUNNER_CAPACITY_STALL |\n" +
-  "     CI_NEVER_SCHEDULED | CI_CANCELLED_NO_FAILOVER | config / usage error\n";
+  "     CI_NEVER_SCHEDULED | CI_CANCELLED_NO_FAILOVER | NO_REVIEWER_INSTALLED |\n" +
+  "     GREPTILE_SHA_STALL | CLOSED_UNMERGED | config / usage error\n" +
+  "\n" +
+  "PR lifecycle short-circuit (#4288):\n" +
+  "  REST repos/.../pulls/<N> state/merged is checked before Greptile body and\n" +
+  "  SHA-match holdout. merged=true → MERGED (exit 0). state=closed and\n" +
+  "  merged=false → CLOSED_UNMERGED (exit 2). Open PRs keep the sha_match\n" +
+  "  stale-review guard (#1259 / #2313).\n" +
+  "\n" +
+  "sha_match sticky tip-rot (#5162 Prefer-A Recut):\n" +
+  "  After sticky sha_match + non-HEAD Last-reviewed + no in-flight Greptile\n" +
+  "  Review on HEAD for DEFAULT_STICKY_SHA_STALL_SECONDS (~10 min), verdict is\n" +
+  "  GREPTILE_SHA_STALL with remedy BLOCKED: greptile-sha-stall. Ask once\n" +
+  "  (#564 menu option 2) before posting @greptileai review, then re-enter\n" +
+  "  native pr:watch. Do not invent freestyle CLEAN pollers; not dest residual.\n";
 /**
  * Consecutive polls where the CLEAN gate is wedged on HEAD (!has_blocking &&
  * !is_clean with a holdout other than sha_match) before STALL (#1039). Stale-SHA

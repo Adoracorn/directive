@@ -20,10 +20,14 @@ import {
 import { detectBranchSync, formatBranchSyncExemptionMessage } from "../policy/branch-sync.js";
 import {
   assertInstallerAllowlistHonors1430,
+  bareVersionMarkerRelativePaths,
+  bareVersionMarkerTargets,
   CONSUMER_GUARD_MUST_FIRE,
+  classifyDirtyEscapeLedger,
   classifyMixedCoreAndApp,
   classifyMixedCoreAndAppContentAware,
   classifyMixedCoreAndAppForPr,
+  defaultTrackedNames,
   depositStagePaths,
   filterUntrackedIgnoredStagePaths,
   findPackageAbsentDepositPaths,
@@ -45,14 +49,17 @@ import {
   isUpgradePinPathContentAllowed,
   isYarnLockDirectivePinFollowThrough,
   pass2CommitSetMatchers,
+  pnpmLockImporterDeps,
   pnpmLockRootDirectDeps,
   printCommitGuidance,
   printDirtyEscapeCommitGuidance,
   prunePackageAbsentDepositPaths,
   pruneStrayDepositPaths,
   reconcileDepositToContentPackage,
+  snapshotGitIndex,
   splitLedgerForStaging,
   stageFrameworkPaths,
+  unstageFrameworkPaths,
 } from "./hygiene.js";
 import { CANONICAL_TASKFILE_INCLUDE } from "./scaffold.js";
 import { syncConsumerXbriefSchemas } from "./xbrief-projections.js";
@@ -1488,6 +1495,323 @@ describe("ledger intersection staging (#3394)", () => {
     expect(cached).not.toContain(".gitignore");
   });
 
+  it("unstageFrameworkPaths restores the index so porcelain has no staged deposit paths (#4120)", () => {
+    const project = freshRoot("hygiene-unstage-");
+    mkdirSync(join(project, ".deft", "core"), { recursive: true });
+    writeFileSync(join(project, "AGENTS.md"), "# Agent\n", "utf8");
+    writeFileSync(join(project, ".deft", "core", "main.md"), "# Deft\n", "utf8");
+    initGitRepo(project);
+    writeFileSync(join(project, "AGENTS.md"), "# Agent\nupdated\n", "utf8");
+
+    const staged = runWithMutationLedger(project, () => {
+      activeMutationLedger()?.record("wrote", join(project, "AGENTS.md"));
+      return depositStagePaths(project);
+    });
+    expect(staged.stagedPaths).toContain("AGENTS.md");
+    const cachedBefore = execFileSync("git", ["diff", "--cached", "--name-only"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    expect(cachedBefore).toContain("AGENTS.md");
+
+    const result = unstageFrameworkPaths(project, staged.stagePaths);
+    expect(result.unstaged).toBe(true);
+    expect(result.error).toBeNull();
+    const porcelain = execFileSync("git", ["status", "--porcelain"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    const stagedLines = porcelain.split("\n").filter((line) => {
+      if (line.length === 0) return false;
+      const indexState = line[0];
+      return indexState !== " " && indexState !== "?";
+    });
+    expect(stagedLines).toEqual([]);
+    const cachedAfter = execFileSync("git", ["diff", "--cached", "--name-only"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    expect(cachedAfter).not.toContain("AGENTS.md");
+  });
+
+  it("unstageFrameworkPaths restores a pre-staged installer path instead of resetting it (#4120)", () => {
+    const project = freshRoot("hygiene-unstage-keep-");
+    writeFileSync(join(project, "AGENTS.md"), "# original\n", "utf8");
+    initGitRepo(project);
+    writeFileSync(join(project, "AGENTS.md"), "# consumer staged\n", "utf8");
+    execFileSync("git", ["add", "--", "AGENTS.md"], { cwd: project });
+    const priorIndex = snapshotGitIndex(project);
+    expect(priorIndex).not.toBeNull();
+    writeFileSync(join(project, "AGENTS.md"), "# init deposit\n", "utf8");
+    execFileSync("git", ["add", "--", "AGENTS.md"], { cwd: project });
+    expect(execFileSync("git", ["show", ":AGENTS.md"], { cwd: project, encoding: "utf8" })).toBe(
+      "# init deposit\n",
+    );
+
+    const result = unstageFrameworkPaths(project, ["AGENTS.md"], {
+      priorIndex: priorIndex ?? [],
+    });
+    expect(result.unstaged).toBe(true);
+    expect(result.error).toBeNull();
+    expect(execFileSync("git", ["show", ":AGENTS.md"], { cwd: project, encoding: "utf8" })).toBe(
+      "# consumer staged\n",
+    );
+    const porcelain = execFileSync("git", ["status", "--porcelain"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    const agents = porcelain.split("\n").find((line) => line.includes("AGENTS.md"));
+    expect(agents).toBeDefined();
+    expect(agents?.[0]).not.toBe(" ");
+    expect(agents?.[0]).not.toBe("?");
+  });
+
+  it("snapshotGitIndex records a staged AGENTS.md deletion as missing (#4120)", () => {
+    const project = freshRoot("hygiene-snap-delete-");
+    writeFileSync(join(project, "AGENTS.md"), "# original\n", "utf8");
+    initGitRepo(project);
+    execFileSync("git", ["rm", "--cached", "-q", "--", "AGENTS.md"], { cwd: project });
+    const prior = snapshotGitIndex(project);
+    expect(prior?.some((entry) => entry.path === "AGENTS.md" && entry.missing === true)).toBe(true);
+    expect(prior?.some((entry) => entry.path === "AGENTS.md" && !entry.missing)).toBe(false);
+  });
+
+  it("unstageFrameworkPaths restores a staged AGENTS.md deletion instead of HEAD (#4120)", () => {
+    const project = freshRoot("hygiene-unstage-delete-");
+    writeFileSync(join(project, "AGENTS.md"), "# original\n", "utf8");
+    initGitRepo(project);
+    execFileSync("git", ["rm", "--cached", "-q", "--", "AGENTS.md"], { cwd: project });
+    const priorIndex = snapshotGitIndex(project);
+    writeFileSync(join(project, "AGENTS.md"), "# init deposit\n", "utf8");
+    execFileSync("git", ["add", "--", "AGENTS.md"], { cwd: project });
+    expect(execFileSync("git", ["show", ":AGENTS.md"], { cwd: project, encoding: "utf8" })).toBe(
+      "# init deposit\n",
+    );
+
+    const result = unstageFrameworkPaths(project, ["AGENTS.md"], {
+      priorIndex: priorIndex ?? [],
+    });
+    expect(result.unstaged).toBe(true);
+    expect(result.error).toBeNull();
+    expect(
+      execFileSync("git", ["ls-files", "--stage", "--", "AGENTS.md"], {
+        cwd: project,
+        encoding: "utf8",
+      }),
+    ).toBe("");
+    expect(
+      execFileSync("git", ["diff", "--cached", "--name-status", "--", "AGENTS.md"], {
+        cwd: project,
+        encoding: "utf8",
+      }),
+    ).toMatch(/^D\tAGENTS.md/);
+  });
+
+  it("unstageFrameworkPaths restores a staged AGENTS.md rename instead of resetting the source (#4120)", () => {
+    const project = freshRoot("hygiene-unstage-rename-");
+    writeFileSync(join(project, "AGENTS.md"), "# original\n", "utf8");
+    initGitRepo(project);
+    execFileSync("git", ["mv", "--", "AGENTS.md", "CONSUMER.md"], { cwd: project });
+    const priorIndex = snapshotGitIndex(project);
+    writeFileSync(join(project, "AGENTS.md"), "# init deposit\n", "utf8");
+    execFileSync("git", ["add", "--", "AGENTS.md"], { cwd: project });
+
+    const result = unstageFrameworkPaths(project, ["AGENTS.md"], {
+      priorIndex: priorIndex ?? [],
+    });
+    expect(result.unstaged).toBe(true);
+    expect(result.error).toBeNull();
+    expect(
+      execFileSync("git", ["ls-files", "--stage", "--", "AGENTS.md"], {
+        cwd: project,
+        encoding: "utf8",
+      }),
+    ).toBe("");
+    expect(
+      execFileSync("git", ["ls-files", "--stage", "--", "CONSUMER.md"], {
+        cwd: project,
+        encoding: "utf8",
+      }),
+    ).toMatch(/CONSUMER.md/);
+    expect(
+      execFileSync("git", ["diff", "--cached", "--name-status", "--find-renames"], {
+        cwd: project,
+        encoding: "utf8",
+      }),
+    ).toMatch(/R\d+\tAGENTS.md\tCONSUMER.md/);
+  });
+
+  it("unstageFrameworkPaths with priorIndex restores matching rows and resets extras (#4120)", () => {
+    const restored: { mode: string; sha: string; stage: number; path: string }[][] = [];
+    const unstaged: string[][] = [];
+    const prior = [{ mode: "100644", sha: "abc", stage: 0, path: "AGENTS.md" }];
+    const result = unstageFrameworkPaths("/tmp", ["AGENTS.md", ".deft/core"], {
+      gitPorcelain: () => "M  AGENTS.md\nA  .deft/core/main.md\n",
+      priorIndex: prior,
+      readIndexEntries: () => [
+        { mode: "100644", sha: "def", stage: 0, path: "AGENTS.md" },
+        { mode: "100644", sha: "fff", stage: 0, path: ".deft/core/main.md" },
+      ],
+      runGitRestoreIndex: (_root, entries) => {
+        restored.push([...entries]);
+      },
+      runGitUnstage: (_root, paths) => {
+        unstaged.push([...paths]);
+      },
+    });
+    expect(result.unstaged).toBe(true);
+    expect(result.error).toBeNull();
+    expect(restored).toEqual([prior]);
+    expect(unstaged).toEqual([[".deft/core/main.md"]]);
+  });
+
+  it("unstageFrameworkPaths with priorIndex force-removes staged deletions instead of resetting extras (#4120)", () => {
+    const restored: { mode: string; sha: string; stage: number; path: string }[][] = [];
+    const removed: string[][] = [];
+    const unstaged: string[][] = [];
+    const prior = [
+      {
+        mode: "000000",
+        sha: "0".repeat(40),
+        stage: 0,
+        path: "AGENTS.md",
+        missing: true as const,
+      },
+    ];
+    const result = unstageFrameworkPaths("/tmp", ["AGENTS.md", ".deft/core"], {
+      gitPorcelain: () => "A  AGENTS.md\nA  .deft/core/main.md\n",
+      priorIndex: prior,
+      readIndexEntries: () => [
+        { mode: "100644", sha: "def", stage: 0, path: "AGENTS.md" },
+        { mode: "100644", sha: "fff", stage: 0, path: ".deft/core/main.md" },
+      ],
+      runGitRestoreIndex: (_root, entries) => {
+        restored.push([...entries]);
+      },
+      runGitRemoveIndex: (_root, paths) => {
+        removed.push([...paths]);
+      },
+      runGitUnstage: (_root, paths) => {
+        unstaged.push([...paths]);
+      },
+    });
+    expect(result.unstaged).toBe(true);
+    expect(result.error).toBeNull();
+    expect(restored).toEqual([]);
+    expect(removed).toEqual([["AGENTS.md"]]);
+    expect(unstaged).toEqual([[".deft/core/main.md"]]);
+  });
+
+  it("unstageFrameworkPaths returns the force-remove error instead of throwing", () => {
+    const result = unstageFrameworkPaths("/tmp", ["AGENTS.md"], {
+      gitPorcelain: () => "A  AGENTS.md\n",
+      priorIndex: [
+        {
+          mode: "000000",
+          sha: "0".repeat(40),
+          stage: 0,
+          path: "AGENTS.md",
+          missing: true,
+        },
+      ],
+      readIndexEntries: () => [{ mode: "100644", sha: "def", stage: 0, path: "AGENTS.md" }],
+      runGitRemoveIndex: () => {
+        throw new Error("git update-index --force-remove (restore) failed");
+      },
+    });
+    expect(result.unstaged).toBe(false);
+    expect(result.error?.message).toMatch(/force-remove/);
+  });
+
+  it("unstageFrameworkPaths wraps non-Error force-remove throws", () => {
+    const result = unstageFrameworkPaths("/tmp", ["AGENTS.md"], {
+      gitPorcelain: () => "A  AGENTS.md\n",
+      priorIndex: [
+        {
+          mode: "000000",
+          sha: "0".repeat(40),
+          stage: 0,
+          path: "AGENTS.md",
+          missing: true,
+        },
+      ],
+      readIndexEntries: () => [{ mode: "100644", sha: "def", stage: 0, path: "AGENTS.md" }],
+      runGitRemoveIndex: () => {
+        throw "nope-remove";
+      },
+    });
+    expect(result.unstaged).toBe(false);
+    expect(result.error?.message).toBe("nope-remove");
+  });
+
+  it("snapshotGitIndex is null outside git", () => {
+    const project = freshRoot("hygiene-snap-nogit-");
+    expect(snapshotGitIndex(project)).toBeNull();
+  });
+
+  it("unstages deposit paths on an unborn HEAD (#4120)", () => {
+    const project = freshRoot("hygiene-unstage-unborn-");
+    execFileSync("git", ["init", "-q"], { cwd: project });
+    execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: project });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: project });
+    writeFileSync(join(project, "AGENTS.md"), "# Agent\n", "utf8");
+    execFileSync("git", ["add", "--", "AGENTS.md"], { cwd: project });
+    expect(
+      execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" }),
+    ).toMatch(/^A /m);
+
+    const result = unstageFrameworkPaths(project, ["AGENTS.md"]);
+    expect(result.unstaged).toBe(true);
+    expect(result.error).toBeNull();
+    const porcelain = execFileSync("git", ["status", "--porcelain"], {
+      cwd: project,
+      encoding: "utf8",
+    });
+    const stagedLines = porcelain.split("\n").filter((line) => {
+      if (line.length === 0) return false;
+      const indexState = line[0];
+      return indexState !== " " && indexState !== "?";
+    });
+    expect(stagedLines).toEqual([]);
+  });
+
+  it("unstageFrameworkPaths is a no-op for empty paths, missing git, or unstaged names", () => {
+    expect(unstageFrameworkPaths("/tmp", []).unstaged).toBe(false);
+    expect(
+      unstageFrameworkPaths("/tmp", ["AGENTS.md"], { gitPorcelain: () => null }).unstaged,
+    ).toBe(false);
+    expect(
+      unstageFrameworkPaths("/tmp", ["AGENTS.md"], {
+        gitPorcelain: () => "?? AGENTS.md\n",
+        readCachedNames: () => [],
+      }).unstaged,
+    ).toBe(false);
+  });
+
+  it("unstageFrameworkPaths returns the git error instead of throwing", () => {
+    const result = unstageFrameworkPaths("/tmp", ["AGENTS.md"], {
+      gitPorcelain: () => "A  AGENTS.md\n",
+      readCachedNames: () => ["AGENTS.md"],
+      runGitUnstage: () => {
+        throw new Error("git reset -- (unstage) failed");
+      },
+    });
+    expect(result.unstaged).toBe(false);
+    expect(result.error?.message).toMatch(/unstage/);
+  });
+
+  it("unstageFrameworkPaths wraps non-Error throws", () => {
+    const result = unstageFrameworkPaths("/tmp", ["AGENTS.md"], {
+      gitPorcelain: () => "A  AGENTS.md\n",
+      readCachedNames: () => ["AGENTS.md"],
+      runGitUnstage: () => {
+        throw "nope";
+      },
+    });
+    expect(result.unstaged).toBe(false);
+    expect(result.error?.message).toBe("nope");
+  });
+
   it("never invokes git add -A", () => {
     const project = freshRoot("hygiene-ledger-no-add-a-");
     mkdirSync(join(project, ".deft", "core"), { recursive: true });
@@ -1868,18 +2192,313 @@ describe("Pass 2 commit-set and #1430 peers (#4271)", () => {
   });
 });
 
-describe("printDirtyEscapeCommitGuidance (#4158)", () => {
-  it("prints git commit -- written paths and not add-then-bare-commit", () => {
+describe("printDirtyEscapeCommitGuidance (#4158 / #5245)", () => {
+  it("prints git add -- then git commit -- for classified stage paths", () => {
     const lines: string[] = [];
-    printDirtyEscapeCommitGuidance({ printf: (text) => lines.push(text) }, [
-      "AGENTS.md",
-      ".deft/core/VERSION",
-    ]);
+    printDirtyEscapeCommitGuidance(
+      { printf: (text) => lines.push(text) },
+      {
+        stagePaths: ["AGENTS.md", ".deft/core/VERSION"],
+        unstagedRemainder: [],
+        skippedUntrackedDeletes: [],
+      },
+    );
     const out = lines.join("");
+    expect(out).toContain("git add -- AGENTS.md .deft/core/VERSION");
     expect(out).toContain("git commit -- AGENTS.md .deft/core/VERSION");
     expect(out).toContain("automatic git add is disabled");
     expect(out).toContain("core.hooksPath still runs");
-    expect(out).not.toMatch(/git add --/);
     expect(out).not.toMatch(/git commit -m/);
+  });
+});
+
+describe("root .deft-version allowlist + bareVersionMarkerTargets (#5245 P1)", () => {
+  it("treats root .deft-version as installer-managed", () => {
+    expect(isInstallerManagedPath(".deft-version")).toBe(true);
+    expect(installerManagedGuardEre()).toContain("^\\.deft-version$");
+  });
+
+  it("bareVersionMarkerTargets lists xbrief/root/vbrief independently of resolver", () => {
+    const targets = bareVersionMarkerTargets("/tmp/project");
+    expect(targets.map((p) => p.replace(/\\/g, "/"))).toEqual([
+      "/tmp/project/xbrief/.deft-version",
+      "/tmp/project/.deft-version",
+      "/tmp/project/vbrief/.deft-version",
+    ]);
+    for (const rel of bareVersionMarkerRelativePaths()) {
+      expect(isInstallerManagedPath(rel)).toBe(true);
+    }
+  });
+
+  it("core + root .deft-version is not mixed app", () => {
+    const result = classifyMixedCoreAndApp([".deft/core/VERSION", ".deft-version"]);
+    expect(result.wouldFail).toBe(false);
+    expect(result.installerManaged).toContain(".deft-version");
+  });
+});
+
+describe("classifyDirtyEscapeLedger (#5245 P4)", () => {
+  it("uses optional readTrackedNames injector and defaultTrackedNames", () => {
+    expect(typeof defaultTrackedNames).toBe("function");
+    const summary = {
+      wrote: ["AGENTS.md"],
+      stripped: [] as string[],
+      deleted: [".deft-version"],
+      chmod: [] as string[],
+      exec: [] as string[],
+    };
+    const split = classifyDirtyEscapeLedger("/tmp", summary, () => [".deft-version"]);
+    expect(split.stagePaths).toEqual(expect.arrayContaining(["AGENTS.md", ".deft-version"]));
+    expect(split.skippedUntrackedDeletes).toEqual([]);
+  });
+});
+
+/** Expected-verdict corpus for AC-8-content (#5245 P3/P5). */
+describe("expected-verdict corpus (#5245 P3/P5)", () => {
+  const basePnpm = [
+    "lockfileVersion: '9.0'",
+    "",
+    "importers:",
+    "",
+    "  .:",
+    "    dependencies:",
+    "      lodash:",
+    "        specifier: ^4.17.21",
+    "        version: 4.17.21",
+    "    devDependencies:",
+    "      '@deftai/directive':",
+    "        specifier: 0.96.0",
+    "        version: 0.96.0",
+    "",
+    "packages:",
+    "",
+    "  lodash@4.17.21:",
+    "    resolution: {integrity: sha512-base}",
+    "",
+    "  '@deftai/directive@0.96.0':",
+    "    resolution: {integrity: sha512-pin-base}",
+    "",
+    "snapshots:",
+    "",
+    "  lodash@4.17.21:",
+    "    {}",
+    "",
+  ].join("\n");
+
+  it("Row1: head-only full-key transitive ACCEPT", () => {
+    const headClean = [
+      "lockfileVersion: '9.0'",
+      "",
+      "importers:",
+      "",
+      "  .:",
+      "    dependencies:",
+      "      lodash:",
+      "        specifier: ^4.17.21",
+      "        version: 4.17.21",
+      "    devDependencies:",
+      "      '@deftai/directive':",
+      "        specifier: 0.97.0",
+      "        version: 0.97.0",
+      "",
+      "packages:",
+      "",
+      "  lodash@4.17.21:",
+      "    resolution: {integrity: sha512-base}",
+      "",
+      "  archiver@7.0.0:",
+      "    resolution: {integrity: sha512-arch}",
+      "",
+      "  '@deftai/directive@0.97.0':",
+      "    resolution: {integrity: sha512-pin-head}",
+      "",
+      "snapshots:",
+      "",
+      "  lodash@4.17.21:",
+      "    {}",
+      "",
+      "  archiver@7.0.0:",
+      "    {}",
+      "",
+    ].join("\n");
+    expect(isPnpmLockDirectivePinFollowThrough(basePnpm, headClean)).toBe(true);
+    expect(isUpgradePinPathContentAllowed("pnpm-lock.yaml", basePnpm, headClean)).toBe(true);
+  });
+
+  it("Row2: same full-key block-text change FAIL", () => {
+    const head = basePnpm.replace("sha512-base", "sha512-changed");
+    expect(isPnpmLockDirectivePinFollowThrough(basePnpm, head)).toBe(false);
+  });
+
+  it("Row3: base-only full-key deletion FAIL", () => {
+    const head = [
+      "lockfileVersion: '9.0'",
+      "",
+      "importers:",
+      "",
+      "  .:",
+      "    dependencies:",
+      "      lodash:",
+      "        specifier: ^4.17.21",
+      "        version: 4.17.21",
+      "    devDependencies:",
+      "      '@deftai/directive':",
+      "        specifier: 0.97.0",
+      "        version: 0.97.0",
+      "",
+      "packages:",
+      "",
+      "  '@deftai/directive@0.97.0':",
+      "    resolution: {integrity: sha512-pin-head}",
+      "",
+      "snapshots:",
+      "",
+      "  '@deftai/directive@0.97.0':",
+      "    {}",
+      "",
+    ].join("\n");
+    expect(isPnpmLockDirectivePinFollowThrough(basePnpm, head)).toBe(false);
+  });
+
+  it("nested YAML keys are not package identities (ordering-oracle)", () => {
+    const withNested = [
+      "lockfileVersion: '9.0'",
+      "",
+      "importers:",
+      "",
+      "  .:",
+      "    dependencies:",
+      "      lodash:",
+      "        specifier: ^4.17.21",
+      "        version: 4.17.21",
+      "",
+      "packages:",
+      "",
+      "  lodash@4.17.21:",
+      "    resolution: {integrity: sha512-base}",
+      "    peerDependencies:",
+      "      left-pad: ^1.0.0",
+      "",
+      "snapshots:",
+      "",
+      "  lodash@4.17.21:",
+      "    dependencies:",
+      "      left-pad: 1.0.0",
+      "",
+    ].join("\n");
+    const bumpedNested = withNested.replace(
+      "peerDependencies:\n      left-pad: ^1.0.0",
+      "peerDependencies:\n      left-pad: ^1.0.1",
+    );
+    // Nested peerDeps change stays under the same full key → FAIL on block text.
+    expect(isPnpmLockDirectivePinFollowThrough(withNested, bumpedNested)).toBe(false);
+    // peerDependencies must not appear as a section key.
+    const importers = pnpmLockImporterDeps(withNested);
+    expect(Object.keys(importers).some((k) => k.includes("peerDependencies"))).toBe(false);
+  });
+
+  it("specifier-only importer edit FAIL (H3 corpus row)", () => {
+    const head = basePnpm.replace("specifier: ^4.17.21", "specifier: ^4.17.22");
+    expect(isPnpmLockDirectivePinFollowThrough(basePnpm, head)).toBe(false);
+  });
+
+  it("colon-bearing full keys stay in the freeze map (#5245 Greptile P1)", () => {
+    const withFileKey = [
+      "lockfileVersion: '9.0'",
+      "",
+      "importers:",
+      "",
+      "  .:",
+      "    dependencies:",
+      "      local-pkg:",
+      "        specifier: file:../local-pkg",
+      "        version: link:../local-pkg",
+      "    devDependencies:",
+      "      '@deftai/directive':",
+      "        specifier: 0.97.0",
+      "        version: 0.97.0",
+      "",
+      "packages:",
+      "",
+      "  'local-pkg@file:../local-pkg':",
+      "    resolution: {directory: ../local-pkg, type: directory}",
+      "",
+      "  '@deftai/directive@0.97.0':",
+      "    resolution: {integrity: sha512-pin-head}",
+      "",
+      "snapshots:",
+      "",
+      "  'local-pkg@file:../local-pkg':",
+      "    {}",
+      "",
+      "  '@deftai/directive@0.97.0':",
+      "    {}",
+      "",
+    ].join("\n");
+    const changedFileKey = withFileKey.replace(
+      "resolution: {directory: ../local-pkg, type: directory}",
+      "resolution: {directory: ../local-pkg-moved, type: directory}",
+    );
+    expect(isPnpmLockDirectivePinFollowThrough(withFileKey, changedFileKey)).toBe(false);
+  });
+
+  it("npm path-key freeze-except-additions ACCEPT for new node_modules path", () => {
+    const base = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          dependencies: { lodash: "^4.17.21" },
+          devDependencies: { "@deftai/directive": "0.96.0" },
+        },
+        "node_modules/lodash": { version: "4.17.21" },
+        "node_modules/@deftai/directive": { version: "0.96.0" },
+      },
+    });
+    const head = JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          dependencies: { lodash: "^4.17.21" },
+          devDependencies: { "@deftai/directive": "0.97.0" },
+        },
+        "node_modules/lodash": { version: "4.17.21" },
+        "node_modules/archiver": { version: "7.0.0" },
+        "node_modules/@deftai/directive": { version: "0.97.0" },
+      },
+    });
+    expect(isPackageLockDirectivePinFollowThrough(base, head)).toBe(true);
+    expect(isUpgradePinPathContentAllowed("package-lock.json", base, head)).toBe(true);
+  });
+
+  it("yarn additions remain FAIL (fully frozen residual)", () => {
+    const base = [
+      "lodash@^4.17.21:",
+      '  version "4.17.21"',
+      "",
+      '"@deftai/directive@0.96.0":',
+      '  version "0.96.0"',
+      "",
+    ].join("\n");
+    const head = [
+      "lodash@^4.17.21:",
+      '  version "4.17.21"',
+      "",
+      '"@deftai/directive@0.97.0":',
+      '  version "0.97.0"',
+      "",
+      "archiver@7.0.0:",
+      '  version "7.0.0"',
+      "",
+    ].join("\n");
+    expect(isYarnLockDirectivePinFollowThrough(base, head)).toBe(false);
+    expect(isUpgradePinPathContentAllowed("yarn.lock", base, head)).toBe(false);
+  });
+
+  it("AC-8-content dispatches four targets + entry against corpus", () => {
+    expect(typeof isPackageJsonDirectivePinOnlyDiff).toBe("function");
+    expect(typeof isPackageLockDirectivePinFollowThrough).toBe("function");
+    expect(typeof isPnpmLockDirectivePinFollowThrough).toBe("function");
+    expect(typeof isYarnLockDirectivePinFollowThrough).toBe("function");
+    expect(typeof isUpgradePinPathContentAllowed).toBe("function");
   });
 });

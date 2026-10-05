@@ -33,6 +33,7 @@ import {
   DESIGN_CRITIQUE_CATALOG_CHIPS,
   writeDesignCritiqueCatalogRemainingSet,
 } from "./exclusive-chip.js";
+import { evaluateAccumulatedPainAuditFollowThrough } from "./pain-audit-follow-through-gate.js";
 import {
   type AuditEnvelope,
   buildPainCoverageDeposit,
@@ -509,20 +510,39 @@ function applyPainCoverage(
       criticEnvelopes: criticEnvelopes(comments, citedLean.id),
     }),
   );
-  if (audit.ok) return verdict;
-  const codes = [...new Set(audit.failures.map((row) => row.code))].join(", ");
-  return {
-    status: "blocked",
-    reason: "unresolved-pain-audit",
-    detail:
-      "pain id(s) " +
-      asserted.join(", ") +
-      " remain unresolved audit markers (" +
-      codes +
-      ") until a critic after successor lean " +
-      String(citedLean.id) +
-      " targets them",
-  };
+  if (!audit.ok) {
+    const codes = [...new Set(audit.failures.map((row) => row.code))].join(", ");
+    return {
+      status: "blocked",
+      reason: "unresolved-pain-audit",
+      detail:
+        "pain id(s) " +
+        asserted.join(", ") +
+        " remain unresolved audit markers (" +
+        codes +
+        ") until a critic after successor lean " +
+        String(citedLean.id) +
+        " targets them",
+    };
+  }
+  // #5233: after independent targeting clears, compose typed follow-through
+  // for every targeting audit on this harvest. Missing carrier / blocking /
+  // harvest-changing without a changed Bound-remedy digest refuse here so
+  // path-1, chip, and intake share one authority.
+  const followThrough = evaluateAccumulatedPainAuditFollowThrough({
+    comments,
+    citedLeanId: citedLean.id,
+    assertedPainIds: asserted,
+    isSuccessorLeanBody,
+  });
+  if (!followThrough.ok) {
+    return {
+      status: "blocked",
+      reason: "unresolved-pain-audit",
+      detail: followThrough.detail,
+    };
+  }
+  return verdict;
 }
 
 function finalizeComplete(
@@ -914,6 +934,7 @@ export class IngestReadyCompletedArcProofError extends Error {
 /**
  * Live-thread proof for ingest-ready remaining-set (#4700).
  * Comments present is not complete. Does not recut ingest clearance.
+ * Target-digest admission is composed at applyIngestReadyRemainingSet (#4995).
  */
 export function proveLiveThreadCompletedArcForIngestReady(input: {
   readonly comments: readonly ThreadComment[];
@@ -932,23 +953,52 @@ export type IngestReadyRemainingSetResult =
       readonly add: readonly string[];
       readonly remove: readonly string[];
     }
-  | { readonly ok: false; readonly verdict: CompletedArcVerdict };
+  | {
+      readonly ok: false;
+      readonly verdict: CompletedArcVerdict;
+      readonly digestAdmission?: TargetDigestAdmission;
+      readonly liveIssueBody?: string;
+      readonly citedLeanBody?: string;
+    };
 
 /**
- * Shared ingest-ready remaining-set write. Fetch is the caller's job
- * (fetchIssueComments). Both runDesignCritiqueChip and ScmLabelClient.apply
- * exclusive fold use this helper. Blocked threads reuse assertCompletedArcAllowsIngest
- * (existing throw). not-in-arc does not write.
+ * Shared ingest-ready remaining-set write. Comment + live body fetch are the
+ * caller's job (fetchIssueComments + live REST body). Both runDesignCritiqueChip
+ * and ScmLabelClient.apply exclusive fold use this helper. Composes
+ * evaluateCompletedArcRecord with evaluateTargetDigestAdmission before any
+ * label mutation (#4995 / #4700). Blocked / not-complete returns `{ ok: false }`
+ * (callers refuse without a new product throw). not-in-arc does not write.
+ * Unpinned leans stay admitted.
  */
 export function applyIngestReadyRemainingSet(
   client: LabelClient,
   repo: string,
   issueNumber: number,
   comments: readonly ThreadComment[],
+  liveIssueBody: string,
 ): IngestReadyRemainingSetResult {
   const verdict = proveLiveThreadCompletedArcForIngestReady({ comments, issueNumber });
   if (verdict.status !== "complete") {
     return { ok: false, verdict };
+  }
+  const cited = comments.find((comment) => comment.id === verdict.citedLeanId);
+  const citedLeanBody = cited?.body ?? "";
+  const digestAdmission = evaluateTargetDigestAdmission({
+    citedLeanBody,
+    liveIssueBody,
+  });
+  if (digestAdmission.status === "blocked") {
+    return {
+      ok: false,
+      verdict: {
+        status: "blocked",
+        reason: "stale-target",
+        detail: digestAdmission.detail,
+      },
+      digestAdmission,
+      liveIssueBody,
+      citedLeanBody,
+    };
   }
   const written = writeDesignCritiqueCatalogRemainingSet(
     client,

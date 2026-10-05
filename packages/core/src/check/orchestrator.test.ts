@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { COMPOSED_GATE_IDS } from "../presentation-coverage/gates.js";
 import { dispatchCachedTaskCheck } from "./cached-orchestrator.js";
 import { isSuiteCheckGate } from "./gate-lists.js";
 import {
@@ -10,6 +11,7 @@ import {
   isFrameworkSourceContext,
   resolveCheckTarget,
 } from "./orchestrator.js";
+import { recordProductMutationCompletion } from "./product-mutation-completion.js";
 import { RAPID_ZERO_VERIFIED_CHECK_NOTICE } from "./rapid-zero-verified.js";
 
 const repoRoot = join(import.meta.dirname, "..", "..", "..", "..");
@@ -131,6 +133,69 @@ describe("dispatchTaskCheck", () => {
     const project = "/home/user/consumer";
     dispatchTaskCheck(framework, project, { spawnFn, useTaskCache: false });
     expect(calls[0]?.cwd).toBe(resolve(project));
+  });
+
+  it("allows scaffold-empty PD on the uncached path; refuses only with product-mutation (#5176)", () => {
+    const scaffold = mkdtempSync(join(tmpdir(), "deft-5176-empty-pd-"));
+    tempDirs.push(scaffold);
+    mkdirSync(join(scaffold, "xbrief"), { recursive: true });
+    const emptyPd = `${JSON.stringify(
+      {
+        xBRIEFInfo: { version: "0.8" },
+        plan: { title: "demo", narratives: { Overview: "", "tech stack": "  " } },
+      },
+      null,
+      2,
+    )}\n`;
+    writeFileSync(join(scaffold, "xbrief", "PROJECT-DEFINITION.xbrief.json"), emptyPd, "utf8");
+
+    const scaffoldCalls: unknown[] = [];
+    const scaffoldSpawn = () => {
+      scaffoldCalls.push("spawned");
+      return { status: 0 };
+    };
+    const scaffoldCode = dispatchTaskCheck(scaffold, scaffold, {
+      spawnFn: scaffoldSpawn,
+      useTaskCache: false,
+    });
+    expect(scaffoldCode).toBe(0);
+    expect(scaffoldCalls).toHaveLength(1);
+
+    const mutated = mkdtempSync(join(tmpdir(), "deft-5176-mutated-pd-"));
+    tempDirs.push(mutated);
+    mkdirSync(join(mutated, "xbrief"), { recursive: true });
+    writeFileSync(join(mutated, "xbrief", "PROJECT-DEFINITION.xbrief.json"), emptyPd, "utf8");
+    recordProductMutationCompletion(mutated, new Date("2026-09-30T12:00:00Z"));
+
+    const mutatedCalls: unknown[] = [];
+    const mutatedSpawn = () => {
+      mutatedCalls.push("spawned");
+      return { status: 0 };
+    };
+    const errWrite = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const mutatedCode = dispatchTaskCheck(mutated, mutated, {
+      spawnFn: mutatedSpawn,
+      useTaskCache: false,
+    });
+    expect(mutatedCode).toBe(1);
+    expect(mutatedCalls).toHaveLength(0);
+    const errText = errWrite.mock.calls.map((c) => String(c[0])).join("");
+    expect(errText).toMatch(/verify:persisted-planning-narratives/);
+    expect(errText).toMatch(/project:write-narratives/);
+    errWrite.mockRestore();
+  });
+
+  it("does not refuse missing PROJECT-DEFINITION on the uncached check path (#5176)", () => {
+    const project = mkdtempSync(join(tmpdir(), "deft-5176-missing-pd-"));
+    tempDirs.push(project);
+    const calls: unknown[] = [];
+    const spawnFn = () => {
+      calls.push("spawned");
+      return { status: 0 };
+    };
+    const code = dispatchTaskCheck(project, project, { spawnFn, useTaskCache: false });
+    expect(code).toBe(0);
+    expect(calls).toHaveLength(1);
   });
 
   it("fails with deposit-repair guidance when consumer deposit lacks verify.yml (#3070)", () => {
@@ -302,7 +367,14 @@ describe("dispatchCachedTaskCheck fail-fast before suite (#3188)", () => {
         if (gateId === "verify:cache-fresh") {
           return { exitCode: 1, stdout: "", stderr: "forced stale cache\n" };
         }
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return {
+          exitCode: 0,
+          stdout:
+            gateId === "verify:presentation-coverage"
+              ? JSON.stringify({ code: 0, armed: false, coverage: [] })
+              : "",
+          stderr: "",
+        };
       },
     });
 
@@ -324,7 +396,14 @@ describe("dispatchCachedTaskCheck fail-fast before suite (#3188)", () => {
       preflight: null,
       emitRunSummary: false,
       timeoutMs: 50,
-      gateSpawnFn: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      gateSpawnFn: (gateId) => ({
+        exitCode: 0,
+        stdout:
+          gateId === "verify:presentation-coverage"
+            ? JSON.stringify({ code: 0, armed: false, coverage: [] })
+            : "",
+        stderr: "",
+      }),
       superviseSuite: (plan) => {
         plans.push({ timeoutMs: plan.timeoutMs, command: plan.command, args: plan.args });
         return {
@@ -347,7 +426,14 @@ describe("dispatchCachedTaskCheck fail-fast before suite (#3188)", () => {
       noCache: true,
       preflight: null,
       emitRunSummary: false,
-      gateSpawnFn: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      gateSpawnFn: (gateId) => ({
+        exitCode: 0,
+        stdout:
+          gateId === "verify:presentation-coverage"
+            ? JSON.stringify({ code: 0, armed: false, coverage: [] })
+            : "",
+        stderr: "",
+      }),
       superviseSuite: (plan) => {
         plans.push({ timeoutMs: plan.timeoutMs, command: plan.command, args: plan.args });
         return {
@@ -421,6 +507,12 @@ tasks:
     cmds: [echo ok]
   intent-constraint:
     cmds: [echo ok]
+  presentation-ceiling:
+    cmds: [echo ok]
+  durable-effect-acquisition:
+    cmds: [echo ok]
+  presentation-coverage:
+    cmds: [echo ok]
   consumer-test-lane:
     cmds: [echo ok]
 `,
@@ -447,7 +539,14 @@ tasks:
         if (gateId === "verify:branch") {
           return { exitCode: 1, stdout: "", stderr: "branch fail\n" };
         }
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return {
+          exitCode: 0,
+          stdout:
+            gateId === "verify:presentation-coverage"
+              ? JSON.stringify({ code: 0, armed: false, coverage: [] })
+              : "",
+          stderr: "",
+        };
       },
     });
 
@@ -468,7 +567,14 @@ tasks:
       onGateStart: (gateId) => {
         started.push(gateId);
       },
-      gateSpawnFn: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      gateSpawnFn: (gateId) => ({
+        exitCode: 0,
+        stdout:
+          gateId === "verify:presentation-coverage"
+            ? JSON.stringify({ code: 0, armed: false, coverage: [] })
+            : "",
+        stderr: "",
+      }),
     });
 
     expect(code).toBe(0);
@@ -532,6 +638,12 @@ tasks:
     cmds: [echo ok]
   intent-constraint:
     cmds: [echo ok]
+  presentation-ceiling:
+    cmds: [echo ok]
+  durable-effect-acquisition:
+    cmds: [echo ok]
+  presentation-coverage:
+    cmds: [echo ok]
   consumer-test-lane:
     cmds: [echo ok]
 `,
@@ -565,7 +677,14 @@ tasks:
               "verify:ac soft_empty (#3334) [rung=project_floor]: no acceptance stamped — floor is empty in this project.\n",
           };
         }
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return {
+          exitCode: 0,
+          stdout:
+            gateId === "verify:presentation-coverage"
+              ? JSON.stringify({ code: 0, armed: false, coverage: [] })
+              : "",
+          stderr: "",
+        };
       },
     });
 
@@ -624,7 +743,14 @@ describe("dispatchCachedTaskCheck rapid zero-verified walk (#4866)", () => {
         if (gateId === "verify:ac") {
           return { exitCode: 0, stdout: acStdout, stderr: "" };
         }
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return {
+          exitCode: 0,
+          stdout:
+            gateId === "verify:presentation-coverage"
+              ? JSON.stringify({ code: 0, armed: false, coverage: [] })
+              : "",
+          stderr: "",
+        };
       },
     });
     const logs = errWrite.mock.calls.map((c) => String(c[0])).join("");
@@ -649,14 +775,24 @@ describe("dispatchCachedTaskCheck rapid zero-verified walk (#4866)", () => {
       "verify:ac passed (#3284) (1 verified, 4 unverifiable) [rung=derived]\n",
     );
     expect(code).toBe(0);
-    expect(started).toEqual(["verify:ac"]);
+    expect(started).toEqual([
+      "verify:ac",
+      "verify:presentation-ceiling",
+      "verify:durable-effect-acquisition",
+      "verify:presentation-coverage",
+    ]);
     expect(logs).not.toContain(RAPID_ZERO_VERIFIED_CHECK_NOTICE);
   });
 
   it("still exits 0 in rapid mode when the walk does not report a verified count", () => {
     const { code, started } = runMode("rapid", "verify:ac passed (#3284) [rung=derived]\n");
     expect(code).toBe(0);
-    expect(started).toEqual(["verify:ac"]);
+    expect(started).toEqual([
+      "verify:ac",
+      "verify:presentation-ceiling",
+      "verify:durable-effect-acquisition",
+      "verify:presentation-coverage",
+    ]);
   });
 
   it("does not fail full or pressure mode, and those modes still run later gates", () => {
@@ -670,5 +806,91 @@ describe("dispatchCachedTaskCheck rapid zero-verified walk (#4866)", () => {
     expect(pressure.code).toBe(0);
     expect(pressure.started).toContain("verify:branch");
     expect(pressure.logs).not.toContain(RAPID_ZERO_VERIFIED_CHECK_NOTICE);
+  });
+});
+
+describe("armed coverage aggregate preserves real required outcomes (#5079)", () => {
+  const report = (armed: boolean) =>
+    JSON.stringify({
+      code: 0,
+      armed,
+      uncoveredPaths: [],
+      coverage: armed
+        ? COMPOSED_GATE_IDS.map((gateId) => ({
+            gateId,
+            status: "evaluated",
+            code: 0,
+            analyzedPaths: [],
+            cannotEvaluatePaths: [],
+            message: "evaluated",
+          }))
+        : [],
+    });
+  it.each([
+    1, 2,
+  ])("preserves a prior required failure %s even after a green armed report", (failure) => {
+    const errors = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    let coverageStarted = false;
+    const code = dispatchCachedTaskCheck("/fw-5079", "/fw-5079", {
+      noCache: true,
+      preflight: null,
+      emitRunSummary: false,
+      env: { DEFT_CHECK_MODE: "pressure" },
+      gateSpawnFn: (gateId) => {
+        if (gateId === "verify:presentation-coverage") coverageStarted = true;
+        return {
+          exitCode: gateId === "verify:scope-provenance" ? failure : 0,
+          stdout: gateId === "verify:presentation-coverage" ? report(true) : "",
+          stderr: "",
+        };
+      },
+    });
+    expect(coverageStarted).toBe(true);
+    expect(code).toBe(failure);
+    expect(errors.mock.calls.flat().join("")).toContain(
+      "preserves required verify:scope-provenance",
+    );
+    errors.mockRestore();
+  });
+  it("retains the existing off-ceiling pressure behavior", () => {
+    const code = dispatchCachedTaskCheck("/fw-5079-off", "/fw-5079-off", {
+      noCache: true,
+      preflight: null,
+      emitRunSummary: false,
+      env: { DEFT_CHECK_MODE: "pressure" },
+      gateSpawnFn: (gateId) => ({
+        exitCode: gateId === "verify:scope-provenance" ? 1 : 0,
+        stdout: gateId === "verify:presentation-coverage" ? report(false) : "",
+        stderr: "",
+      }),
+    });
+    expect(code).toBe(0);
+  });
+  it("accepts cold-build stdout before a complete armed report in rapid mode", () => {
+    expect(
+      dispatchCachedTaskCheck("/fw-5079-cold", "/fw-5079-cold", {
+        noCache: true,
+        preflight: null,
+        emitRunSummary: false,
+        env: { DEFT_CHECK_MODE: "rapid" },
+        gateSpawnFn: (gateId) => ({
+          exitCode: 0,
+          stderr: "",
+          stdout:
+            gateId === "verify:presentation-coverage" ? `> build\n$ tsc -b\n${report(true)}\n` : "",
+        }),
+      }),
+    ).toBe(0);
+  });
+  it("refuses a rapid green exit without required typed coverage", () => {
+    expect(
+      dispatchCachedTaskCheck("/fw-5079-rapid", "/fw-5079-rapid", {
+        noCache: true,
+        preflight: null,
+        emitRunSummary: false,
+        env: { DEFT_CHECK_MODE: "rapid" },
+        gateSpawnFn: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      }),
+    ).toBe(2);
   });
 });

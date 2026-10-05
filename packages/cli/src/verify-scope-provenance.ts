@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /**
- * CLI for verify:scope-provenance (#3145).
+ * CLI for verify:scope-provenance (#3145 / #4956 / #4774).
+ *
+ * Membership against the declared allowlist (mint / brief file_scope) is
+ * evaluated inside evaluateScopeProvenance; this CLI only forwards
+ * --base-ref / --enforce.
  */
 import { resolve } from "node:path";
 import { scopeProvenance } from "@deftai/directive-core";

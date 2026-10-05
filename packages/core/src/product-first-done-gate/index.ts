@@ -7,8 +7,14 @@
 
 export type { AcServedFrom } from "../session/verify-ac-session-cache.js";
 export {
+  ADMITTED_SOURCE_DIGEST_KEY,
+  ADMITTED_SOURCE_SENTENCES_KEY,
   attachPlanAcceptance,
   buildAcceptanceFromIntakeCapture,
+  digestAdmittedSourceSentences,
+  extractAdmittedSourceSentencesFromText,
+  readAdmittedSourceDigest,
+  readAdmittedSourceSentences,
   readPlanAcceptance,
   stampAcceptanceFromLiteralCapture,
   validatePlanAcceptance,
@@ -22,13 +28,18 @@ export {
   clauseWalkBlocks,
   formatAcceptanceVerdict,
   formatPassLeadClauseCounts,
+  listActiveLifecycleArtifacts,
+  type ResolveSoftMissingAcTargetsOptions,
   relabelVerifyAcPassLead,
   resolveAcceptanceGateProfile,
   resolveAcceptanceVerdict,
   resolvedAcceptanceCommandCount,
+  resolveSoftMissingAcTargets,
+  type SoftMissingAcTargetResolution,
 } from "./acceptance-resolver.js";
 export {
   applyProductFirstGateMode,
+  isCeilingCompositorGate,
   isHygieneGate,
   isProductAcGate,
   type ProductFirstCheckModeResolution,
@@ -46,6 +57,9 @@ export {
   type VerifyAcResolution,
 } from "./empty-resolution.js";
 export {
+  ADMITTED_SOURCE_DIGEST_MISMATCH_CAUSE,
+  ADMITTED_SOURCE_DIGEST_UNAVAILABLE_CAUSE,
+  ADMITTED_SOURCE_IDENTITY_REMOVED_CAUSE,
   type EvaluateVerifyAcOptions,
   emitVerifyAcTerminalOutcome,
   evaluateVerifyAcFromPath,

@@ -10,6 +10,7 @@ import {
 } from "@deftai/directive-types";
 import { describe, expect, it } from "vitest";
 import { atomicWriteBrief, validateBriefForPersist } from "../scope/brief-io.js";
+import { destContentionItTimeout } from "../vitest-runner/dest-contention-it-timeout.helper.test.js";
 import { scanVbrief } from "./conformance.js";
 import { runValidate } from "./main.js";
 import { validateOriginProvenance } from "./origin.js";
@@ -51,6 +52,9 @@ describe("validateVbriefSchema xBRIEF v0.8 (#2107)", () => {
         narratives: {
           Source: "verified:review",
           Confidence: "high",
+          Evidence: "review comment",
+          Verifier: "reviewer",
+          VerifiedAt: "2026-10-02T18:00:00Z",
         },
         items: [
           {
@@ -107,6 +111,235 @@ describe("validateVbriefSchema xBRIEF v0.8 (#2107)", () => {
     };
     const errors = validateVbriefSchema(bad, "effort-bad.json");
     expect(errors.some((e) => e.includes("invalid effort"))).toBe(true);
+  });
+
+  it("accepts optional PlanItem.stopConditions anchors and rejects malformed (#1613)", () => {
+    const wellFormed = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [
+              {
+                id: "helper-shape",
+                kind: "anchor",
+                path: "packages/core/src/example.ts",
+                excerpt: "export function helper(",
+                observeAt: "item-start",
+              },
+              {
+                id: "digest-only",
+                kind: "anchor",
+                path: "README.md",
+                digest: "sha256:abc",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    expect(validateVbriefSchema(wellFormed, "stop-ok.json")).toEqual([]);
+
+    const omitted = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [{ id: "t1", title: "Task", status: "pending" }],
+      },
+    };
+    expect(validateVbriefSchema(omitted, "stop-omitted.json")).toEqual([]);
+
+    const badKind = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [
+              {
+                id: "a1",
+                kind: "assumption",
+                path: "x.ts",
+                excerpt: " cons ",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const kindErrors = validateVbriefSchema(badKind, "stop-bad-kind.json");
+    expect(kindErrors.some((e) => e.includes("invalid kind"))).toBe(true);
+
+    const missingAnchor = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [{ id: "a1", kind: "anchor", path: "x.ts" }],
+          },
+        ],
+      },
+    };
+    const missingErrors = validateVbriefSchema(missingAnchor, "stop-missing-content.json");
+    expect(missingErrors.some((e) => e.includes("excerpt") || e.includes("digest"))).toBe(true);
+
+    const badObserve = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [
+              {
+                id: "a1",
+                kind: "anchor",
+                path: "x.ts",
+                excerpt: " cons ",
+                observeAt: "before-cited-edit",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const observeErrors = validateVbriefSchema(badObserve, "stop-bad-observe.json");
+    expect(observeErrors.some((e) => e.includes("invalid observeAt"))).toBe(true);
+
+    const bareString = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: ["stop if files moved"],
+          },
+        ],
+      },
+    };
+    const bareErrors = validateVbriefSchema(bareString, "stop-bare-string.json");
+    expect(bareErrors.some((e) => e.includes("must be an object"))).toBe(true);
+
+    const notArray = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: { id: "a1", kind: "anchor", path: "x.ts", excerpt: "x" },
+          },
+        ],
+      },
+    };
+    const notArrayErrors = validateVbriefSchema(notArray, "stop-not-array.json");
+    expect(notArrayErrors.some((e) => e.includes("must be an array"))).toBe(true);
+
+    const missingCore = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [{ excerpt: "x", digest: 12, resolvedAtSha: 1, rationale: false }],
+          },
+        ],
+      },
+    };
+    const missingCoreErrors = validateVbriefSchema(missingCore, "stop-missing-core.json");
+    expect(missingCoreErrors.some((e) => e.includes("missing non-empty string 'id'"))).toBe(true);
+    expect(missingCoreErrors.some((e) => e.includes("missing 'kind'"))).toBe(true);
+    expect(missingCoreErrors.some((e) => e.includes("missing non-empty string 'path'"))).toBe(true);
+    expect(missingCoreErrors.some((e) => e.includes(".digest must be a string"))).toBe(true);
+    expect(missingCoreErrors.some((e) => e.includes(".resolvedAtSha must be a string"))).toBe(true);
+    expect(missingCoreErrors.some((e) => e.includes(".rationale must be a string"))).toBe(true);
+
+    const badExcerptType = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [
+              { id: "a1", kind: "anchor", path: "x.ts", excerpt: 99, digest: "sha256:x" },
+            ],
+          },
+        ],
+      },
+    };
+    const excerptTypeErrors = validateVbriefSchema(badExcerptType, "stop-bad-excerpt-type.json");
+    expect(excerptTypeErrors.some((e) => e.includes(".excerpt must be a string"))).toBe(true);
+
+    const unknownField = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [
+              {
+                id: "a1",
+                kind: "anchor",
+                path: "x.ts",
+                excerpt: "x",
+                observeAtt: "item-start",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const unknownErrors = validateVbriefSchema(unknownField, "stop-unknown-field.json");
+    expect(unknownErrors.some((e) => e.includes("unknown field"))).toBe(true);
+
+    const escapePath = {
+      ...MINIMAL_V08,
+      plan: {
+        ...MINIMAL_V08.plan,
+        items: [
+          {
+            id: "t1",
+            title: "Task",
+            status: "pending",
+            stopConditions: [
+              { id: "a1", kind: "anchor", path: "../secrets/token", excerpt: "x" },
+              { id: "a2", kind: "anchor", path: "/etc/passwd", excerpt: "x" },
+            ],
+          },
+        ],
+      },
+    };
+    const escapeErrors = validateVbriefSchema(escapePath, "stop-escape-path.json");
+    expect(escapeErrors.filter((e) => e.includes("repo-relative")).length).toBeGreaterThanOrEqual(
+      2,
+    );
   });
 
   it("rejects non-conformant string PlanItem.id and leaves omitted/integer ids (#4707)", () => {
@@ -507,18 +740,22 @@ describe("Class B reserved-prefix compatibility (#4746 / #4765 / #4846)", () => 
     rmSync(root, { recursive: true, force: true });
   });
 
-  it("CLI exits 0 for each of the twenty-four names under both prefixes and 1 with --warnings-as-errors", () => {
-    for (const prefix of CLASS_B_PREFIXES) {
-      for (const bare of CLASS_B_BARES) {
-        const root = mkdtempSync(join(tmpdir(), "vb-4746-matrix-"));
-        const type = prefix + bare;
-        const vbrief = writeProposedBrief(root, "2026-09-18-matrix.xbrief.json", type);
-        expect(runValidate(["--vbrief-dir", vbrief]), type).toBe(0);
-        expect(runValidate(["--vbrief-dir", vbrief, "--warnings-as-errors"]), type).toBe(1);
-        rmSync(root, { recursive: true, force: true });
+  it(
+    "CLI exits 0 for each of the twenty-four names under both prefixes and 1 with --warnings-as-errors",
+    destContentionItTimeout(),
+    () => {
+      for (const prefix of CLASS_B_PREFIXES) {
+        for (const bare of CLASS_B_BARES) {
+          const root = mkdtempSync(join(tmpdir(), "vb-4746-matrix-"));
+          const type = prefix + bare;
+          const vbrief = writeProposedBrief(root, "2026-09-18-matrix.xbrief.json", type);
+          expect(runValidate(["--vbrief-dir", vbrief]), type).toBe(0);
+          expect(runValidate(["--vbrief-dir", vbrief, "--warnings-as-errors"]), type).toBe(1);
+          rmSync(root, { recursive: true, force: true });
+        }
       }
-    }
-  });
+    },
+  );
 
   it("CLI keeps aliases as errors and mixed origin plus github_pr as error", () => {
     const aliasRoot = mkdtempSync(join(tmpdir(), "vb-4746-alias-"));

@@ -4,6 +4,7 @@ import {
   DEFAULT_MAX_WAIT_MINUTES,
   DEFAULT_POLL_SECONDS,
   DEFAULT_STALL_THRESHOLD,
+  DEFAULT_STICKY_SHA_STALL_SECONDS,
   EXIT_CLEAN,
   EXIT_NEW_P0_P1,
   EXIT_TERMINAL_ERROR,
@@ -11,14 +12,19 @@ import {
   VERDICT_CI_CANCELLED_NO_FAILOVER,
   VERDICT_CI_NEVER_SCHEDULED,
   VERDICT_CLEAN,
+  VERDICT_CLOSED_UNMERGED,
   VERDICT_CONFIG,
   VERDICT_ERRORED,
+  VERDICT_GREPTILE_SHA_STALL,
+  VERDICT_MERGED,
   VERDICT_NEW_P0_P1,
+  VERDICT_NO_REVIEWER_INSTALLED,
   VERDICT_PENDING,
   VERDICT_RUNNER_CAPACITY_STALL,
   VERDICT_STALL,
   VERDICT_TIMEOUT,
 } from "./constants.js";
+import { evaluateGreptileShaStallRemedy, isStickyShaTipRot } from "./greptile-sha-stall.js";
 import { probeOnce } from "./probe.js";
 import type { MonotonicClock, WatchOptions, WatchProbe, WatchResult } from "./types.js";
 
@@ -57,7 +63,8 @@ export function formatWatchStatus(
     `last_reviewed=${shortSha(probe.lastReviewedSha)} sha_match=${probe.shaMatch} ` +
     `confidence=${probe.confidence} p0=${probe.p0Count} p1=${probe.p1Count} ` +
     `errored=${probe.errored} ci_failures=${probe.ciFailures} is_clean=${probe.isClean} ` +
-    `clean_gate_holdout=${probe.cleanGateHoldout} elapsed=${elapsedSeconds}s`
+    `clean_gate_holdout=${probe.cleanGateHoldout} ` +
+    `reviewer_ready_state=${probe.reviewerReadyState} elapsed=${elapsedSeconds}s`
   );
 }
 
@@ -77,6 +84,7 @@ export function watch(
   const pollSeconds = Math.max(1, options.pollSeconds ?? DEFAULT_POLL_SECONDS);
   const oneShot = options.oneShot ?? false;
   const stallThreshold = options.stallThreshold ?? DEFAULT_STALL_THRESHOLD;
+  const stickyShaStallSeconds = options.stickyShaStallSeconds ?? DEFAULT_STICKY_SHA_STALL_SECONDS;
   const runGh = options.runGh ?? defaultRunGh;
   const clockFn = options.clockFn ?? systemMonotonicClock;
   const sleepFn = options.sleepFn ?? defaultSleep;
@@ -92,6 +100,8 @@ export function watch(
   let lastProbe: WatchProbe | null = null;
   let stallStreak = 0;
   let ciBlockedStreak = 0;
+  let stickyShaStartedAt: number | null = null;
+  let stickyShaHead: string | null = null;
 
   const build = (
     verdict: string,
@@ -113,6 +123,16 @@ export function watch(
     const elapsed = Math.round(clockFn.now() - startedAt);
     process.stderr.write(`${formatWatchStatus(poll, maxPolls, probe, elapsed)}\n`);
 
+    // #4288: PR lifecycle terminals ahead of Greptile error / SHA-match holdout.
+    // merged=true → MERGED exit 0 (finish-success family with CLEAN).
+    // closed+!merged → CLOSED_UNMERGED exit 2 (not shipped).
+    if (probe.prMerged === true) {
+      return build(VERDICT_MERGED, EXIT_CLEAN, probe, poll);
+    }
+    if (probe.prState === "closed" && probe.prMerged === false) {
+      return build(VERDICT_CLOSED_UNMERGED, EXIT_TERMINAL_ERROR, probe, poll);
+    }
+
     if (probe.error !== null) {
       return build(VERDICT_CONFIG, EXIT_TERMINAL_ERROR, probe, poll);
     }
@@ -131,6 +151,13 @@ export function watch(
     }
     if (probe.errored) {
       return build(VERDICT_ERRORED, EXIT_TERMINAL_ERROR, probe, poll);
+    }
+
+    // #3630: named weather terminal, not CLEAN (CI_NEVER_SCHEDULED pattern).
+    // Zero-reviewer weather is determined on the first probe and exits
+    // before the poll loop can burn TIMEOUT / dual-stop.
+    if (probe.reviewerReadyState === "no_reviewer_installed") {
+      return build(VERDICT_NO_REVIEWER_INSTALLED, EXIT_TERMINAL_ERROR, probe, poll);
     }
 
     // #2672 / #3167: CI weather states are distinct terminal exits (exit 2).
@@ -161,10 +188,38 @@ export function watch(
       return build(VERDICT_CI_BLOCKED, EXIT_TERMINAL_ERROR, probe, poll);
     }
 
+    // #5162 Prefer-A Recut: sticky tip-rot sha_match + no in-flight Greptile
+    // Review on HEAD arms a sticky-sha clock (elapsed since first sticky
+    // observation; borrow ~10 min). Do not use Stall Rubric IN_PROGRESS
+    // startedAt. Bare one-shot stays PENDING (#2313 keep-wait).
+    if (isStickyShaTipRot(probe)) {
+      // New HEAD gets its own sticky-sha window (#5162 P1); do not inherit the prior tip timer.
+      if (stickyShaHead !== probe.headSha) {
+        stickyShaHead = probe.headSha;
+        stickyShaStartedAt = clockFn.now();
+      } else if (stickyShaStartedAt === null) {
+        stickyShaStartedAt = clockFn.now();
+      }
+      const stickyElapsed = Math.round(clockFn.now() - stickyShaStartedAt);
+      const remedy = evaluateGreptileShaStallRemedy({
+        probe,
+        stickyElapsedSeconds: stickyElapsed,
+        stickyShaStallSeconds,
+        oneShot,
+      });
+      if (remedy !== null) {
+        return build(VERDICT_GREPTILE_SHA_STALL, EXIT_TERMINAL_ERROR, probe, poll);
+      }
+    } else {
+      stickyShaStartedAt = null;
+      stickyShaHead = null;
+    }
+
     // STALL (#1039): wedged CLEAN-gate on HEAD — !has_blocking && !is_clean for N
     // consecutive polls with a holdout OTHER than sha_match. Stale-SHA reads
     // (clean_gate_holdout=sha_match) are INCOMPLETE for HEAD per #1259 / #2313 —
-    // keep polling until cap, not early STALL while re-review is in flight.
+    // keep polling until cap / greptile-sha-stall, not early STALL while
+    // re-review is in flight.
     if (!probe.hasBlocking && !probe.isClean && probe.cleanGateHoldout !== "sha_match") {
       stallStreak += 1;
     } else {
@@ -204,6 +259,10 @@ export function watch(
     terminalCheckRun: false,
     isClean: false,
     cleanGateHoldout: null,
+    reviewerReadyState: null,
+    reviewCycleHandback: null,
+    prState: null,
+    prMerged: null,
     error: null,
   };
   return build(VERDICT_TIMEOUT, EXIT_TERMINAL_ERROR, probe, maxPolls);

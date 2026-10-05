@@ -1,14 +1,18 @@
 <!-- deft:cold-start-bootstrap v1 (#2273) -->
 > ## ⚡ Cold-start bootstrap (read this first)
 >
-> **New clone, or `deft` / `directive` won't run?** Directive runs from an npm-installed engine — there is no committed shell shim, so *you* (agent or human) are the interpreter. Work the **global-first ladder** below top-down and stop at the first rung that yields a working `directive`. The version to install is always the one pinned in the project's committed `package.json`.
+> **New clone, or `deft` / `directive` won't run, or PATH version is behind the pin?** Directive runs from an npm-installed engine — there is no committed shell shim, so *you* (agent or human) are the interpreter. Work the **global-first ladder** below top-down and stop at the first rung that yields a working `directive` admitted by the pin compare on rung 1. Exact PATH-version equality is the check after repairing a behind-pin engine, not the stop for every case. The version to install is always the one pinned in the project's committed `package.json`. Doctor exit 0 is not skip.
 >
-> 1. **Already installed?** Run `directive doctor --full` (or the `deft` alias). Follow its `Next command:`. A process that starts is not bootstrap success. Bare `directive doctor` may skip (24h clean / 4h dirty); `--full` bypasses that throttle.
+> 1. **Already on PATH?** Compare `directive --version` / `deft --version` to the committed `package.json` pin (outside the doctor binary). Matching pin: proceed, then run `directive doctor --full` (or the `deft` alias) and follow its `Next command:`. Behind pin: `npm i -g @deftai/directive@<pin>`, then re-probe that same PATH executable for the pin version — success is that match, not install exit 0. Supported ahead: proceed with the existing `update` / `align-pin` next step; far ahead stays fail-closed. No pin and no deposit: `npx @deftai/directive init`, then return to this compare against the pin init wrote. Bare `directive doctor` may skip (24h clean / 4h dirty); `--full` bypasses that throttle. A process that starts is not bootstrap success.
 > 2. **Local engine.** If `.deft/.cli/<platform>` holds an intact engine at or above the `package.json` pin, use it.
-> 3. **Global install (canonical).** `npm i -g @deftai/directive` (Node ≥ 20), then re-run `directive doctor --full`. Using pnpm? `pnpm add -g @deftai/directive` (same package, same registry) — make sure `PNPM_HOME` is on your `PATH` (`pnpm setup` if not).
+> 3. **Global install (canonical).** With a pin: `npm i -g @deftai/directive@<pin>` (Node ≥ 20), then re-run `directive doctor --full`. No pin and no deposit: `npx @deftai/directive init`, then return to step 1. Using pnpm? `pnpm add -g @deftai/directive@<pin>` (same package, same registry) — make sure `PNPM_HOME` is on your `PATH` (`pnpm setup` if not).
 > 4. **Sandbox install.** If the global npm prefix isn't writable (sandboxed environment), install into the project instead: `npm install --prefix .deft/.cli/<platform> @deftai/directive@<pinned>`. (This internal `.deft/.cli/` layout is always npm-shaped, regardless of your project's package manager.)
-> 5. **Corporate mirror symptoms.** If install returns `E404` / `ETARGET`, or `@latest` silently stays behind the public release, follow the [corporate or mirrored npm registry recovery](./content/UPGRADING.md#corporate-or-mirrored-npm-registry).
-> 6. **Offline.** If the npm registry is unreachable, install from a staged tarball / vendored payload. If none exists, stage one — recovery cannot proceed without a payload.
+> 5. **Codex ritual git.** Distinct from npm-prefix sandbox install above: `session:start` and peer ritual verbs (`verify:session-ritual`, `issue:ingest`, `scope:promote`, …) spawn host `git`. Under the Codex sandbox (Windows TUI), that can fail with `spawnSync git EPERM` and a prompt like `Would you like to run the following command? Environment: local`. Approve outside-sandbox for ritual `git` once for the session in the Codex TUI approval prompt; prefer session-scoped approval or `/approvals` workspace trust when offered. Repeated per-verb `Environment: local` prompts do not discharge Continuity. Do not invent an in-process git substitute. Also distinct from Codex project-hook `/hooks` trust (`manual-review-required`).
+> 6. **Abandoned occupancy lease.** Only when the lease is abandoned (stale/expired owner, not a live peer session): `occupancy:release --session-id=<id from .deft/occupancy.json>` or wait for TTL claim-over. Do not release another session's live lease. Do not invent a new unlock verb (#3954 / #4667).
+> 7. **Corporate mirror symptoms.** If install returns `E404` / `ETARGET`, or `@latest` silently stays behind the public release, follow the [corporate or mirrored npm registry recovery](./content/UPGRADING.md#corporate-or-mirrored-npm-registry).
+> 8. **Offline.** If the npm registry is unreachable, install from a staged tarball / vendored payload. If none exists, stage one — recovery cannot proceed without a payload.
+>
+> Old deposits missing this compare line: `npx -y @deftai/directive@<pin> agents:refresh`, then assert the every-session compare (`directive --version` vs pin) is present in the managed AGENTS.md section. Refresh exit 0 is not that evidence. When the pin predates this compare, that `@<pin>` refresh cannot add the line — obtain current bootstrap content with `directive update` on a repaired engine, or `npx -y @deftai/directive@latest agents:refresh`, then re-assert presence. Full deposit currency (main.md, SKILL.md) is `directive update` on the repaired engine.
 >
 > This block is always committed (never gitignored) and does **not** depend on the `.deft/core/` payload being present, so it is reachable on a fresh clone even when the vendored framework is missing. Once `directive` runs, continue with the guidance below and in `AGENTS.md`.
 <!-- /deft:cold-start-bootstrap v1 -->
@@ -33,7 +37,7 @@ Agents Lie, Cheat, and Steal (LCS). Directive is the practice layer that helps p
 
 ## 🚀 Getting Started
 
-Directive is three commands — `init`, `update`, and `doctor`. After install, walk the [first-project tutorial](./content/docs/getting-started.md).
+Directive is three commands — `init`, `update`, and `doctor`. After install, walk the [first-project tutorial](./content/docs/getting-started.md). Hands-on learning: the [Directive training course](https://github.com/deftai/directive-training).
 
 | Your situation | Run this one command | What it does |
 | --- | --- | --- |

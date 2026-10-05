@@ -1,9 +1,13 @@
-import { spawnSync } from "node:child_process";
 import type { LabelClient } from "../vbrief-reconcile/types.js";
 import { extractFlag, peekRepoFlag } from "./argv.js";
+import { spawnScmBinary } from "./binary.js";
 import { buildCommand } from "./build-command.js";
 import { REST_OPT_IN_VERBS } from "./constants.js";
-import { DESIGN_CRITIQUE_CHIP_VERB, runDesignCritiqueChip } from "./design-critique-chip.js";
+import {
+  DESIGN_CRITIQUE_CHIP_VERB,
+  type DesignCritiqueChipSeams,
+  runDesignCritiqueChip,
+} from "./design-critique-chip.js";
 import {
   DESIGN_CRITIQUE_STALE_READY_VERB,
   runDesignCritiqueStaleReady,
@@ -30,6 +34,8 @@ export interface MainOptions {
   readonly occupancyLive?: (projectRoot: string) => boolean;
   /** Seams for `issue design-critique-stale-ready` (#4970). */
   readonly staleReadySeams?: StaleReadyScanSeams;
+  /** Ensure-on-write seam for `issue design-critique-chip` (#5326). */
+  readonly ensureCatalogChip?: DesignCritiqueChipSeams["ensureCatalogChip"];
 }
 
 /**
@@ -77,7 +83,10 @@ export function main(argv: readonly string[], options: MainOptions = {}): number
   if (namespace === "issue" && verb === DESIGN_CRITIQUE_CHIP_VERB) {
     const blocked = guardScmReady(options, extra);
     if (blocked !== null) return blocked;
-    const result = runDesignCritiqueChip(extra, { client: options.labelClient });
+    const result = runDesignCritiqueChip(extra, {
+      client: options.labelClient,
+      ensureCatalogChip: options.ensureCatalogChip,
+    });
     if (result.stdout.length > 0) {
       process.stdout.write(result.stdout);
     }
@@ -159,7 +168,7 @@ export function main(argv: readonly string[], options: MainOptions = {}): number
     if (binary === undefined) {
       throw new ScmStubError("internal error: empty command argv");
     }
-    const proc = spawnSync(binary, cmd.slice(1), {
+    const proc = spawnScmBinary(binary, cmd.slice(1), {
       stdio: "inherit",
       env: process.env,
     });

@@ -9,9 +9,17 @@
  * returned success while creating one). The brief also need not be in the diff —
  * for #3598 it landed on master seventeen hours before its closing PR.
  *
- * The rule itself is not restated here. `evaluateAcceptanceEvidenceGate` is the
- * single decision procedure `scope:complete` enforces, and this gate calls it so
- * the two cannot drift.
+ * The shared decision procedure is `evaluateAcceptanceEvidenceGate`, which
+ * evaluates persisted evidence only. Prospective merge stamps are a
+ * `scope:complete` persist-path step. This gate calls that evaluator so the
+ * closeout verdict is a function of on-disk bytes — the next worker,
+ * `verify:completed-tracked`, orphan-active triage, and a human reading the PR
+ * (#5120). It does not mint evidence and does not `git fetch`.
+ * complete-cohort dry-run vs live provenance timing is follow-up, not P1 relief.
+ *
+ * #3819 item-status allowlist inversion is inherited here via that shared gate
+ * (no carve-out): missing/unrecognized item.status no longer skips typed
+ * provenance at closeout either.
  */
 
 import { existsSync } from "node:fs";
@@ -33,9 +41,19 @@ import {
   ACCEPTANCE_EVIDENCE_KINDS,
   evaluateAcceptanceEvidenceGate,
   inferRequiredStrictAxes,
+  itemDeclaresMergeRequirement,
   type StrictAcceptanceAxis,
 } from "../scope/acceptance-evidence.js";
 import { resolveRepo } from "../triage/queue/repo.js";
+import {
+  assertWorkingTreeIsPrHead,
+  fetchPrHeadShaViaApi,
+  findWorktreeAtSha,
+  type PrHeadAssertOptions,
+  resolveLifecycleDirty,
+  resolveLocalHeadSha,
+  shasMatch,
+} from "./pr-head-assert.js";
 
 export type OutputStream = "stdout" | "stderr" | "none";
 
@@ -51,6 +69,8 @@ export interface UnattestedCriterion {
    * `review` evidence cannot satisfy it, so the message must say which kind can.
    */
   readonly requiredAxes: readonly StrictAcceptanceAxis[];
+  /** True when the item explicitly declares merge (#5120 remediation split). */
+  readonly declaresMerge: boolean;
 }
 
 /** An active/running brief the PR's closing reference would orphan on merge. */
@@ -92,6 +112,11 @@ export interface EvaluateOptions {
   readonly quiet?: boolean;
   /** Closing-reference seam so tests do not need a forge. */
   readonly fetchClosingIssues?: FetchClosingIssuesFn;
+  /**
+   * Before reading briefs, assert local HEAD equals the PR head that merges (#3875).
+   * Exit 2 on mismatch or unreadable SHA. Inject seams for hermetic tests.
+   */
+  readonly prHeadAssert?: PrHeadAssertOptions;
   readonly onePrUnitGrant?: OnePrUnitGrant | null;
   readonly onePrUnitId?: string | null;
   readonly prNodeId?: string | null;
@@ -213,14 +238,35 @@ function formatRefusal(
     }
   }
 
+  const hasMergeDeclared = findings.some((f) => f.unattested.some((c) => c.declaresMerge));
+  const hasNonMerge = findings.some((f) => f.unattested.some((c) => !c.declaresMerge));
+
   lines.push(
     "  Evidence is not authenticated — recorded_by accepts any non-empty string. Record what you",
     "  actually did: a pointer must be the artifact its kind names (a test run for test, this PR's",
     "  merge for merge, a deployment for deploy). An agent may evidence a criterion; only",
     "  human-origin provenance may waive one (#3240 / #2944).",
-    "  Remediation (performable by this PR's author): stamp the criteria above on the brief in this",
-    "  branch, commit, push, then re-run:",
-    `    task verify:pr-closeout-attestable -- --pr ${prNumber}`,
+  );
+  if (hasMergeDeclared) {
+    lines.push(
+      "  Merge-declared criteria are persisted by `scope:complete` complete-prep after delivery,",
+      "  not by `scope:stamp-evidence` (that verb has no --merge-commit).",
+    );
+  }
+  if (hasNonMerge) {
+    lines.push(
+      "  Remediation (performable by this PR's author): stamp the non-merge criteria above on the",
+      "  brief in this branch, commit, push, then re-run:",
+      `    task verify:pr-closeout-attestable -- --pr ${prNumber}`,
+    );
+  } else {
+    lines.push(
+      "  Remediation: `scope:complete` complete-prep persists eligible merge evidence after",
+      "  delivery; then re-run:",
+      `    task verify:pr-closeout-attestable -- --pr ${prNumber}`,
+    );
+  }
+  lines.push(
     "  Trigger is the PR's closing references, not the branch diff. A PR that leaves an unattested",
     "  brief without closing its issue is unaffected.",
   );
@@ -255,9 +301,16 @@ function configError(
  * closeout / 2 config or closing-reference lookup error. A lookup that cannot be
  * resolved is 2, not 0 — the gate never green-lights a merge it could not check.
  *
- * The brief is read from `projectRoot`'s working tree, which at merge time is the
- * PR head checkout. That is the tree the merge lands, and it is the same
- * working-tree basis `verify:orphan-active` uses.
+ * The brief is read from the PR-head working tree (caller cwd, or a linked
+ * worktree whose HEAD matches the PR head when cascade runs from primary). That
+ * is the tree the merge lands, and it is the same working-tree basis
+ * `verify:orphan-active` uses. When the caller has no xbrief/, closeout still
+ * probes a linked PR-head worktree before declaring nothing to check; only when
+ * neither tree has xbrief/ does it exit 0 (legacy vbrief/-only). A missing
+ * OWNER/REPO slug, failed PR-head SHA fetch, or HEAD verification on a found
+ * worktree is exit 2 — never a silent skip. When briefs would be read, #3875
+ * asserts HEAD equals the PR head SHA, refuses a dirty xbrief/vbrief tree, and
+ * exit-2s on mismatch with no matching linked worktree.
  */
 
 export function evaluate(
@@ -272,52 +325,171 @@ export function evaluate(
     return configError(prNumber, `project root does not exist: ${root}`);
   }
 
-  let lifecycleRoot: string;
-  try {
-    lifecycleRoot = resolveLifecycleRoot(root);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Consumers may still be on a legacy vbrief/-only layout (#2112). Closeout
-    // attestability applies to xbrief/active/ only — skip cleanly, not config fail.
-    if (message.includes("No xbrief/ layout found")) {
-      return {
-        code: 0,
-        message: quiet
-          ? ""
-          : "verify:pr-closeout-attestable: no xbrief/ lifecycle root; nothing to check.",
-        stream: quiet ? "none" : "stdout",
-        prNumber,
-        closingIssues: [],
-        findings: [],
-        proxied: false,
-      };
-    }
-    return configError(prNumber, message);
-  }
-
-  if (!existsSync(lifecycleRoot)) {
-    return {
-      code: 0,
-      message: quiet
-        ? ""
-        : "verify:pr-closeout-attestable: no xbrief/ lifecycle root; nothing to check.",
-      stream: quiet ? "none" : "stdout",
-      prNumber,
-      closingIssues: [],
-      findings: [],
-      proxied: false,
-    };
-  }
-
   // Pin plain `gh` when it exists: `ghx` is a cached GET proxy and a stale
   // closing-reference read would fail this gate open (#3767 / #3737).
   const runner = options.runner ?? makeGateRunner();
   const fetchClosing = options.fetchClosingIssues ?? fetchClosingIssuesReferences;
+
+  const nothingToCheck = (): PrCloseoutAttestableResult => ({
+    code: 0,
+    message: quiet
+      ? ""
+      : "verify:pr-closeout-attestable: no xbrief/ lifecycle root; nothing to check.",
+    stream: quiet ? "none" : "stdout",
+    prNumber,
+    closingIssues: [],
+    findings: [],
+    proxied: runner.proxied,
+  });
+
+  // Probe caller xbrief/ first. A miss is not yet "nothing to check" — cascade
+  // from primary may still find briefs on a linked PR-head worktree (#3875).
+  let callerLifecycle: string | null = null;
+  try {
+    const resolved = resolveLifecycleRoot(root);
+    callerLifecycle = existsSync(resolved) ? resolved : null;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Consumers may still be on a legacy vbrief/-only layout (#2112).
+    if (!message.includes("No xbrief/ layout found")) {
+      return configError(prNumber, message, runner.proxied);
+    }
+  }
+
   const repo = resolveRepo(options.repo, root);
+
+  let briefRoot = root;
+  let lifecycleRoot: string;
+
+  if (callerLifecycle === null) {
+    // No local xbrief: without a repo slug we cannot know the PR head SHA to
+    // probe a linked worktree — fail closed, never certify "nothing to check".
+    if (repo === null || repo.length === 0) {
+      return configError(
+        prNumber,
+        "cannot resolve OWNER/REPO for the PR-head closeout probe. Pass --repo OWNER/REPO, " +
+          "set $GH_REPO, or run inside a checkout with a GitHub origin remote.",
+        runner.proxied,
+      );
+    }
+    // Probe a linked PR-head worktree before declaring nothing to check
+    // (outside-diff residual on #5258). Fail closed on an unverified lookup.
+    const assertOpts = options.prHeadAssert ?? {};
+    const fetchPrHead = assertOpts.fetchPrHeadSha ?? fetchPrHeadShaViaApi;
+    const resolveWorktree = assertOpts.resolveWorktreeAtSha ?? findWorktreeAtSha;
+    const resolveLocal = assertOpts.resolveLocalHeadSha ?? resolveLocalHeadSha;
+    const resolveDirty = assertOpts.resolveLifecycleDirty ?? resolveLifecycleDirty;
+    const prHead =
+      assertOpts.prHeadSha !== undefined
+        ? assertOpts.prHeadSha
+        : fetchPrHead(prNumber, repo, runner.runGh);
+    if (prHead === null || prHead.trim().length === 0) {
+      return configError(
+        prNumber,
+        `cannot read PR #${prNumber} head SHA (repo=${repo}) before closeout. ` +
+          "Refusing to certify briefs on an unverified tree — retry after fixing gh auth or network.",
+        runner.proxied,
+      );
+    }
+    const lookup = resolveWorktree(root, prHead.trim());
+    if (lookup.status === "error") {
+      return configError(
+        prNumber,
+        `${lookup.message}. Refusing to certify briefs when the PR-head worktree lookup ` +
+          "is unverified — fix git and retry.",
+        runner.proxied,
+      );
+    }
+    if (lookup.status === "absent" || lookup.path.trim().length === 0) {
+      // Verified list: no linked worktree at the PR head — nothing to attest.
+      return nothingToCheck();
+    }
+    const alt = lookup.path;
+    const altHead = resolveLocal(alt);
+    if (altHead === null || altHead.trim().length === 0) {
+      return configError(
+        prNumber,
+        `cannot resolve local HEAD in ${alt} before reading closeout briefs. ` +
+          "Run from the PR head checkout (or a worktree at that SHA).",
+        runner.proxied,
+      );
+    }
+    if (!shasMatch(altHead, prHead)) {
+      return configError(
+        prNumber,
+        `working tree HEAD ${altHead} is not PR #${prNumber} head ${prHead}. ` +
+          "Closeout reads the tree that merges — check out the PR head (or pass " +
+          "--project-root to its worktree) and retry.",
+        runner.proxied,
+      );
+    }
+    let altLifecycle: string | null = null;
+    try {
+      const resolved = resolveLifecycleRoot(alt);
+      altLifecycle = existsSync(resolved) ? resolved : null;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("No xbrief/ layout found")) {
+        return configError(prNumber, message, runner.proxied);
+      }
+    }
+    if (altLifecycle === null) {
+      return nothingToCheck();
+    }
+    if (assertOpts.checkLifecycleDirty !== false) {
+      const dirty = resolveDirty(alt);
+      if (dirty !== null) {
+        return configError(
+          prNumber,
+          `lifecycle tree under ${alt} has uncommitted xbrief/vbrief changes ` +
+            `(${dirty}). Closeout reads the committed PR-head brief — commit, ` +
+            "stash, or discard local lifecycle edits and retry.",
+          runner.proxied,
+        );
+      }
+    }
+    briefRoot = resolve(alt);
+    lifecycleRoot = altLifecycle;
+  } else {
+    if (repo === null || repo.length === 0) {
+      // Closing references are repository-scoped. Without the slug this gate could
+      // only compare bare numbers, and a same-numbered issue in an unrelated
+      // repository would block a valid merge.
+      return configError(
+        prNumber,
+        "cannot resolve OWNER/REPO for the closing-reference read. Pass --repo OWNER/REPO, " +
+          "set $GH_REPO, or run inside a checkout with a GitHub origin remote.",
+        runner.proxied,
+      );
+    }
+    // #3875: refuse a wrong-tree / dirty-lifecycle brief read before closing refs.
+    const headAssert = assertWorkingTreeIsPrHead(root, prNumber, repo, runner.runGh, {
+      ...options.prHeadAssert,
+    });
+    if (!headAssert.ok) {
+      return configError(prNumber, headAssert.message, runner.proxied);
+    }
+    briefRoot =
+      headAssert.resolvedProjectRoot !== undefined ? resolve(headAssert.resolvedProjectRoot) : root;
+    lifecycleRoot = callerLifecycle;
+    if (briefRoot !== root) {
+      try {
+        lifecycleRoot = resolveLifecycleRoot(briefRoot);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("No xbrief/ layout found")) {
+          return nothingToCheck();
+        }
+        return configError(prNumber, message, runner.proxied);
+      }
+      if (!existsSync(lifecycleRoot)) {
+        return nothingToCheck();
+      }
+    }
+  }
+
+  // Both branches above return when repo is missing; narrow for the forge read.
   if (repo === null || repo.length === 0) {
-    // Closing references are repository-scoped. Without the slug this gate could
-    // only compare bare numbers, and a same-numbered issue in an unrelated
-    // repository would block a valid merge.
     return configError(
       prNumber,
       "cannot resolve OWNER/REPO for the closing-reference read. Pass --repo OWNER/REPO, " +
@@ -343,7 +515,7 @@ export function evaluate(
     options.onePrUnitGrant !== undefined
       ? options.onePrUnitGrant
       : options.onePrUnitId !== undefined && options.onePrUnitId !== null
-        ? loadOnePrUnitGrant(root, options.onePrUnitId)
+        ? loadOnePrUnitGrant(briefRoot, options.onePrUnitId)
         : null;
   const unit = evaluateOnePrUnit({
     closerSet: closerSetFromIssueIds(repo, closingIssues),
@@ -408,15 +580,16 @@ export function evaluate(
           title: report.title,
           detail: report.detail,
           requiredAxes: item === undefined ? [] : inferRequiredStrictAxes(item),
+          declaresMerge: item !== undefined && itemDeclaresMergeRequirement(item),
         };
       });
-    findings.push({ briefPath: relBriefPath(brief.path, root), issue, unattested });
+    findings.push({ briefPath: relBriefPath(brief.path, briefRoot), issue, unattested });
   }
 
   if (findings.length > 0) {
     return {
       code: 1,
-      message: formatRefusal(prNumber, findings, root, runner.proxied),
+      message: formatRefusal(prNumber, findings, briefRoot, runner.proxied),
       stream: "stderr",
       prNumber,
       closingIssues,

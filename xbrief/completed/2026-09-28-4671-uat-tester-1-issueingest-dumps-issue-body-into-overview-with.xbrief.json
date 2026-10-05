@@ -1,0 +1,97 @@
+{
+  "xBRIEFInfo": {
+    "version": "0.8",
+    "description": "Scope xBRIEF for dest residual PR #5121 / Tracking #4671 (dest-local)",
+    "updated": "2026-09-29T00:12:02.179Z"
+  },
+  "plan": {
+    "title": "[UAT Tester 1] issue:ingest Requirements harvest + empty-after-harvest notice (#4671)",
+    "status": "completed",
+    "narratives": {
+      "Description": "Dest residual for PR #5121: CHANGELOG consolidate, bulk notice path labels, optional empty-section rescan.",
+      "Origin": "https://github.com/deftai/directive/issues/4671",
+      "Overview": "Keep xbrief/active dest-local. Do not merge or scope:complete from this leaf."
+    },
+    "items": [
+      {
+        "id": "clause.1",
+        "title": "Consolidate one brief #4671 CHANGELOG Unreleased entry",
+        "status": "completed",
+        "x-directive/evidence": {
+          "kind": "merge",
+          "pointer": "39ef080cefc536dfb5c35f3e32be08ac87e46964",
+          "recorded_at": "2026-09-29T00:00:41.852Z",
+          "recorded_by": "MScottAdams"
+        },
+        "x-directive/requires": "merge"
+      },
+      {
+        "id": "clause.2",
+        "title": "Bulk empty-after-harvest notices keep path/issue labels",
+        "status": "completed",
+        "x-directive/evidence": {
+          "kind": "merge",
+          "pointer": "39ef080cefc536dfb5c35f3e32be08ac87e46964",
+          "recorded_at": "2026-09-29T00:00:41.852Z",
+          "recorded_by": "MScottAdams"
+        },
+        "x-directive/requires": "merge"
+      },
+      {
+        "id": "clause.3",
+        "title": "Optional single-pass empty Requirements section scan",
+        "status": "completed",
+        "x-directive/evidence": {
+          "kind": "merge",
+          "pointer": "39ef080cefc536dfb5c35f3e32be08ac87e46964",
+          "recorded_at": "2026-09-29T00:00:41.852Z",
+          "recorded_by": "MScottAdams"
+        },
+        "x-directive/requires": "merge"
+      }
+    ],
+    "tags": [
+      "intake",
+      "4671"
+    ],
+    "references": [
+      {
+        "uri": "https://github.com/deftai/directive/issues/4671",
+        "type": "x-xbrief/github-issue",
+        "title": "Issue #4671"
+      },
+      {
+        "uri": "https://github.com/deftai/directive/pull/5121",
+        "type": "x-xbrief/github-pr",
+        "title": "PR #5121"
+      }
+    ],
+    "metadata": {
+      "dest_local": true,
+      "tracking": 4671,
+      "pr": 5121,
+      "lifecycleWrite": {
+        "action": "complete",
+        "writtenAt": "2026-09-28T23:32:38Z"
+      },
+      "productPullRequest": 5121,
+      "swarm": {},
+      "completedAt": "2026-09-28T23:32:38Z",
+      "capacityBucket": "new-capability",
+      "x-directive/plan-id": {
+        "version": 1,
+        "source": "github-rest-id",
+        "github_issue_id": 5480360210,
+        "origin": "deftai/directive#4671",
+        "id": "github.issue.5480360210"
+      }
+    },
+    "acceptance": {
+      "none_stated": true,
+      "source_rung": "stated",
+      "commands": []
+    },
+    "id": "github.issue.5480360210",
+    "updated": "2026-09-29T00:12:02.179Z"
+  }
+}

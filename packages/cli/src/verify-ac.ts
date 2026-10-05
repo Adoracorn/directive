@@ -6,6 +6,7 @@
  * Primary name for the product-first done-gate; verify:literal-ac remains
  * the #3267 mechanism alias.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,8 +18,11 @@ import {
 import {
   emitVerifyAcTerminalOutcome,
   evaluateVerifyAcFromPath,
+  readAdmittedSourceDigest,
+  readAdmittedSourceSentences,
   readPlanAcceptance,
   resolveAcceptanceGateProfile,
+  resolveSoftMissingAcTargets,
 } from "@deftai/directive-core/product-first-done-gate";
 
 interface ParsedArgs {
@@ -124,6 +128,96 @@ export function clampVerifyAcExit(ok: boolean, code: number): number {
   return 1;
 }
 
+/**
+ * Spec-path briefs persist the refused GitHub body under plan.metadata.issueBody
+ * (#4524 / #5055), including empty string when the origin body was empty. Live
+ * recovery must use the Bound-remedy harvest (Overview), not body-normative REST.
+ */
+function planHasSpecPathRefusedBody(plan: Record<string, unknown>): boolean {
+  const meta = asRecord(plan.metadata);
+  if (meta === null) {
+    return false;
+  }
+  return Object.hasOwn(meta, "issueBody") && typeof meta.issueBody === "string";
+}
+
+/**
+ * Spec-path admitted source = Overview harvest remainder (#5055).
+ * Fail closed when Overview is empty — do not fall through to the refused body.
+ */
+function fetchSpecPathHarvest(
+  plan: Record<string, unknown>,
+): { readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: string } {
+  const narratives = asRecord(plan.narratives);
+  const overview = narratives?.Overview;
+  if (typeof overview === "string" && overview.trim().length > 0) {
+    return { ok: true, text: overview };
+  }
+  return {
+    ok: false,
+    reason:
+      "Spec-path Bound-remedy harvest unavailable (Overview empty); refuse offline / restore from git",
+  };
+}
+
+/**
+ * Live REST body for the origin issue (body-normative admitted source, #5055).
+ * Fail closed on forge outage — do not skip.
+ */
+function fetchOriginIssueBody(
+  plan: Record<string, unknown>,
+): { readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: string } {
+  const refs = Array.isArray(plan.references) ? plan.references : [];
+  let issueUrl: string | null = null;
+  for (const entry of refs) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      continue;
+    }
+    const row = entry as Record<string, unknown>;
+    if (row.type === "x-xbrief/github-issue" && typeof row.uri === "string") {
+      issueUrl = row.uri;
+      break;
+    }
+  }
+  if (issueUrl === null) {
+    return { ok: false, reason: "no github-issue reference on the brief for live REST" };
+  }
+  const match = issueUrl.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/i);
+  if (match === null) {
+    return { ok: false, reason: `unparseable github-issue uri: ${issueUrl}` };
+  }
+  const owner = match[1] ?? "";
+  const repo = match[2] ?? "";
+  const number = match[3] ?? "";
+  const apiPath = `repos/${owner}/${repo}/issues/${number}`;
+  const proc = spawnSync("gh", ["api", apiPath, "--jq", ".body"], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (proc.error) {
+    return { ok: false, reason: `forge outage: ${proc.error.message}` };
+  }
+  if (proc.status !== 0) {
+    const detail =
+      `${proc.stderr ?? ""}${proc.stdout ?? ""}`.trim() || `gh api exited ${String(proc.status)}`;
+    return { ok: false, reason: `forge outage: ${detail}` };
+  }
+  return { ok: true, text: typeof proc.stdout === "string" ? proc.stdout : "" };
+}
+
+/**
+ * Live admitted-source text for digest compare / missing-pin recovery (#5055).
+ * Spec-path → Bound-remedy harvest; body-normative → origin issue body.
+ */
+function fetchAdmittedSourceForPlan(
+  plan: Record<string, unknown>,
+): { readonly ok: true; readonly text: string } | { readonly ok: false; readonly reason: string } {
+  if (planHasSpecPathRefusedBody(plan)) {
+    return fetchSpecPathHarvest(plan);
+  }
+  return fetchOriginIssueBody(plan);
+}
+
 /** Evaluate one or many xBRIEF paths; return worst non-zero code (fail closed). */
 function evaluatePaths(
   paths: readonly string[],
@@ -141,6 +235,31 @@ function evaluatePaths(
     if (!options.quiet && paths.length > 1) {
       process.stdout.write(`verify:ac — evaluating ${path}\n`);
     }
+    let fetchAdmittedSourceText:
+      | (() =>
+          | { readonly ok: true; readonly text: string }
+          | { readonly ok: false; readonly reason: string })
+      | undefined;
+    try {
+      const raw = JSON.parse(readFileSync(path, "utf8")) as unknown;
+      const root = asRecord(raw);
+      const plan = asRecord(root?.plan);
+      // Arm live admitted-source fetch when a pin is present (digest compare), a
+      // digest remains after pin delete (honor recorded digest), or Spec-path
+      // refused-body metadata marks harvest recovery (#5055). Spec-path callbacks
+      // return the Bound-remedy harvest, not the refused raw issue body. Body-
+      // normative both-deleted recovery prefers git HEAD / merge-base so
+      // pre-#5055 briefs without a pin are not suddenly floored by live REST.
+      if (plan !== null) {
+        const pin = readAdmittedSourceSentences(plan.acceptance);
+        const digest = readAdmittedSourceDigest(plan.acceptance);
+        if (pin !== null || digest !== null || planHasSpecPathRefusedBody(plan)) {
+          fetchAdmittedSourceText = () => fetchAdmittedSourceForPlan(plan);
+        }
+      }
+    } catch {
+      // Path evaluation still runs; unreadable brief is handled inside evaluateVerifyAcFromPath.
+    }
     const result = evaluateVerifyAcFromPath(path, {
       projectRoot: options.projectRoot,
       quiet: options.quiet,
@@ -149,6 +268,7 @@ function evaluatePaths(
       captureFromNarratives: profile.captureFromNarratives,
       reuseMode: profile.reuseMode,
       env: process.env,
+      ...(fetchAdmittedSourceText !== undefined ? { fetchAdmittedSourceText } : {}),
     });
     if (result.message.length > 0) {
       if (result.ok) {
@@ -195,20 +315,48 @@ export function run(argv: string[]): number {
     if (found.kind === "one") {
       paths = [found.path];
     } else if (found.kind === "many") {
-      // Greptile #3284: multi-active must verify EVERY active scope, not skip.
-      if (args.softMissingXbrief || args.captureOnly) {
+      // #4285: soft-missing selects via DEFT_ACTIVE_SCOPE / explicit path
+      // (or fail closed). ALL-paths soft-missing is not the #3284 product bar.
+      // --capture-only still lists every active artifact (inventory, not run).
+      if (args.captureOnly) {
         paths = [...found.paths];
         if (!args.quiet) {
           process.stdout.write(
-            `verify:ac multi-active (#3284): evaluating ${paths.length} scopes in ${found.dir}\n`,
+            `verify:ac capture-only multi-active: listing ${paths.length} scopes in ${found.dir}\n`,
           );
+        }
+      } else if (args.softMissingXbrief) {
+        const selected = resolveSoftMissingAcTargets(projectRoot, {
+          env: process.env,
+          scannedPaths: found.paths,
+        });
+        if (selected.kind === "one") {
+          paths = [selected.path];
+          if (!args.quiet) {
+            process.stdout.write(
+              `verify:ac soft-missing multi-active (#4285): selected ${selected.path}\n`,
+            );
+          }
+        } else {
+          process.stderr.write(
+            `${selected.kind === "need-pin" ? selected.message : "verify_ac: multi-active soft-missing needs a pin"}\n` +
+              "  Usage: task verify:ac -- <path-to-active.xbrief.json>\n" +
+              `  Or set DEFT_ACTIVE_SCOPE to the dispatched story under ${found.dir}\n` +
+              "  Refs #4285 / #3284 product-first done-gate\n",
+          );
+          emitVerifyAcTerminalOutcome({
+            projectRoot,
+            env: process.env,
+            outcome: "config-error",
+          });
+          return 1;
         }
       } else {
         process.stderr.write(
           `verify_ac: ${found.paths.length} active scopes in ${found.dir}.\n` +
-            "  Pass an explicit path, or use check composition (--soft-missing-xbrief) to evaluate all.\n" +
+            "  Pass an explicit path, or set DEFT_ACTIVE_SCOPE with check composition (--soft-missing-xbrief).\n" +
             "  Usage: task verify:ac -- <path-to-active.xbrief.json>\n" +
-            "  Refs #3284 product-first done-gate\n",
+            "  Refs #4285 / #3284 product-first done-gate\n",
         );
         emitVerifyAcTerminalOutcome({
           projectRoot,

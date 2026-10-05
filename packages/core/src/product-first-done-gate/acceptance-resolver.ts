@@ -86,7 +86,7 @@ const REMEDY: Record<AcceptancePredicate, string> = {
   "config-error": "fix plan.acceptance so it matches the #3284 schema, then re-run task verify:ac",
   "noop-refused": NOOP_ACCEPTANCE_REMEDIATION,
   "safety-rejected":
-    "promote a safe alternative into plan.metadata.swarm.verify_commands or remove the stated command from the task statement (#3267)",
+    "promote a safe alternative such as npm test / pnpm test (a different recorded command) into plan.metadata.swarm.verify_commands or remove the stated command from the task statement (#3267)",
   "commands-failed":
     "fix the product until the stated acceptance command exits as expected — the command, not the gate, is the oracle (#3284)",
   "empty-acceptance":
@@ -96,7 +96,7 @@ const REMEDY: Record<AcceptancePredicate, string> = {
   "unmapped-sentence":
     "map each plan.acceptance.sentences entry to a clause or name it in plan.acceptance.confessions; the sentence list does not select a file (#3550)",
   "integrity-discrepancy":
-    "resolve by a product change under the same method, or independently re-derive both sides and record independent_rederivation=true (#3322)",
+    "resolve by a product change under the same method (#3322); independent_rederivation on the run-summary is not a security waiver (#3925)",
   unclassified: "read the verify:ac message below; the deciding check did not name itself",
 };
 
@@ -403,6 +403,17 @@ export type AcceptanceReaderProfile =
   | "check"
   /** `scope:complete` hard precondition walk (#3357). */
   | "complete";
+
+/**
+ * Check-composition multi-active selection (#4285).
+ * Re-export so AC readers resolve soft-missing targets without importing hooks.
+ */
+export {
+  listActiveLifecycleArtifacts,
+  type ResolveSoftMissingAcTargetsOptions,
+  resolveSoftMissingAcTargets,
+  type SoftMissingAcTargetResolution,
+} from "../hooks/scope.js";
 
 export interface AcceptanceGateProfileOptions {
   readonly captureFromNarratives: boolean | undefined;

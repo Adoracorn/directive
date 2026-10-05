@@ -53,7 +53,8 @@ function linkedPair(): { main: string; worktree: string } {
   return { main, worktree };
 }
 
-describe("worker-auth-assignment (#3663)", { timeout: 20_000 }, () => {
+// Parallel swarm suite load on Windows can push linked-worktree cases past 20s (#5219 AC).
+describe("worker-auth-assignment (#3663)", { timeout: 60_000 }, () => {
   it("writes a record and index that the dest worktree can read", () => {
     const { main, worktree } = linkedPair();
     const written = writeWorkerAuthAssignment({
@@ -390,7 +391,7 @@ describe("worker-auth-assignment (#3663)", { timeout: 20_000 }, () => {
     expect(keptOuter.ok).toBe(true);
     if (!keptOuter.ok) return;
     expect(keptOuter.assignment?.dispatch_id).toBe("dispatch-outer");
-  });
+  }, 60_000 /* #5086 suite-load testTimeout */);
 
   it("reclaims a dead-pid lock without waiting for mtime", () => {
     const { main, worktree } = linkedPair();
@@ -568,7 +569,7 @@ describe("worker-auth-assignment (#3663)", { timeout: 20_000 }, () => {
     expect(removed.removed).toBe(true);
     const read = readWorkerAuthAssignment(worktree);
     expect(read).toEqual({ ok: true, assignment: null, commonDir: expect.any(String) });
-  });
+  }, 60_000 /* #5107 suite-load testTimeout */);
 
   it("terminal cleanup removes only records for that dispatch", () => {
     const { main, worktree } = linkedPair();
@@ -611,5 +612,5 @@ describe("worker-auth-assignment (#3663)", { timeout: 20_000 }, () => {
     expect(kept.assignment?.dispatch_id).toBe("dispatch-keep");
     const dropped = readWorkerAuthAssignment(other);
     expect(dropped).toEqual({ ok: true, assignment: null, commonDir: expect.any(String) });
-  });
+  }, 60_000 /* #5084 suite-load testTimeout */);
 });

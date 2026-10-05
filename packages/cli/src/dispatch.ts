@@ -85,6 +85,9 @@ export const CLI_MODULE_VERBS = [
   "codebase-projection-registry",
   "codebase-provider",
   "doctor",
+  "ownership-doctor",
+  "ownership-fix",
+  "verify-ownership",
   "install-upgrade",
   "install-uninstall",
   "migrate-preflight",
@@ -108,6 +111,7 @@ export const CLI_MODULE_VERBS = [
   "pr-watch",
   "pr-finish-loop",
   "directive-finish-loop",
+  "pre-pr-run",
   "preflight-cache",
   "preflight-gh",
   "probe-session",
@@ -164,6 +168,7 @@ export const CLI_MODULE_VERBS = [
   "verify-forward-coverage",
   "verify-test-boundary",
   "verify-class-checks",
+  "verify-presentation-coverage",
   "verify-scope-provenance",
   "verify-consumer-check-contract",
   "verify-hooks-installed",
@@ -193,12 +198,16 @@ export const CLI_MODULE_VERBS = [
   "verify-stubs",
   "verify-xbrief-drift",
   "verify-spec-prd-fresh",
+  "verify-spec-drift",
   "rule-ownership-lint",
   "verify-story-ready",
   "verify-review-monitor",
+  "verify-cohort-review-monitors",
   "verify-l4-owner",
   "verify-subagent-alive",
   "verify-subagent-steer",
+  "subagent-pre-cancel",
+  "subagent-steer-write",
   "review-monitor-register",
   "review-monitor-release",
   "verify-tools",
@@ -211,12 +220,17 @@ export const CLI_MODULE_VERBS = [
   "verify-literal-ac",
   "verify-ac",
   "verify-agents-md-budget",
+  "verify-consumer-header-placeholder",
   "verify-agents-md-advisory",
+  "verify-persisted-planning-narratives",
   "verify-eval-health-relocation",
   "verify-eval-triggers-relocation",
   "verify-evaluator-surface",
   "verify-observable-scope",
+  "verify-operator-scope-limit",
+  "verify-presentation-ceiling",
   "verify-intent-constraint",
+  "verify-durable-effect-acquisition",
   "verify-consumer-test-lane",
   "eval-health",
   "eval-run",
@@ -237,6 +251,7 @@ export const CORE_MODULE_VERBS = [
   "swarm-launch",
   "swarm-complete-cohort",
   "swarm-finalize-cohort",
+  "swarm-finalize-owed",
   "swarm-pre-dispatch",
   "swarm-readiness",
   "swarm-routing-verify",
@@ -253,6 +268,7 @@ export const CORE_MODULE_VERBS = [
   "roadmap-render",
   "rule-map",
   "spec-render",
+  "spec-reconstruct",
   "spec-validate",
   "code-structure-validate",
   "pack-migrate-skills",
@@ -275,6 +291,7 @@ export const CORE_MODULE_VERBS = [
   "decision-list",
   "docs-impact",
   "tutorial",
+  "migrate-clause-ids",
 ] as const;
 
 /** Colon aliases for triage-actions (mirrors cli-router SUBCOMMAND_ROUTES). */
@@ -394,11 +411,14 @@ const FRESHNESS_COLON_ALIASES = Object.fromEntries(
 
 /** Task-style aliases (framework_commands / Taskfile names). */
 export const VERB_ALIASES: Readonly<Record<string, string>> = {
+  "pre-pr:run": "pre-pr-run",
   "hook:dispatch": "hook-dispatch",
   "verify:encoding": "verify-encoding",
   "verify:forward-coverage": "verify-forward-coverage",
   "verify:test-boundary": "verify-test-boundary",
   "verify:class-checks": "verify-class-checks",
+  "verify:presentation-ceiling": "verify-presentation-ceiling",
+  "verify:presentation-coverage": "verify-presentation-coverage",
   "verify:scope-provenance": "verify-scope-provenance",
   "scope:record-approved-scope": "scope-record-approved-scope",
   "scope:record-observable-scope": "scope-record-observable-scope",
@@ -418,12 +438,16 @@ export const VERB_ALIASES: Readonly<Record<string, string>> = {
   "verify:ac": "verify-ac",
   "verify:acceptance": "verify-ac",
   "verify:agents-md-budget": "verify-agents-md-budget",
+  "verify:consumer-header-placeholder": "verify-consumer-header-placeholder",
   "verify:agents-md-advisory": "verify-agents-md-advisory",
+  "verify:persisted-planning-narratives": "verify-persisted-planning-narratives",
   "verify:eval-health-relocation": "verify-eval-health-relocation",
   "verify:eval-triggers-relocation": "verify-eval-triggers-relocation",
   "verify:evaluator-surface": "verify-evaluator-surface",
   "verify:observable-scope": "verify-observable-scope",
+  "verify:operator-scope-limit": "verify-operator-scope-limit",
   "verify:intent-constraint": "verify-intent-constraint",
+  "verify:durable-effect-acquisition": "verify-durable-effect-acquisition",
   "verify:consumer-test-lane": "verify-consumer-test-lane",
   "verify:hooks-installed": "verify-hooks-installed",
   "verify:no-task-runtime": "verify-no-task-runtime",
@@ -441,9 +465,12 @@ export const VERB_ALIASES: Readonly<Record<string, string>> = {
   "vbrief:activate": "vbrief-activate",
   "verify:story-ready": "verify-story-ready",
   "verify:review-monitor": "verify-review-monitor",
+  "verify:cohort-review-monitors": "verify-cohort-review-monitors",
   "verify:l4-owner": "verify-l4-owner",
   "verify:subagent-alive": "verify-subagent-alive",
   "verify:subagent-steer": "verify-subagent-steer",
+  "subagent:pre-cancel": "subagent-pre-cancel",
+  "subagent:steer": "subagent-steer-write",
   "agent:monitor": "subagent-monitor",
   "review-monitor:register": "review-monitor-register",
   "review-monitor:release": "review-monitor-release",
@@ -473,6 +500,7 @@ export const VERB_ALIASES: Readonly<Record<string, string>> = {
   "verify:scm-boundary": "verify-scm-boundary",
   "verify:xbrief-drift": "verify-xbrief-drift",
   "verify:spec-prd-fresh": "verify-spec-prd-fresh",
+  "verify:spec-drift": "verify-spec-drift",
   "verify:capacity": "verify-capacity",
   "verify:session-ritual": "verify-session-ritual",
   "verify:plan-sequence": "verify-plan-sequence",
@@ -497,6 +525,7 @@ export const VERB_ALIASES: Readonly<Record<string, string>> = {
   "migrate:preflight": "migrate-preflight",
   "migrate:xbrief": "migrate-xbrief",
   "migrate:category-b": "migrate-category-b",
+  "migrate:clause-ids": "migrate-clause-ids",
   "framework:check-updates": "framework-check-updates",
   "umbrella:current-shape": "umbrella-current-shape",
   "issue:sync-from-xbrief": "issue-sync-from-xbrief",
@@ -515,6 +544,7 @@ export const VERB_ALIASES: Readonly<Record<string, string>> = {
   "ts:check-lane": "ts-check-lane",
   "spec:validate": "spec-validate",
   "spec:render": "spec-render",
+  "spec:reconstruct": "spec-reconstruct",
   "prd:render": "prd-render",
   "project:render": "project-render",
   "project:write-narratives": "project-write-narratives",
@@ -524,6 +554,12 @@ export const VERB_ALIASES: Readonly<Record<string, string>> = {
   "pr:finish-loop": "pr-finish-loop",
   "directive:finish-loop": "directive-finish-loop",
   doctor: "doctor",
+  "ownership:doctor": "ownership-doctor",
+  "ownership:fix": "ownership-fix",
+  "verify:ownership": "verify-ownership",
+  "deft:ownership:doctor": "ownership-doctor",
+  "deft:ownership:fix": "ownership-fix",
+  "deft:verify:ownership": "verify-ownership",
   "eval:health": "eval-health",
   "feedback:file": "feedback-file",
   "value:show": "value-readback",
@@ -560,6 +596,7 @@ const SUBDIR_CLI_STEMS: Readonly<Record<string, string>> = {
   "verify-scm-boundary": "verify-source-cli/verify-scm-boundary",
   "verify-xbrief-drift": "verify-source-cli/verify-xbrief-drift",
   "verify-spec-prd-fresh": "verify-source-cli/verify-spec-prd-fresh",
+  "verify-spec-drift": "verify-source-cli/verify-spec-drift",
   "verify-go-freeze": "gates-cli/verify-go-freeze",
   "verify-bridge-drift": "gates-cli/verify-bridge-drift",
   "validate-links": "content-validate-cli/validate-links",
@@ -2858,6 +2895,12 @@ async function loadCoreModuleHandler(verb: string, io: DispatchIo): Promise<Comm
       );
       return finalizeCohortMain;
     }
+    case "swarm-finalize-owed": {
+      const { finalizeOwedMain } = await import(
+        "@deftai/directive-core/dist/swarm/finalize-owed-cli.js"
+      );
+      return finalizeOwedMain;
+    }
     case "swarm-pre-dispatch": {
       const { preDispatchMain } = await import(
         "@deftai/directive-core/dist/swarm/pre-dispatch-cli.js"
@@ -2909,6 +2952,10 @@ async function loadCoreModuleHandler(verb: string, io: DispatchIo): Promise<Comm
     case "spec-validate": {
       const { runSpecValidateCli } = await import("./render-cli/spec-validate-cli.js");
       return (argv) => runSpecValidateCli(argv);
+    }
+    case "spec-reconstruct": {
+      const { runSpecReconstructCliEntry } = await import("./render-cli/spec-reconstruct-cli.js");
+      return (argv) => runSpecReconstructCliEntry(argv);
     }
     case "spec-render": {
       const { runSpecRenderCli } = await import("./render-cli/spec-render-cli.js");
@@ -3024,6 +3071,12 @@ async function loadCoreModuleHandler(verb: string, io: DispatchIo): Promise<Comm
     case "tutorial": {
       const { tutorialMain } = await import("@deftai/directive-core/dist/tutorial/cli.js");
       return tutorialMain;
+    }
+    case "migrate-clause-ids": {
+      const { mainEntry } = await import(
+        "@deftai/directive-core/dist/xbrief-migrate/clause-ids.js"
+      );
+      return (argv) => mainEntry(argv);
     }
     default:
       throw new Error(`unknown core verb: ${verb}`);

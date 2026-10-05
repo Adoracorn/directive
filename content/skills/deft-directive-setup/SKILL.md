@@ -134,7 +134,7 @@ When guiding an operator through migration on the pinned release, mention the mi
 
 **Flow:**
 - ! Start asking immediately — everything you need is in THIS file
-- ⊗ Explore the codebase, read framework files, or gather context before asking
+- ⊗ Explore the codebase, read framework files, or gather context before asking — except the Phase 1 freshness live-reader install-manifest / VERSION lookup (#4987)
 - ? Read `deft/main.md` or language files LATER when generating output
 
 **Interaction:**
@@ -187,17 +187,22 @@ VBA (Excel macros), VHDL, Visual Basic (.NET), Zig, 6502-DASM
 - **Defaults** — fallback values that PROJECT-DEFINITION.xbrief.json can override (strategy, coverage)
 
 - ~ Skip if USER.md exists at the platform-appropriate path (see Platform Detection) and user doesn't want to overwrite
-- ⊗ Scan filesystem beyond checking that one path
+- ⊗ Scan filesystem beyond checking that one USER.md path — except the install-manifest / VERSION live-reader used by USER.md freshness (#4987)
 
 ### USER.md Freshness Detection
 
-! When an existing USER.md is found (returning user), check its `deft_version` field before skipping Phase 1:
+! When an existing USER.md is found (returning user), check its `deft_version` field before skipping Phase 1.
+
+! **Live reader (#4987 / #2294):** Resolve the installed framework version with `locateManifest` → read the VERSION file → `parseInstallManifest` → `manifestReportableVersion` (`packages/core/src/doctor/manifest.ts` / `@deftai/directive-core` doctor surface). Compare and stamp only when `reportable.version` is a non-null stampable semver. ⊗ Invent a generated version file for this purpose. ⊗ Use `resolveProbeCurrentVersion` or `resolveVersion`'s `"dev"` fallback for USER.md freshness or first-write stamps.
+
+! **Freshness manifest exception (#4987):** That live-reader lookup is an explicit exception to the "do not scan past USER.md / read framework files before the first question" rules. When an existing USER.md is found, perform the install-manifest / VERSION read during freshness before deciding whether to skip Phase 1. ⊗ Use the exception to explore the codebase or read unrelated framework files.
 
 1. ! If `deft_version` is **missing**: the USER.md predates versioning -- treat as stale
-2. ! If `deft_version` is present but **differs from the current framework version** (0.20.0): check whether any expected fields are missing from the USER.md
-3. ! If fields are missing: query the user for each missing field individually -- do NOT re-run the full Phase 1 interview
-4. ! After completing any field queries (even if none were needed), write the current `deft_version` (0.20.0) to USER.md
-5. ~ If `deft_version` matches the current version and all expected fields are present: USER.md is fresh — do **not** re-run Phase 1. ! Still offer the **Returning-user re-entry** menu below so the operator can revisit Experimental Rules or continue to Phase 2 without a full re-interview (#46).
+2. ! If `reportable.version` is null (missing manifest, `source: "sha"`, or `source: "none"`): ask nothing new for freshness and do **not** rewrite the stamp; on first write omit `deft_version` rather than writing a placeholder
+3. ! If `deft_version` is present but **differs from `reportable.version`**: check whether any expected fields are missing from the USER.md
+4. ! If fields are missing: query the user for each missing field individually -- do NOT re-run the full Phase 1 interview
+5. ! After completing any field queries (even if none were needed), when `reportable.version` is non-null, write that version as `deft_version` to USER.md (install at X stamps X; a second run on the same install leaves it X; upgrade X→Y restamps Y once after missing-field questions)
+6. ~ If `deft_version` matches `reportable.version` and all expected fields are present: USER.md is fresh — do **not** re-run Phase 1. ! Still offer the **Returning-user re-entry** menu below so the operator can revisit Experimental Rules or continue to Phase 2 without a full re-interview (#46).
 
 Expected USER.md fields: **Name**, **Custom Rules**, **Default Strategy**, and optionally **Coverage** and **Experimental Rules**.
 
@@ -232,6 +237,8 @@ a new message. Repeat until all questions for their track are answered.
 - ~ Provide numbered answer options with an "other" choice where appropriate
 - ! Mark which option is RECOMMENDED when showing choices
 - ~ Use structured question tools only when visible option labels preserve the canonical numbers and returns map to numeric selections or exact displayed option text.
+
+! **Progress checkpoints (#5353):** Emit concise Rule 2 status-only progress checkpoints (current phase, remaining material decision areas / inventory labels, accepted deferrals, reasons for runtime additions) at closed triggers only: phase entry/exit, after a runtime decision-area addition-with-reason (not ordinary field-fill), after an accepted deferral, before the confirmation gate, and on operator how-much-is-left. Prefer a separate status message before the next question; if shared-turn, status prose stays ABOVE the structured-tool call (outside the tool `question` field) with exactly one question. Remaining-scope text MAY name inventory labels; it MUST NOT list concrete upcoming question text. On how-much-is-left: status grounded in the session inventory, then re-render the same pending question (do not advance; do not open Discuss unless the operator chose Discuss). Keep one-question / Discuss/Back / Rule 8 confirmation; do not remove Rule 8 or switch to yolo for orientation. Progress status is not a second question.
 
 ### Question Sequence
 
@@ -279,6 +286,8 @@ Wait for answer. Then follow the track below.
 Resolve using Platform Detection above. Write to the platform-appropriate path
 (or `$DEFT_USER_PATH` if set). Create parent directories as needed.
 
+! Phase 1 persist is that USER.md write (#4660). It is not the project-identity write.
+
 ### Template
 
 ```markdown
@@ -286,7 +295,7 @@ Resolve using Platform Detection above. Write to the platform-appropriate path
 
 Legend (from RFC2119): !=MUST, ~=SHOULD, ≉=SHOULD NOT, ⊗=MUST NOT, ?=MAY.
 
-**deft_version**: 0.20.0
+{If reportable.version is non-null: `**deft_version**: {reportable.version}`; otherwise omit the deft_version line}
 
 ## Personal (always wins)
 
@@ -512,6 +521,11 @@ for project-scoped settings (strategy, coverage).
 ! **Each message MUST contain exactly ONE question.** The Phase 1 interview rules
 apply here too. Do not combine questions. See `skills/deft-directive-interview/SKILL.md` for the canonical deterministic interview loop.
 
+- ⊗ Include two or more questions in the same message under any circumstances
+- ⊗ List upcoming questions — only show the current one
+
+! **Progress checkpoints (#5353):** Emit concise Rule 2 status-only progress checkpoints (current phase, remaining material decision areas / inventory labels, accepted deferrals, reasons for runtime additions) at closed triggers only: phase entry/exit, after a runtime decision-area addition-with-reason (not ordinary field-fill), after an accepted deferral, before the confirmation gate, and on operator how-much-is-left. Prefer a separate status message before the next question; if shared-turn, status prose stays ABOVE the structured-tool call (outside the tool `question` field) with exactly one question. Remaining-scope text MAY name inventory labels; it MUST NOT list concrete upcoming question text. On how-much-is-left: status grounded in the session inventory, then re-render the same pending question (do not advance; do not open Discuss unless the operator chose Discuss). Keep one-question / Discuss/Back / Rule 8 confirmation; do not remove Rule 8 or switch to yolo for orientation. Progress status is not a second question.
+
 ### Question Sequence
 
 **Track 1 (technical) — 8 steps:**
@@ -593,9 +607,10 @@ apply here too. Do not combine questions. See `skills/deft-directive-interview/S
 
 ! A nonzero writer exit halts Phase 2 immediately. Do not print a completion claim and do not retry by hand-editing JSON. Resolve the reported configuration problem, rerun the Re-entry shadow guard, and invoke the writer again.
 
-! Before Phase 2 can complete, re-read PROJECT-DEFINITION and verify all three postconditions: `plan["x-directive/policy"].allowDirectCommitsToMaster` is the selected boolean; bare `plan.policy` is absent; and `deft verify:vbrief-conformance --project-root <policy-project-root>` exits 0. Also run `deft policy:show --field=plan.policy.allowDirectCommitsToMaster --project-root <policy-project-root>` and confirm its resolved value matches the selection. Any mismatch is a hard stop.
+! Before Phase 2 can complete, re-read PROJECT-DEFINITION and verify all four postconditions: `plan["x-directive/policy"].allowDirectCommitsToMaster` is the selected boolean; bare `plan.policy` is absent; `deft verify:vbrief-conformance --project-root <policy-project-root>` exits 0; and `deft verify:persisted-planning-narratives --project-root <policy-project-root>` exits 0 (#5176 Prefer-A — at least one non-empty tracked planning narrative among Overview / tech stack). Also run `deft policy:show --field=plan.policy.allowDirectCommitsToMaster --project-root <policy-project-root>` and confirm its resolved value matches the selection. Any mismatch is a hard stop. Empty strings remain legal mid-setup, at parse, and on scaffold-fresh deft check without product-mutation evidence; this verify bar refuses Phase 2 completion while every tracked planning value is empty or whitespace, and deft check refuses the same empty bag after durable product-mutation completion (mirror #4544). Reuse `deft project:write-narratives` to fill — do not invent a second writer. DCR R.4668 / `agent.setup_answers_persisted_in_pd` is the external score only.
 
 ⊗ Finish Phase 2 after writing only the narrative template
+⊗ Complete Phase 2 while Overview and tech stack (and DCR-equivalent tracked bag) are all empty / whitespace (#5176)
 ⊗ Add a setup-specific policy writer or weaken conformance to permit bare `plan.policy`
 
 ### GitHub PR Template Scaffolding (#531)
@@ -689,7 +704,12 @@ omit = [
 
 **Goal:** Generate an implementable spec using the strategy chosen in Phase 2, producing scope xBRIEFs in `xbrief/proposed/` and PROJECT-DEFINITION narratives for human approval — greenfield v0.20 does not create `specification.xbrief.json`.
 
+! **Progress checkpoints (#5353) — Phase 3 entry:** On Phase 3 entry (before Onboarding / Strategy Gate / strategy-dispatched interview), emit a Rule 2 status-only progress checkpoint naming current phase and remaining material decision areas for this phase. The same closed-trigger duty continues on the interview strategy path under Interview Process and on non-interview strategy workflows after dispatch. Progress status is not a second question.
+
 ! **Path Resolution Anchor**: Same rule as Phase 2 -- resolve ALL paths relative to the user's pwd at skill entry, never relative to the skill file, AGENTS.md, or any framework directory.
+
+! When this setup run performs Phase 2, Phase 3 waits for the successful identity write (`deft project:write-narratives`) (#4660). Do not emit a proposed work brief before that write succeeds.
+! When setup legitimately skips Phase 2 because a project definition already exists, Phase 3 MAY proceed from that existing identity; do not require a new `project:write-narratives` invocation on the skip path.
 
 - ~ Skip if user already has scope xBRIEFs in `./xbrief/` they're happy with
 - ! Check `./xbrief/PROJECT-DEFINITION.xbrief.json` and `./xbrief/proposed/` for existing greenfield authority; treat `./xbrief/specification.xbrief.json` as a full-spec compatibility artifact only
@@ -754,6 +774,7 @@ omit = [
 
 - ! When this join is Rapid (ceremony dial or Rapid strategy): Rapid Strategy Gate STOP must not skip the confirmed Overview write. Write site is Light narrative merge (`Overview` + `Architecture`) or an explicit `plan.narratives.Overview` patch before render. Before the Post-Interview Confirmation Gate, ask one explicit per-scope path question (or equivalent operator-named collect) and include non-empty `plan.metadata.swarm.file_scope` from those operator-named paths (`#4988`) so that gate can list the paths under the scope as display. Confirmation stays this skill's Post-Interview Confirmation Gate.
 - ! After that confirmation: persist the live request's requirement list through Rapid Step 3 and #3267 capture onto one `xbrief/proposed/` draft. ⊗ Auto-write `xbrief/active/` — promote and activate stay the existing verbs.
+- ! **Operator scope-limit ceiling (#4545):** when the live operator prompt contains a closed-lexicon scope-limit phrase (`do not add`, `nothing beyond`, `initial version only`, and close variants), record that phrase as a hard ceiling on the seeded proposed brief (or write the equivalent durable artifact) **even when** `xbrief/active/` is empty. Use `seedOperatorScopeCeiling` / `deft verify:operator-scope-limit` from `@deftai/directive-core/operator-scope-limit`. The seed MUST carry the requirement lines the warn-first untraceable-surface check reads. ⊗ Claim `#198` / `#241` / skill exit, `contracts/intent-ceiling.md`, or pre-PR Diff already discharge that ceiling or surface inventory.
 - ! Unmanaged header one-liner: placeholder-only compare-and-set from user-confirmed Overview (`compareAndSetConsumerHeaderOneLiner`). Not a prompt interpolator. Not identity source of truth.
 - ! Handback reports the actual lifecycle outcome: `proposed <path>`, Process-only, or product-write-with-no-brief as a gate anomaly.
 - ⊗ Default to interview without reading PROJECT-DEFINITION.xbrief.json
@@ -801,10 +822,12 @@ Per [strategies/interview.md](../../strategies/interview.md#interview-rules-shar
 - ⊗ Make assumptions without clarifying
 - ~ Use structured question tools for interview questions only when they preserve visible numeric option labels and return numeric selections or exact displayed option text; otherwise render the numbered menu in chat.
 
+! **Progress checkpoints (#5353):** Emit concise Rule 2 status-only progress checkpoints (current phase, remaining material decision areas / inventory labels, accepted deferrals, reasons for runtime additions) at closed triggers only: phase entry/exit, after a runtime decision-area addition-with-reason (not ordinary field-fill), after an accepted deferral, before the confirmation gate, and on operator how-much-is-left. Prefer a separate status message before the next question; if shared-turn, status prose stays ABOVE the structured-tool call (outside the tool `question` field) with exactly one question. Remaining-scope text MAY name inventory labels; it MUST NOT list concrete upcoming question text (`⊗ List upcoming questions`). On how-much-is-left: status grounded in the session inventory, then re-render the same pending question (do not advance; do not open Discuss unless the operator chose Discuss). Keep one-question / Discuss/Back / Rule 8 confirmation; do not remove Rule 8 or switch to yolo for orientation. Progress status is not a second question.
+
 **Question Areas:**
 - ! Missing decisions (language, framework, deployment)
 - ! Edge cases (errors, boundaries, failure modes)
-- ! Implementation details (architecture, patterns, libraries)
+- ~ Implementation details (architecture, patterns, libraries) — **phase-scoped** under the Full material-decision contract (#5351): after inventory confirm, implementation-detail asks MUST cite an outstanding material requirement's resolution condition or an accepted inventory amendment; ⊗ keep ordering unbounded detail asks after inventory confirm
 - ! Requirements (performance, security, scalability)
 - ! UX/constraints (users, timeline, compatibility)
 - ! Tradeoffs (simplicity vs features, speed vs safety)
@@ -814,8 +837,11 @@ Per [strategies/interview.md](../../strategies/interview.md#interview-rules-shar
 - ~ "Will other apps talk to this?" not "REST or GraphQL?"
 
 **Completion:**
-- ! Continue until little ambiguity remains
-- ! Spec must be comprehensive enough to implement
+- ! On the Full material-decision contract path (#5351): questioning may stop when the operator-confirmed inventory is satisfied (resolved or deferred-with-permit for this phase) and the Confirmation Gate lists those dispositions — not when an open-ended "little ambiguity remains" judgment fires
+- ! Spec / planning deliverable must cover the inventory's completion conditions for this phase
+- ! Inventory confirm/freeze: agent may draft; operator must confirm before depth-gate completion pressure; post-confirm mutation is operator-visible diff + re-confirm
+- ⊗ Treat artifact write success alone as Full interview completion
+- ! On Light / Add-scope / delta that stays delta (unless reopened into Full): continue until the path's required decisions for that deliverable are captured
 
 ### Output — Light Path
 
@@ -964,6 +990,26 @@ Per [strategies/interview.md](../../strategies/interview.md#interview-rules-shar
 
 ! **Recommended Warp setting**: Before running deft-directive-setup, ensure Warp's AI autonomy is set to **"Always ask"** in **AI -> Profile Settings**. When set to a higher autonomy level (e.g. "Auto-run"), Warp may silently self-answer interview questions without user input, producing garbage USER.md/PROJECT-DEFINITION.xbrief.json with no error or warning. The post-interview confirmation gate (below) is the last line of defense, but prevention is better than detection.
 
+
+
+## Interview continuation carrier (#5352 Prefer-A Bound)
+
+! Post-draft design-interview corrections, gap reviews, and cross-session handoffs that preserve phase/approval scope MUST read and update `plan["x-directive/interviewContinuation"]` on `./xbrief/plan.xbrief.json` — not ephemeral continue-here. Full rules: `skills/deft-directive-interview/SKILL.md` Rule 12.
+
+### Gate bind-map (which gate for which moment)
+
+| Moment | Gate on this skill |
+|--------|--------------------|
+| First write after interview answers (Phase 1/2/3) | **Post-Interview Confirmation Gate** below — "Write files? (yes/no)"; affirmative-only lexicon |
+| Full Path narrative + proposed scope review | **Output — Full Path** human approval gate — present narratives/scope for review; on approval record target + revision identity on the durable carrier |
+| Phase completion for a bounded correction delta | Durable-record write on the carrier when required decisions + review condition are satisfied — **not** a new Post-Interview re-ask of already-granted authorization |
+| Planning-only operator constraint in force | Planning-only wins over artifact-approve/build labels on any approve menu; do not silent-override |
+
+! When recording an artifact approval from Full Path or Post-Interview, append a `confirmations[]` entry with `scope: "artifact"`, `target`, and required `revisionId` (one entry per approved artifact revision). Answer confirms stay `scope: "answer"` only. Do not overwrite other artifact confirmation entries.
+
+⊗ Use continue-here / `continue.xbrief.json` to own interview phase or approval scope.
+⊗ Re-prompt Post-Interview "Write files?" solely to close a bounded delta whose authorization was already granted.
+
 ## Post-Interview Confirmation Gate
 
 ! After completing ALL interview questions for any phase (Phase 1, Phase 2, or Phase 3), but BEFORE writing any files other than the Phase 2 `**Depth**:` line (#4668):
@@ -983,12 +1029,16 @@ Per [strategies/interview.md](../../strategies/interview.md#interview-rules-shar
 
 ## Anti-Patterns
 
-- ! When deft-directive-setup generates or updates USER.md, the `deft_version` field MUST be set to the current framework version. USER.md is the only artifact that carries this field.
-- ⊗ Generate a USER.md without including the `deft_version` field
+- ! When deft-directive-setup generates or updates USER.md and `manifestReportableVersion(...).version` is a non-null stampable semver, the `deft_version` field MUST be set to that live-reader version. USER.md is the only artifact that carries this field.
+- ! When `reportable.version` is null, omit `deft_version` on first write and do not rewrite an existing stamp — ⊗ invent a placeholder, stamp `"dev"`, or write any hard-coded deposited version literal.
+- ⊗ Generate a USER.md that stamps a hard-coded framework version literal, or that uses `resolveProbeCurrentVersion` / `resolveVersion` `"dev"` fallback for freshness or first-write stamps
+- ⊗ Generate a USER.md with a placeholder `deft_version` when the live reader returns null
 - ⊗ Write `deft_version` or `DeftVersion` into PROJECT-DEFINITION, specification, or plan xBRIEFs. Those stamps are retired (HASH4271). Specification `deft_version` has no framework seeding path; Pass 1 absence locks are the only control.
-- ⊗ Explore codebase before Phase 1 questions
-- ⊗ Read framework files before first question
+- ⊗ Explore codebase before Phase 1 questions — except the freshness live-reader install-manifest / VERSION lookup (#4987)
+- ⊗ Read framework files before first question — except the freshness live-reader install-manifest / VERSION lookup (#4987)
 - ⊗ Batch multiple questions into one message — ask one at a time, interview style
+- ⊗ Treat a progress checkpoint as a second question or upcoming-question list — progress status is a Rule 2 non-choice status update, not a second question (#5353)
+- ⊗ Skip closed-trigger progress checkpoints on Phase 1/2/3 boundaries, runtime addition-with-reason, accepted deferral, confirmation gate, or how-much-is-left (#5353)
 - ⊗ Ask jargon-heavy questions to non-technical users
 - ⊗ Ask about things inferable from codebase (Phase 2+)
 - ⊗ Skip phases without asking
@@ -1012,3 +1062,4 @@ Per [strategies/interview.md](../../strategies/interview.md#interview-rules-shar
 - ⊗ Treat a `**Depth**:` line outside the Personal section as the track, or pick among duplicate Personal Depth lines (#4668)
 - ⊗ Treat an existing PROJECT-DEFINITION seed, including empty narratives, as missing interview answers (#4668)
 - ⊗ Reimplement `deft project:write-narratives` or set policy keys from the depth answer (#4668 / #4663)
+- ⊗ Emit a proposed work brief before a required Phase 2 identity write succeeds, or require that write after Phase 2 was legitimately skipped (#4660)

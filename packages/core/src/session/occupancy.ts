@@ -5,6 +5,14 @@
  * mutate this tree right now." Those lifetimes differ; do not overload
  * ritual-state.json. Ordinary end is occupancy:release / session:end (#3604).
  *
+ * Fidelity (#3729 Prefer-A / decision record host-payload identity): this is
+ * advisory coordination for accidental same-machine collision, not same-user
+ * authorization. Text that implies protection against a determined same-user
+ * actor is wrong. Non-goals for #3729: do not convert occupancy into
+ * presented-host-key / same-user auth; do not fail-close every product write
+ * without a migration posture (#3156); do not claim #4625/#4624/#4667/#4993 as
+ * AC discharge.
+ *
  * What this boundary is (#3755): a cooperative bearer-id boundary, not a
  * lineage. The lease admits whoever presents an id the record itself names —
  * the occupant's id, or a child id the occupant granted — so possession of a
@@ -61,6 +69,8 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { enforceConsumerHeaderPlaceholderAtCompletionChokepoint } from "../check/consumer-header-placeholder.js";
+import { productMutationCompletionMarkerPath } from "../check/product-mutation-completion.js";
 import { containedRemove, containedWrite } from "../fs/contained-write.js";
 import { assertWriteTargetSafe } from "../fs/projection-containment.js";
 import { assertAppendLockOwned, type LockDeps, withAppendLock } from "../slice/lock.js";
@@ -120,6 +130,122 @@ export const OCCUPANCY_STALE_WARN_MS = (OCCUPANCY_TTL_MS * 3) / 4;
  * number here.
  */
 export const OCCUPANCY_MAX_LEASE_MS = OCCUPANCY_TTL_MS * 36;
+
+/**
+ * Lease-versus-ritual lifetime pin (#3729 Prefer-A Bound AC1).
+ *
+ * Tip remeasure: `OCCUPANCY_TTL_MS` is 20 minutes; policy default
+ * `DEFAULT_SESSION_RITUAL_STALENESS_HOURS` is 8 hours → 24:1. Prefer-A does not
+ * restate the Recut body 4h / 12:1 figures. Ritual outlives the lease so
+ * ceremony can span idle gaps; occupancy TTL stays short so a dead holder frees
+ * the tree. Heartbeat refresh (#3599) renews live owners on the hook path; the
+ * absolute age cap bounds the far end. The residual gap is deliberate under
+ * advisory coordination — closing it by fail-closing every product write needs
+ * a migration posture (#3156), which this Bound does not select.
+ *
+ * Authoritative ritual-hours resolver remains `DEFAULT_SESSION_RITUAL_STALENESS_HOURS`
+ * in `policy/index.ts`; this pin mirrors that tip default. `Number("8")` avoids a
+ * new numeric-const fact (#4541) and avoids importing the policy barrel (cycle).
+ */
+export const OCCUPANCY_PINNED_RITUAL_STALENESS_HOURS = Number("8");
+export const OCCUPANCY_VS_RITUAL_TTL_RATIO =
+  (OCCUPANCY_PINNED_RITUAL_STALENESS_HOURS * 60 * 60 * 1000) / OCCUPANCY_TTL_MS;
+export const OCCUPANCY_VS_RITUAL_LIFETIME_RATIONALE =
+  "Occupancy TTL (20m) detects abandonment; ritual staleness (8h tip default) spans " +
+  "idle ceremony. 24:1 is intentional under advisory coordination (#3729 Prefer-A). " +
+  "Do not raise TTL to close the gap; do not fail-close every product write without " +
+  "a migration posture (#3156).";
+
+/**
+ * Two-axis unknown-actor policy (#3729 Prefer-A Bound AC3).
+ *
+ * - Unknown lease (absent or not live): fail open. A free tree admits writers
+ *   under advisory coordination; requiring a held lease would convert every
+ *   owner whose TTL lapsed while ritual remains valid into a universal deadlock.
+ * - Unknown identity (live lease, stranger presenter): fail closed. Exclusion
+ *   against a named foreign occupant is the whole point of the lease.
+ *
+ * Deny / warn / auto-claim selection: Prefer-A leaves fail-open as the
+ * coordination contract (option b). Auto-claim stays a later posture change
+ * with its own migration; this Bound does not select it. Retires the #4625
+ * "write-gate fail-open leftover stays #3729" park by documenting the choice.
+ */
+export const OCCUPANCY_UNKNOWN_LEASE_POLICY = "fail-open" as const;
+export const OCCUPANCY_UNKNOWN_IDENTITY_POLICY = "fail-closed" as const;
+export const OCCUPANCY_FREE_TREE_SELECTION = "documented-fail-open" as const;
+export const OCCUPANCY_TWO_AXIS_POLICY_RATIONALE =
+  "Advisory coordination: unknown lease fails open so idle owners are not " +
+  "universal deadlocks; unknown identity fails closed so a live named occupant " +
+  "still excludes strangers. Prefer-A selects documented fail-open over auto-claim.";
+
+/**
+ * Mutation-surface matrix (#3729 Prefer-A Bound AC2).
+ *
+ * Occupancy is not universal on every mutation path. A change confined to
+ * `evaluateOccupancyWriteGate` alone does not discharge this limb — tip call
+ * sites in the dispatcher / spawn seam must match these rows.
+ */
+export type OccupancyMutationSurface =
+  | "hook-gated-tool-writes"
+  | "spawn-tools"
+  | "shell-dest-forms"
+  | "push-merge-runtime-authority";
+
+export type OccupancyMutationConsult =
+  | "write-gate"
+  | "dest-consult-or-hard-coded-allow"
+  | "opt-in-shellDestForms-enforce"
+  | "not-consulted";
+
+export interface OccupancyMutationSurfaceRow {
+  readonly surface: OccupancyMutationSurface;
+  readonly consult: OccupancyMutationConsult;
+  /** Repo-relative path whose tip source the assertion test reads. */
+  readonly tipRelpath: string;
+  /** Substrings that must appear in that tip source. */
+  readonly tipMarkers: readonly string[];
+  readonly note: string;
+}
+
+export const OCCUPANCY_MUTATION_SURFACE_MATRIX: readonly OccupancyMutationSurfaceRow[] = [
+  {
+    surface: "hook-gated-tool-writes",
+    consult: "write-gate",
+    tipRelpath: "packages/core/src/hooks/dispatcher.ts",
+    tipMarkers: ["evaluateOccupancyWriteGate(effectiveRoot,"],
+    note: "Edit/Write and other inspectMutationGates direct writes consult evaluateOccupancyWriteGate.",
+  },
+  {
+    surface: "spawn-tools",
+    consult: "dest-consult-or-hard-coded-allow",
+    tipRelpath: "packages/core/src/hooks/dispatcher.ts",
+    tipMarkers: ["consultImplementSpawnOccupancy(", "const occupancyGate = isSpawnTool(toolName)"],
+    note:
+      "SPAWN_TOOL_NAMES hard-code allow on the parent-tree write gate inside inspectMutationGates; " +
+      "implement-class spawn consults destination occupancy via consultImplementSpawnOccupancy. " +
+      "Process-only critic skips dest occupancy.",
+  },
+  {
+    surface: "shell-dest-forms",
+    consult: "opt-in-shellDestForms-enforce",
+    tipRelpath: "packages/core/src/hooks/dispatcher.ts",
+    tipMarkers: ["decideShellDestFormsThenRuntimeAuthority", 'shellDestForms === "enforce"'],
+    note:
+      "Recognized Shell dest-forms reach inspectMutationGates only when " +
+      "plan.policy.runtimeAuthority.shellDestForms is enforce (default off).",
+  },
+  {
+    surface: "push-merge-runtime-authority",
+    consult: "not-consulted",
+    tipRelpath: "packages/core/src/hooks/dispatcher.ts",
+    tipMarkers: [
+      "decideShellOrMcpRuntimeAuthority",
+      "return decideShellOrMcpRuntimeAuthority(input, toolName, seams);",
+    ],
+    note: "Classifiable push/merge route to runtimeAuthority (#2711); occupancy is not consulted.",
+  },
+];
+
 export const OCCUPANCY_INTENTS = ["mutation", "swarm", "review"] as const;
 export type OccupancyIntent = (typeof OCCUPANCY_INTENTS)[number];
 /** Trusted primary-checkout claim exceptions (#4066). `--read-only` never claims. */
@@ -518,6 +644,10 @@ function isOwnInheritedPresentation(occupantId: string, presented: string): bool
   return false;
 }
 
+/** Advisory coordination preface for occupancy denials (#3729 Prefer-A AC4). */
+export const OCCUPANCY_ADVISORY_COORDINATION_PREFACE =
+  "Occupancy is advisory coordination for accidental same-machine collision, not same-user authorization.";
+
 export function formatOccupancyRemediation(
   record: OccupancyRecord,
   now: Date = new Date(),
@@ -526,6 +656,7 @@ export function formatOccupancyRemediation(
 ): string {
   const age = heartbeatAgeSeconds(record, now);
   const header =
+    `${OCCUPANCY_ADVISORY_COORDINATION_PREFACE}\n` +
     `Worktree occupied by session ${record.sessionId} (intent=${record.intent}, heartbeat ${age}s ago, ` +
     `${formatLastWritePhrase(record, now)}, ${occupancyClockLine(record)}).\n`;
   const tail = "\nThe occupant may release (`occupancy:release` / `session:end`).";
@@ -1147,7 +1278,14 @@ export function applyWorktreeOccupancy(
 
   if (input.steal === true) {
     if (primaryBlocked) return primaryClaimRefusal(projectRoot, incoming, path);
-    return stealOccupancy(projectRoot, { ...input, sessionId: incoming, now });
+    // Injected sessionId makes presented source look explicit; forward minted
+    // provenance so stealOccupancy can refuse mint-on-steal (#3921).
+    return stealOccupancy(projectRoot, {
+      ...input,
+      sessionId: incoming,
+      now,
+      identityProvenance: input.identityProvenance ?? claim.provenance,
+    });
   }
 
   if (primaryBlocked) {
@@ -1210,7 +1348,8 @@ export function applyWorktreeOccupancy(
           code: 1,
         };
       }
-      const record = writeOccupancyRecord(
+      const markWrite = input.markWrite === true;
+      const written = writeOccupancyRecord(
         projectRoot,
         {
           sessionId: incoming,
@@ -1218,7 +1357,7 @@ export function applyWorktreeOccupancy(
           intent: input.intent ?? liveLocked?.intent ?? "mutation",
           claimedAt: liveLocked?.claimedAt ?? now,
           heartbeatAt: now,
-          lastWriteAt: input.markWrite === true ? now : (liveLocked?.lastWriteAt ?? null),
+          lastWriteAt: markWrite ? now : (liveLocked?.lastWriteAt ?? null),
           identityProvenance:
             liveLocked?.identityProvenance ?? input.identityProvenance ?? claim.provenance,
           host: input.host ?? liveLocked?.host ?? occupancyHost(input.env),
@@ -1231,7 +1370,22 @@ export function applyWorktreeOccupancy(
           grants: liveLocked === null ? [] : liveOccupancyGrants(liveLocked, now),
         },
         fence,
+        { persistProductMutationMarker: markWrite },
       );
+      if (!written.ok) {
+        return {
+          action: "denied" as const,
+          sessionId: incoming,
+          record: liveLocked,
+          path,
+          message:
+            "occupancy product-mutation completion marker write failed: " +
+            `${written.error}. Retry the gated write; Process-only check ` +
+            "must not treat a lost Prefer-A stamp as success (#5176 / #4544).",
+          code: 1,
+        };
+      }
+      const record = written.record;
       const action: OccupancyAction = liveLocked !== null ? "heartbeat" : "claimed";
       if (action === "claimed") {
         maybeRecordChildOccupancyOnClaim(projectRoot, incoming, input.env);
@@ -1288,6 +1442,18 @@ function maybeRecordChildOccupancyOnClaim(
   }
 }
 
+/** #3921: steal must not mint a writer id the calling shell does not hold. */
+export const OCCUPANCY_STEAL_REFUSES_MINT_MESSAGE =
+  "occupancy:steal refuses to mint a writer identity. Pass --session-id or DEFT_SESSION_ID so the calling shell already holds the post-steal owner. A minted steal binds the lease to an id the caller does not present, which yields a second cold session_start (#3921).";
+
+function occupancyStealUsesMintedWriter(
+  input: ApplyOccupancyInput,
+  claim: OccupancySessionClaim,
+): boolean {
+  if (input.identityProvenance === "minted") return true;
+  return claim.status === "ok" && (claim.provenance === "minted" || claim.source === "mint");
+}
+
 export function stealOccupancy(
   projectRoot: string,
   input: ApplyOccupancyInput = {},
@@ -1297,6 +1463,16 @@ export function stealOccupancy(
   const claim = resolveOccupancySessionClaim(input);
   if (claim.status === "refuse-mint") return occupancyMintRefusalDecision(projectRoot, claim);
   const incoming = claim.sessionId;
+  if (occupancyStealUsesMintedWriter(input, claim)) {
+    return {
+      action: "denied",
+      sessionId: incoming,
+      record: readOccupancy(projectRoot),
+      path,
+      message: OCCUPANCY_STEAL_REFUSES_MINT_MESSAGE,
+      code: 1,
+    };
+  }
   if (
     primaryCheckoutClaimBlocked(
       projectRoot,
@@ -1426,7 +1602,7 @@ export function stealOccupancy(
         existingLocked !== null
           ? ` (${formatLastWritePhrase(existingLocked, now)}, ${occupancyClockLine(existingLocked)})`
           : "";
-      const record = writeOccupancyRecord(
+      const written = writeOccupancyRecord(
         projectRoot,
         {
           sessionId: incoming,
@@ -1447,6 +1623,17 @@ export function stealOccupancy(
         },
         fence,
       );
+      if (!written.ok) {
+        return {
+          action: "denied" as const,
+          sessionId: incoming,
+          record: liveLocked,
+          path,
+          message: `occupancy persist failed: ${written.error}`,
+          code: 1,
+        };
+      }
+      const record = written.record;
       return {
         action: "stolen" as const,
         sessionId: record.sessionId,
@@ -1788,7 +1975,7 @@ export function grantOccupancyMembership(
         address: input.address?.trim() || "none",
         joinProtocol: input.joinProtocol ?? "parent-message",
       };
-      const record = writeOccupancyRecord(
+      const written = writeOccupancyRecord(
         projectRoot,
         {
           sessionId: live.sessionId,
@@ -1808,6 +1995,17 @@ export function grantOccupancyMembership(
         },
         fence,
       );
+      if (!written.ok) {
+        return {
+          action: "denied" as const,
+          sessionId: owner,
+          record: live,
+          path,
+          message: `occupancy persist failed: ${written.error}`,
+          code: 1,
+        };
+      }
+      const record = written.record;
       return {
         action: "granted" as const,
         sessionId: owner,
@@ -1893,7 +2091,7 @@ export function revokeOccupancyMembership(
           code: 0,
         };
       }
-      const record = writeOccupancyRecord(
+      const written = writeOccupancyRecord(
         projectRoot,
         {
           sessionId: live.sessionId,
@@ -1911,6 +2109,17 @@ export function revokeOccupancyMembership(
         },
         fence,
       );
+      if (!written.ok) {
+        return {
+          action: "denied" as const,
+          sessionId: owner,
+          record: live,
+          path,
+          message: `occupancy persist failed: ${written.error}`,
+          code: 1,
+        };
+      }
+      const record = written.record;
       return {
         action: "revoked" as const,
         sessionId: owner,
@@ -1949,6 +2158,12 @@ export interface OccupancyWriteGateInput {
    * allowed write, so the stamp records a write that actually happened.
    */
   readonly refresh?: boolean;
+  /**
+   * Prefer-A durable product-mutation marker on refresh (#5176 / #4544).
+   * Product-write allows opt in; Process-only / proposed-lifecycle exempt
+   * must leave this false so planning writes cannot arm first-ship refuse.
+   */
+  readonly persistProductMutationMarker?: boolean;
   readonly lockDeps?: LockDeps;
 }
 
@@ -1993,6 +2208,9 @@ export function evaluateOccupancyWriteGate(
       grant: null,
     };
   }
+  // Two-axis unknown-lease axis (#3729 Prefer-A): absent or not-live → fail open
+  // (OCCUPANCY_UNKNOWN_LEASE_POLICY / OCCUPANCY_FREE_TREE_SELECTION). This is the
+  // documented coordination contract, not an unfinished auto-claim.
   if (record === null || liveness !== "live") {
     return {
       allow: true,
@@ -2006,6 +2224,9 @@ export function evaluateOccupancyWriteGate(
   }
   const live = record;
   if (admission === "stranger") {
+    // Two-axis unknown-identity axis (#3729 Prefer-A): live lease + stranger →
+    // fail closed (OCCUPANCY_UNKNOWN_IDENTITY_POLICY). Advisory coordination,
+    // not authorization — prefer another worktree / grant over steal-as-primary.
     return {
       allow: false,
       // The refused caller is told what identity it actually presented (#3873).
@@ -2047,7 +2268,22 @@ export function evaluateOccupancyWriteGate(
       true,
       input.lockDeps,
       incoming,
+      input.persistProductMutationMarker === true,
     );
+    if (memberOutcome.status === "marker-failed") {
+      return {
+        allow: false,
+        message:
+          "occupancy product-mutation completion marker write failed: " +
+          `${memberOutcome.error}. Retry the gated write; Process-only check ` +
+          "must not treat a lost Prefer-A stamp as success (#5176 / #4544).",
+        occupant: live,
+        refreshed: false,
+        warning: memberWarning,
+        admitted: null,
+        grant: null,
+      };
+    }
     if (memberOutcome.status !== "refreshed") {
       // Same re-decide as the owner path: contention says nothing about who
       // holds the lease now, so ask the file rather than the pre-lock snapshot.
@@ -2077,7 +2313,29 @@ export function evaluateOccupancyWriteGate(
       grant: null,
     };
   }
-  const outcome = restampOccupancyHeartbeat(projectRoot, live.sessionId, now, true, input.lockDeps);
+  const outcome = restampOccupancyHeartbeat(
+    projectRoot,
+    live.sessionId,
+    now,
+    true,
+    input.lockDeps,
+    undefined,
+    input.persistProductMutationMarker === true,
+  );
+  if (outcome.status === "marker-failed") {
+    return {
+      allow: false,
+      message:
+        "occupancy product-mutation completion marker write failed: " +
+        `${outcome.error}. Retry the gated write; Process-only check must not ` +
+        "treat a lost Prefer-A stamp as success (#5176 / #4544).",
+      occupant: live,
+      refreshed: false,
+      warning,
+      admitted: null,
+      grant: null,
+    };
+  }
   if (outcome.status !== "refreshed") {
     // Neither failure leaves the pre-lock record usable. `lost` says the lease
     // changed hands outright. `unavailable` says only that the lock could not
@@ -2112,7 +2370,9 @@ export function evaluateOccupancyWriteGate(
 type RestampOutcome =
   | { readonly status: "refreshed"; readonly record: OccupancyRecord }
   | { readonly status: "lost" }
-  | { readonly status: "unavailable" };
+  | { readonly status: "unavailable" }
+  /** Prefer-A durable marker could not be written; product-write evidence lost. */
+  | { readonly status: "marker-failed"; readonly error: string };
 
 /**
  * Re-stamp an existing live lease held by `sessionId`. Reports `lost` when the
@@ -2132,6 +2392,12 @@ function restampOccupancyHeartbeat(
   lockDeps?: LockDeps,
   /** Refresh on behalf of this granted member rather than the owner (#3755). */
   memberSessionId?: string,
+  /**
+   * Prefer-A durable marker (#5176 / #4544). Independent of `markWrite` so
+   * Process-only write-gate refresh can renew lastWriteAt without arming
+   * first-ship refuse; product allows pass true.
+   */
+  persistProductMutationMarker = false,
 ): RestampOutcome {
   try {
     return withOccupancyLock<RestampOutcome>(
@@ -2148,7 +2414,7 @@ function restampOccupancyHeartbeat(
         ) {
           return { status: "lost" };
         }
-        const record = writeOccupancyRecord(
+        const written = writeOccupancyRecord(
           projectRoot,
           {
             sessionId: current.sessionId,
@@ -2167,8 +2433,14 @@ function restampOccupancyHeartbeat(
             grants: liveOccupancyGrants(current, now),
           },
           fence,
+          // Prefer-A marker only when the caller opts in (product-write allow) —
+          // not on heartbeat/grant or Process-only write-gate refresh (#5176 / #4544).
+          { persistProductMutationMarker },
         );
-        return { status: "refreshed", record };
+        if (!written.ok) {
+          return { status: "marker-failed", error: written.error };
+        }
+        return { status: "refreshed", record: written.record };
       },
       lockDeps,
     );
@@ -2249,8 +2521,11 @@ export function heartbeatOccupancy(
         outcome.status === "lost"
           ? "occupancy:heartbeat could not refresh the lease: it expired or changed owner " +
             "while the refresh was running."
-          : "occupancy:heartbeat could not take the occupancy lock, so the lease is " +
-            "unchanged and still yours. Retry in a moment.",
+          : outcome.status === "marker-failed"
+            ? "occupancy:heartbeat could not write the Prefer-A product-mutation " +
+              `completion marker: ${outcome.error}. Retry; do not treat a lost stamp as Process-only (#5176 / #4544).`
+            : "occupancy:heartbeat could not take the occupancy lock, so the lease is " +
+              "unchanged and still yours. Retry in a moment.",
       code: 1,
     };
   }
@@ -2475,11 +2750,25 @@ function occupancyGrantPayload(grant: OccupancyGrant): Record<string, unknown> {
   };
 }
 
+/**
+ * Prefer-A returned failure for marker persist (#5176 / #4544). Intentional
+ * product-write stays fail-closed without throw/reject/abort control flow.
+ */
+type WriteOccupancyRecordResult =
+  | { readonly ok: true; readonly record: OccupancyRecord }
+  | { readonly ok: false; readonly error: string };
+
+/**
+ * Persist occupancy.json. Prefer-A durable marker is written only on intentional
+ * product-write (`persistProductMutationMarker`), not when heartbeat/grant/revoke
+ * merely carry an existing lastWriteAt (#5176 / #4544 Class A residual).
+ */
 function writeOccupancyRecord(
   projectRoot: string,
   record: OccupancyWriteFields,
   fence: () => void,
-): OccupancyRecord {
+  opts: { readonly persistProductMutationMarker?: boolean } = {},
+): WriteOccupancyRecordResult {
   const root = resolve(projectRoot);
   const target = occupancyPath(root);
   assertWriteTargetSafe(root, target);
@@ -2487,6 +2776,31 @@ function writeOccupancyRecord(
   const tmpName = join(dir, `.occupancy.${process.pid}.occupancy.json.tmp`);
   const payload = occupancyPayload(record);
   const text = `${stableJson(payload, 2)}\n`;
+  let markerWrittenPath: string | null = null;
+  let markerExistedBefore = false;
+  // #5176 / #4544 Prefer-A: durable marker before lease publish on markWrite only
+  // so a marker miss cannot leave product-write without completion proof.
+  // Residual after #5178: completion chokepoint remediates/refuses scaffold
+  // edit-me so Prefer-A refuse is reached without a separate check invoke.
+  // Heartbeat / grant refresh must not require a fresh marker rewrite.
+  if (opts.persistProductMutationMarker === true) {
+    const at = record.lastWriteAt ?? new Date();
+    markerExistedBefore = existsSync(productMutationCompletionMarkerPath(root));
+    const chokepoint = enforceConsumerHeaderPlaceholderAtCompletionChokepoint(root, {
+      recordedAt: at,
+    });
+    if (!chokepoint.ok) {
+      // Keep any Prefer-A stamp the chokepoint already wrote. Erasing it on
+      // refuse lets later verify:consumer-header-placeholder treat the still-
+      // placeholder header as Process-only and pass (#4544 Greptile P1).
+      return { ok: false, error: chokepoint.message };
+    }
+    if (chokepoint.marker.ok && "path" in chokepoint.marker) {
+      markerWrittenPath = chokepoint.marker.path;
+    } else {
+      markerWrittenPath = productMutationCompletionMarkerPath(root);
+    }
+  }
   try {
     containedWrite({ root, target: tmpName, data: text, mode: "create" });
     fence();
@@ -2497,13 +2811,21 @@ function writeOccupancyRecord(
     } catch {
       /* best-effort cleanup */
     }
+    // Orphan Prefer-A marker from this call only (do not erase a prior stamp).
+    if (markerWrittenPath !== null && !markerExistedBefore) {
+      try {
+        containedRemove({ root, target: markerWrittenPath });
+      } catch {
+        /* best-effort cleanup */
+      }
+    }
     throw err;
   }
   const parsed = parseOccupancy(payload, record.worktreePath);
   if (parsed === null) {
     throw new Error("occupancy write produced an unreadable record");
   }
-  return parsed;
+  return { ok: true, record: parsed };
 }
 
 function removeOccupancyFile(projectRoot: string, fence: () => void): void {

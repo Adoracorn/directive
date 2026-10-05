@@ -1,4 +1,16 @@
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hasActivePollingHeartbeat } from "../review-monitor/verify.js";
 import {
   DEFAULT_MAX_WAIT_MINUTES,
   DEFAULT_POLL_SECONDS,
@@ -8,6 +20,7 @@ import {
   WATCH_HELP,
 } from "./constants.js";
 import {
+  bindLivePhaseCorrectWait,
   emitWatchJson,
   evaluateMergePathArm,
   formatWatchHelp,
@@ -15,10 +28,16 @@ import {
   parsePrWatchJsonStdoutLineSplit,
   parseWatchArgs,
   printWatchHuman,
+  prWatchHeartbeatAgentId,
+  resolveMergePathHeartbeatParentId,
   runWatch,
+  startWaitHeartbeatRefresher,
   watchResultToJson,
+  writePrWatchWaitHeartbeat,
 } from "./main.js";
 import type { WatchProbe, WatchResult } from "./types.js";
+
+const itSymlink = it.skipIf(process.platform === "win32");
 
 const HEAD = "abcdef1234567890abcdef1234567890abcdef12";
 
@@ -40,6 +59,10 @@ function makeProbe(overrides: Partial<WatchProbe> = {}): WatchProbe {
     terminalCheckRun: true,
     isClean: false,
     cleanGateHoldout: null,
+    reviewerReadyState: "expected",
+    reviewCycleHandback: null,
+    prState: "open",
+    prMerged: false,
     error: null,
     ...overrides,
   };
@@ -60,6 +83,8 @@ describe("parseWatchArgs", () => {
     expect(a.error).toBeUndefined();
     expect(a.prNumber).toBe(1056);
     expect(a.maxWaitMinutes).toBe(DEFAULT_MAX_WAIT_MINUTES);
+    expect(a.budgetSource).toBe("default");
+    expect(a.budgetDeclared).toBe(false);
     expect(a.pollSeconds).toBe(DEFAULT_POLL_SECONDS);
     expect(a.oneShot).toBe(false);
     expect(a.emitJson).toBe(false);
@@ -76,14 +101,77 @@ describe("parseWatchArgs", () => {
       "--repo",
       "deftai/directive",
       "--project-root=/tmp/x",
+      "--monitor-agent-id",
+      "rm-42",
     ]);
     expect(a.error).toBeUndefined();
     expect(a.oneShot).toBe(true);
     expect(a.emitJson).toBe(true);
     expect(a.maxWaitMinutes).toBe(10);
+    expect(a.budgetSource).toBe("cli");
+    expect(a.budgetDeclared).toBe(true);
     expect(a.pollSeconds).toBe(15);
     expect(a.repo).toBe("deftai/directive");
     expect(a.projectRoot).toBe("/tmp/x");
+    expect(a.monitorAgentId).toBe("rm-42");
+  });
+
+  it("parses --monitor-agent-id= form (#5219)", () => {
+    const a = parseWatchArgs(["7", "--monitor-agent-id=child-7"]);
+    expect(a.error).toBeUndefined();
+    expect(a.monitorAgentId).toBe("child-7");
+  });
+
+  it("resolveMergePathHeartbeatParentId refuses CLI-only parent impersonation (#5219)", () => {
+    expect(resolveMergePathHeartbeatParentId("babysitter-5219", {})).toBeUndefined();
+    expect(
+      resolveMergePathHeartbeatParentId("babysitter-5219", {
+        DEFT_MONITOR_AGENT_ID: "babysitter-5219",
+      }),
+    ).toBe("babysitter-5219");
+    expect(
+      resolveMergePathHeartbeatParentId("babysitter-5219", {
+        GROK_SESSION_ID: "babysitter-5219",
+      }),
+    ).toBe("babysitter-5219");
+    // Env handle may differ from GROK_SESSION_ID — still stamp the registered id.
+    expect(
+      resolveMergePathHeartbeatParentId("babysitter-5219", {
+        DEFT_MONITOR_AGENT_ID: "babysitter-5219",
+        GROK_SESSION_ID: "host-session-uuid",
+      }),
+    ).toBe("babysitter-5219");
+    expect(
+      resolveMergePathHeartbeatParentId("other-id", {
+        DEFT_MONITOR_AGENT_ID: "babysitter-5219",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("honors DEFT_PR_WATCH_MAX_WAIT_MINUTES when CLI omits max-wait (#3984)", () => {
+    const prev = process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+    process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = "18";
+    try {
+      const a = parseWatchArgs(["7"]);
+      expect(a.error).toBeUndefined();
+      expect(a.maxWaitMinutes).toBe(18);
+      expect(a.budgetSource).toBe("env");
+      expect(a.budgetDeclared).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+      else process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = prev;
+    }
+  });
+
+  it("rejects invalid DEFT_PR_WATCH_MAX_WAIT_MINUTES without throw (#3984)", () => {
+    const prev = process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+    process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = "abc";
+    try {
+      expect(parseWatchArgs(["7"]).error).toContain("DEFT_PR_WATCH_MAX_WAIT_MINUTES");
+    } finally {
+      if (prev === undefined) delete process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+      else process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = prev;
+    }
   });
 
   it("rejects invalid numeric flag values", () => {
@@ -101,11 +189,40 @@ describe("parseWatchArgs", () => {
     expect(parseWatchArgs(["-h"]).help).toBe(true);
     expect(parseWatchArgs(["1056", "--help"]).help).toBe(true);
   });
+
+  it("shows help even when DEFT_PR_WATCH_MAX_WAIT_MINUTES is invalid (#3984)", () => {
+    const prev = process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+    process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = "nope";
+    try {
+      const a = parseWatchArgs(["--help"]);
+      expect(a.help).toBe(true);
+      expect(a.error).toBeUndefined();
+    } finally {
+      if (prev === undefined) delete process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+      else process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = prev;
+    }
+  });
+
+  it("keeps CLI budgetDeclared on help when env is invalid (#3984)", () => {
+    const prev = process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+    process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = "nope";
+    try {
+      const a = parseWatchArgs(["--help", "--max-wait-minutes", "12"]);
+      expect(a.help).toBe(true);
+      expect(a.error).toBeUndefined();
+      expect(a.budgetDeclared).toBe(true);
+      expect(a.maxWaitMinutes).toBe(12);
+    } finally {
+      if (prev === undefined) delete process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES;
+      else process.env.DEFT_PR_WATCH_MAX_WAIT_MINUTES = prev;
+    }
+  });
 });
 
 describe("formatWatchHelp (#2652)", () => {
   it("names task pr:watch as canonical and documents exits 0/1/2", () => {
     const help = formatWatchHelp();
+    expect(help).toContain("--monitor-agent-id");
     expect(help).toBe(WATCH_HELP);
     expect(help).toContain("task pr:watch -- <pr_number>");
     expect(help).toContain("--one-shot");
@@ -147,6 +264,10 @@ describe("watchResultToJson (AC-4 shape)", () => {
       "ci_capacity_stalled_checks",
       "is_clean",
       "clean_gate_holdout",
+      "reviewer_ready_state",
+      "review_cycle_handback",
+      "pr_state",
+      "pr_merged",
       "elapsed_seconds",
       "poll_count",
     ]);
@@ -187,6 +308,27 @@ describe("watchResultToJson (AC-4 shape)", () => {
     expect(human).toContain("https://www.githubstatus.com/");
     expect(human).toContain("https://status.blacksmith.sh/");
     expect(human).toContain("Probe status pages before workflow edits (#3180)");
+  });
+
+  it("includes greptile-sha-stall remedy on GREPTILE_SHA_STALL (#5162)", () => {
+    const stalled: WatchResult = {
+      ...result,
+      verdict: "GREPTILE_SHA_STALL",
+      exitCode: EXIT_TERMINAL_ERROR,
+      probe: makeProbe({
+        isClean: false,
+        shaMatch: false,
+        lastReviewedSha: "0000000000000000000000000000000000000000",
+        cleanGateHoldout: "sha_match",
+        greptileReviewInFlight: false,
+      }),
+    };
+    const json = watchResultToJson(stalled) as Record<string, unknown>;
+    expect(json.verdict).toBe("GREPTILE_SHA_STALL");
+    expect(json.remedy).toBe("BLOCKED: greptile-sha-stall");
+    expect(json.clean_gate_holdout).toBe("sha_match");
+    const human = printWatchHuman(stalled);
+    expect(human).toContain("BLOCKED: greptile-sha-stall");
   });
 
   it("emits ASCII-escaped JSON with a trailing newline", () => {
@@ -263,12 +405,297 @@ describe("evaluateMergePathArm (#4882)", () => {
   });
 });
 
+describe("bindLivePhaseCorrectWait (#5020)", () => {
+  it("Tier 1 lease+flag without heartbeat stays unbound (dead-wait sticky lease)", () => {
+    const bound = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: true,
+      heartbeatActive: false,
+      pr: 5020,
+    });
+    expect(bound.livePhaseCorrectWait).toBe(false);
+    expect(bound.reason).toBe("missing_process_liveness");
+    expect(bound.message).toMatch(/process-liveness|#5020|lease\+flag/);
+    const arm = evaluateMergePathArm({
+      livePhaseCorrectWait: bound.livePhaseCorrectWait,
+      explicitFinish: false,
+      stickyLeaseActive: true,
+    });
+    expect(arm.armed).toBe(false);
+  });
+
+  it("Tier 1 lease + active heartbeat arms live-wait", () => {
+    const bound = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: true,
+      heartbeatActive: true,
+      pr: 5020,
+    });
+    expect(bound.livePhaseCorrectWait).toBe(true);
+    expect(bound.reason).toBe("live");
+  });
+
+  it("Tier 1 live-wait without lease stays unbound (#5018)", () => {
+    const bound = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: false,
+      heartbeatActive: true,
+      pr: 88,
+    });
+    expect(bound.livePhaseCorrectWait).toBe(false);
+    expect(bound.reason).toBe("missing_lease");
+  });
+
+  it("leftover durable-wait cannot complete on lease+flag attestation alone", () => {
+    // Wording honesty lock (#5020 / Greptile #5019 class): bind refuses the
+    // attestation-only conjunct that leftover twins must not stamp complete.
+    const attestationOnly = bindLivePhaseCorrectWait({
+      liveWaitFlag: true,
+      tierIs1: true,
+      leaseEvidence: true,
+      heartbeatActive: false,
+      pr: 5019,
+    });
+    expect(attestationOnly.livePhaseCorrectWait).toBe(false);
+    expect(attestationOnly.message).toMatch(/lease\+flag alone is not/);
+  });
+});
+
+describe("pr:watch wait heartbeat (#5020)", () => {
+  it("writePrWatchWaitHeartbeat is observed by hasActivePollingHeartbeat then clears on terminal", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-hb-"));
+    const live = writePrWatchWaitHeartbeat(root, 77, { phase: "polling" });
+    expect(live.ok).toBe(true);
+    expect(hasActivePollingHeartbeat(root, 77)).toBe(true);
+    const done = writePrWatchWaitHeartbeat(root, 77, {
+      phase: "terminal",
+      terminalState: "exited",
+    });
+    expect(done.ok).toBe(true);
+    expect(hasActivePollingHeartbeat(root, 77)).toBe(false);
+    const payload = JSON.parse(
+      readFileSync(
+        join(root, ".deft-scratch", "subagent-status", `${prWatchHeartbeatAgentId(77)}.json`),
+        "utf8",
+      ),
+    ) as { phase: string; terminal_state: string | null; pid: number };
+    expect(payload.phase).toBe("terminal");
+    expect(payload.terminal_state).toBe("exited");
+    expect(payload.pid).toBe(process.pid);
+  });
+
+  it("dead pid leaves hasActivePollingHeartbeat false even with fresh polling file", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-hb-dead-"));
+    const deadPid = 9_999_991;
+    const live = writePrWatchWaitHeartbeat(root, 88, { phase: "polling", pid: deadPid });
+    expect(live.ok).toBe(true);
+    // Fresh file alone must not arm after force-kill (finally never ran).
+    expect(hasActivePollingHeartbeat(root, 88, { isProcessAlive: () => false })).toBe(false);
+    expect(hasActivePollingHeartbeat(root, 88, { isProcessAlive: (pid) => pid === deadPid })).toBe(
+      true,
+    );
+  });
+
+  it("concurrent waits use pid-scoped files so one exit does not clear the other", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-hb-conc-"));
+    expect(writePrWatchWaitHeartbeat(root, 99, { phase: "polling", pid: 1111 }).ok).toBe(true);
+    expect(writePrWatchWaitHeartbeat(root, 99, { phase: "polling", pid: 2222 }).ok).toBe(true);
+    expect(
+      writePrWatchWaitHeartbeat(root, 99, {
+        phase: "terminal",
+        terminalState: "exited",
+        pid: 1111,
+      }).ok,
+    ).toBe(true);
+    expect(
+      hasActivePollingHeartbeat(root, 99, {
+        isProcessAlive: (pid) => pid === 2222,
+      }),
+    ).toBe(true);
+  });
+
+  it("writePrWatchWaitHeartbeat returns failures for invalid pr / empty terminal_state", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-hb-bad-"));
+    expect(writePrWatchWaitHeartbeat(root, 0, { phase: "polling" }).ok).toBe(false);
+    expect(writePrWatchWaitHeartbeat(root, 9, { phase: "terminal", terminalState: "   " }).ok).toBe(
+      false,
+    );
+    expect(writePrWatchWaitHeartbeat(root, 9, { phase: "polling", pid: 0 }).ok).toBe(false);
+  });
+
+  it("startWaitHeartbeatRefresher advances last_heartbeat_at while parent blocks", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-hb-refresh-"));
+    expect(writePrWatchWaitHeartbeat(root, 42, { phase: "polling" }).ok).toBe(true);
+    const hbPath = join(
+      root,
+      ".deft-scratch",
+      "subagent-status",
+      `${prWatchHeartbeatAgentId(42)}.json`,
+    );
+    const firstAt = (JSON.parse(readFileSync(hbPath, "utf8")) as { last_heartbeat_at: string })
+      .last_heartbeat_at;
+    const readHeartbeatAt = (): string => {
+      // containedWrite replace uses O_TRUNC — retry mid-write / empty reads (#5020).
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        try {
+          const raw = readFileSync(hbPath, "utf8");
+          if (raw.trim().length === 0) {
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+            continue;
+          }
+          const parsed = JSON.parse(raw) as { last_heartbeat_at?: string };
+          if (typeof parsed.last_heartbeat_at === "string" && parsed.last_heartbeat_at.length > 0) {
+            return parsed.last_heartbeat_at;
+          }
+        } catch {
+          /* truncated JSON while worker refreshes */
+        }
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+      throw new Error(`timed out waiting for valid heartbeat JSON at ${hbPath}`);
+    };
+    const refresher = startWaitHeartbeatRefresher(root, 42, { intervalSeconds: 0.05 });
+    try {
+      let secondAt = firstAt;
+      const deadline = Date.now() + 2_000;
+      while (Date.now() < deadline && !(Date.parse(secondAt) > Date.parse(firstAt))) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+        secondAt = readHeartbeatAt();
+      }
+      expect(Date.parse(secondAt)).toBeGreaterThan(Date.parse(firstAt));
+    } finally {
+      refresher.stop();
+    }
+  });
+
+  it("stop joins refresher so terminal write is not overwritten by a late refresh", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-hb-stop-join-"));
+    const pid = 4_242_001;
+    expect(writePrWatchWaitHeartbeat(root, 55, { phase: "polling", pid }).ok).toBe(true);
+    const hbPath = join(
+      root,
+      ".deft-scratch",
+      "subagent-status",
+      `${prWatchHeartbeatAgentId(55, pid)}.json`,
+    );
+    const refresher = startWaitHeartbeatRefresher(root, 55, {
+      pid,
+      intervalSeconds: 0.05,
+      joinMs: 2_000,
+    });
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 120);
+    const stopStarted = Date.now();
+    refresher.stop();
+    // Atomics join must not pay the full 2s when the worker exits promptly (#5020 P2).
+    expect(Date.now() - stopStarted).toBeLessThan(1_500);
+    expect(
+      writePrWatchWaitHeartbeat(root, 55, {
+        phase: "terminal",
+        terminalState: "exited",
+        pid,
+      }).ok,
+    ).toBe(true);
+    // A late refresh after stop must not restore polling with a live parent pid.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    const payload = JSON.parse(readFileSync(hbPath, "utf8")) as {
+      phase: string;
+      terminal_state: string | null;
+    };
+    expect(payload.phase).toBe("terminal");
+    expect(payload.terminal_state).toBe("exited");
+  });
+
+  itSymlink("refresher refuses a leaf symlink instead of following it", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-hb-symlink-"));
+    const outside = mkdtempSync(join(tmpdir(), "pr-watch-hb-symlink-out-"));
+    const victim = join(outside, "victim.json");
+    writeFileSync(victim, '{"keep":true}\n', "utf8");
+    const statusDir = join(root, ".deft-scratch", "subagent-status");
+    mkdirSync(statusDir, { recursive: true });
+    const pid = 4_242_002;
+    const hbPath = join(statusDir, `${prWatchHeartbeatAgentId(66, pid)}.json`);
+    // Real file first so parents exist; then swap the leaf for an escaping symlink.
+    expect(writePrWatchWaitHeartbeat(root, 66, { phase: "polling", pid }).ok).toBe(true);
+    renameSync(hbPath, join(statusDir, "real-hb.json"));
+    symlinkSync(victim, hbPath);
+
+    const refresher = startWaitHeartbeatRefresher(root, 66, {
+      pid,
+      intervalSeconds: 0.05,
+    });
+    try {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+      // containedWrite must refuse the leaf symlink — outside victim stays untouched.
+      expect(readFileSync(victim, "utf8")).toBe('{"keep":true}\n');
+    } finally {
+      refresher.stop();
+    }
+  });
+
+  it("bindLivePhaseCorrectWait missing flag stays unbound; non-Tier1 flag binds", () => {
+    expect(
+      bindLivePhaseCorrectWait({
+        liveWaitFlag: false,
+        tierIs1: true,
+        leaseEvidence: true,
+        heartbeatActive: true,
+        pr: 1,
+      }).reason,
+    ).toBe("missing_flag");
+    expect(
+      bindLivePhaseCorrectWait({
+        liveWaitFlag: true,
+        tierIs1: false,
+        leaseEvidence: false,
+        heartbeatActive: false,
+        pr: 1,
+      }).livePhaseCorrectWait,
+    ).toBe(true);
+  });
+
+  it("runWatch marks the wait heartbeat terminal when the wait exits", () => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-run-hb-"));
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const code = runWatch(
+      ["77", "--one-shot", "--json", "--project-root", root, "--repo", "deftai/directive"],
+      {
+        probeFn: () => makeProbe({ isClean: true }),
+        sleepFn: () => undefined,
+      },
+    );
+    expect(code).toBe(EXIT_CLEAN);
+    expect(hasActivePollingHeartbeat(root, 77)).toBe(false);
+    const payload = JSON.parse(
+      readFileSync(
+        join(root, ".deft-scratch", "subagent-status", `${prWatchHeartbeatAgentId(77)}.json`),
+        "utf8",
+      ),
+    ) as { phase: string; pid: number };
+    expect(payload.phase).toBe("terminal");
+    expect(payload.pid).toBe(process.pid);
+  });
+});
+
 describe("runWatch (exit-code passthrough + JSON)", () => {
   let stdout = "";
+  const tmpRoots: string[] = [];
   afterEach(() => {
     stdout = "";
     vi.restoreAllMocks();
+    for (const root of tmpRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
+
+  const isolatedRoot = (): string => {
+    const root = mkdtempSync(join(tmpdir(), "pr-watch-iso-"));
+    tmpRoots.push(root);
+    return root;
+  };
 
   const spyStdout = () => {
     vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
@@ -281,9 +708,20 @@ describe("runWatch (exit-code passthrough + JSON)", () => {
   it("returns exit 0 and emits AC-4 JSON on a CLEAN verdict", () => {
     spyStdout();
     const probeFn = () => makeProbe({ isClean: true });
-    const code = runWatch(["1056", "--json", "--one-shot", "--repo", "deftai/directive"], {
-      probeFn,
-    });
+    const code = runWatch(
+      [
+        "1056",
+        "--json",
+        "--one-shot",
+        "--repo",
+        "deftai/directive",
+        "--project-root",
+        isolatedRoot(),
+      ],
+      {
+        probeFn,
+      },
+    );
     expect(code).toBe(EXIT_CLEAN);
     const payload = JSON.parse(stdout) as Record<string, unknown>;
     expect(payload.verdict).toBe("CLEAN");
@@ -299,7 +737,10 @@ describe("runWatch (exit-code passthrough + JSON)", () => {
         shaMatch: true,
         cleanGateHoldout: "has_blocking",
       });
-    const code = runWatch(["1056", "--one-shot", "--repo", "deftai/directive"], { probeFn });
+    const code = runWatch(
+      ["1056", "--one-shot", "--repo", "deftai/directive", "--project-root", isolatedRoot()],
+      { probeFn },
+    );
     expect(code).toBe(EXIT_NEW_P0_P1);
     expect(stdout).toContain("NEW_P0_P1");
   });

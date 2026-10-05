@@ -13,22 +13,44 @@ export {
 export {
   type ComputeGateOptions,
   computeGateResult,
+  evaluateMergeGateEnforcementAtStrategyStart,
   type FetchMergeabilityFn,
   type FetchRequiredContextsFn,
+  type MergeGateEnforcementStrategyStartOptions,
+  type MergeGateEnforcementStrategyStartResult,
 } from "./compute.js";
 export * from "./constants.js";
 export { evaluateGates, isMergeReady } from "./evaluate.js";
 export {
+  type ApplyMergeGateConfigureInput,
+  type ApplyMergeGateConfigureResult,
+  applyMergeGateConfigure,
+  buildMergeGateConfigurePayload,
   checkRunMatchesRequiredContext,
+  classifyMergeGateEnforcement,
   contextsFromBranchProtection,
   contextsFromBranchRules,
   defaultRunGh,
+  encodeMergeGateScopePart,
   fetchPrBaseRef,
   fetchRequiredStatusContexts,
+  MERGE_GATE_ENFORCEMENT_DIR,
+  MERGE_GATE_ENFORCEMENT_SCHEMA,
+  type MergeGateConfigurePayloadResult,
+  type MergeGateConfigureProposal,
+  type MergeGateEnforcementDecision,
+  type MergeGateEnforcementDetection,
+  type MergeGateEnforcementRecord,
+  type MergeGateEnforcementRecordResult,
+  mapBranchProtectionGetToPutBody,
+  mergeGateEnforcementRecordPath,
   normalizeRequiredContexts,
   type RequiredStatusContext,
   type RequiredStatusContextsResult,
+  readMergeGateEnforcementRecord,
   requiredContextLabel,
+  type WriteMergeGateEnforcementInput,
+  writeMergeGateEnforcementRecord,
 } from "./gh.js";
 export {
   evaluateInlineReviewThreads,
@@ -62,6 +84,15 @@ export {
   PLATFORM_STATUS_GITHUB_URL,
   platformStatusUrlsForWeather,
 } from "./platform-status.js";
+export {
+  botReviewCheckPresent,
+  evaluateReviewerExpectation,
+  MERGE_READY_NO_REVIEWER_FAILURE,
+  REVIEW_CYCLE_NO_REVIEWER_HANDBACK,
+  REVIEWER_STATE_EXPECTED,
+  REVIEWER_STATE_NO_REVIEWER_INSTALLED,
+  reviewerConfigPresent,
+} from "./reviewer-presence.js";
 export {
   type CapacityStallOptions,
   type CapacityStallProbe,

@@ -7,9 +7,17 @@
 
 import { spawnSync } from "node:child_process";
 import {
+  ensureCatalogChipLabel,
+  formatDesignCritiqueJudgmentGatesRemediation,
+  hasDesignCritiqueJudgmentGate,
+  isDesignCritiqueDeposited,
+} from "../design-critique/catalog-chip-ensure.js";
+import {
   applyIngestReadyRemainingSet,
   DesignCritiqueIngestBlockedError,
+  evaluateTargetDigestAdmission,
   IngestReadyCompletedArcProofError,
+  proveLiveThreadCompletedArcForIngestReady,
   type ThreadComment,
   threadCommentsFromIssueComments,
 } from "../design-critique/completed-arc-record.js";
@@ -21,23 +29,26 @@ import {
   formatStaleIngestReadyDiagnostic,
   INGEST_READY_CHIP,
 } from "../design-critique/stale-ingest-ready-diagnostic.js";
+import { fetchIssueBody, GitHubBodyError } from "../intake/github-body.js";
 import { fetchIssueComments, IssueCommentFetchError } from "../intake/issue-ingest.js";
 import { parseGithubOwnerRepo } from "../policy/sync-default.js";
 import { ScmLabelClient } from "../vbrief-reconcile/labels.js";
 import type { LabelClient } from "../vbrief-reconcile/types.js";
 import { extractFlag, extractRepoFlag, extractValueFlag } from "./argv.js";
-import { InvalidRepoError, splitRepo } from "./gh-rest.js";
+import { type GhRestSeams, InvalidRepoError, splitRepo } from "./gh-rest.js";
 import { pyRepr } from "./py-format.js";
 
 export const DESIGN_CRITIQUE_CHIP_VERB = "design-critique-chip" as const;
 
 export const CHIP_APPLY_MISS_TOKEN = "chip apply missed (non-blocking convenience)";
+export const CHIP_ENSURE_FAILED_TOKEN = "ensure-failed";
 
 export const DESIGN_CRITIQUE_CHIP_USAGE =
   "usage: scm issue design-critique-chip --issue N --chip mechanism-shaped|in-progress|ingest-ready [--repo OWNER/NAME] [--json]\n" +
   "       Parent attach of design-critique:ingest-ready / in-progress / later-arc mechanism-shaped.\n" +
   "       Closed catalog remaining-set replace. One write. Other facets stay.\n" +
-  "       ingest-ready fetches comments and refuses unless live-thread evaluateCompletedArcRecord is complete.\n" +
+  "       ingest-ready fetches comments + live REST body and refuses unless completed-arc is complete\n" +
+  "       and Target-digest admission matches (or is unpinned). Digest mismatch reports stale-target.\n" +
   "       Proof-fail is blocking. Apply miss after a passing proof is non-blocking convenience; ingest is not blocked.\n";
 
 export const CHIP_ALIASES: Readonly<Record<string, DesignCritiqueCatalogChip>> = {
@@ -62,6 +73,14 @@ export interface DesignCritiqueChipSeams {
   readonly resolveDefaultRepo?: () => string | null;
   /** Live-thread comments for ingest-ready proof. Default: fetchIssueComments. */
   readonly fetchComments?: (repo: string, issueNumber: number) => readonly ThreadComment[];
+  /** Live REST issue body for Target-digest admission (#4995). Default: fetchIssueBody. */
+  readonly fetchIssueBody?: (repo: string, issueNumber: number) => string;
+  /** REST seams for catalog label probe/create (#5326). */
+  readonly ghRest?: GhRestSeams;
+  /** Project root for deposit / judgmentGates first-arc advisory (#5326). */
+  readonly projectRoot?: string;
+  /** Override ensure attach (tests). Default: ensureCatalogChipLabel. */
+  readonly ensureCatalogChip?: typeof ensureCatalogChipLabel;
 }
 
 export interface DesignCritiqueChipResult {
@@ -156,6 +175,17 @@ export function resolveRepoFromGitOrigin(): string | null {
   return parseGithubOwnerRepo(stdout);
 }
 
+/** Repo toplevel for deposit/judgmentGates advisory when CLI omits projectRoot. */
+export function resolveProjectRootFromGit(): string | null {
+  const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (result.status !== 0) return null;
+  const stdout = typeof result.stdout === "string" ? result.stdout.trim() : "";
+  return stdout.length > 0 ? stdout : null;
+}
+
 class ChipUsageError extends Error {
   constructor(message: string) {
     super(message);
@@ -165,6 +195,10 @@ class ChipUsageError extends Error {
 
 function defaultFetchComments(repo: string, issueNumber: number): ThreadComment[] {
   return threadCommentsFromIssueComments(fetchIssueComments(repo, issueNumber));
+}
+
+function defaultFetchIssueBody(repo: string, issueNumber: number): string {
+  return fetchIssueBody(repo, issueNumber);
 }
 
 function proofFailResult(
@@ -189,8 +223,9 @@ function proofFailResult(
 
 /**
  * GET current labels, remaining-set replace via applyDesignCritiqueCatalogChip.
- * ingest-ready remaining-set proves live-thread evaluateCompletedArcRecord first (#4700).
- * mechanism-shaped and in-progress stay labels-only. One LabelClient.apply write.
+ * ingest-ready remaining-set proves live-thread completed-arc + Target-digest
+ * admission first (#4700 / #4995). mechanism-shaped and in-progress stay
+ * labels-only. One LabelClient.apply write.
  */
 export function runDesignCritiqueChip(
   extra: readonly string[],
@@ -229,11 +264,135 @@ export function runDesignCritiqueChip(
 
   const client = seams.client ?? new ScmLabelClient();
   const fetchComments = seams.fetchComments ?? defaultFetchComments;
+  const fetchBody = seams.fetchIssueBody ?? defaultFetchIssueBody;
+  const ensureChip = seams.ensureCatalogChip ?? ensureCatalogChipLabel;
+  // Chip path proves once above the write. ScmLabelClient.apply would re-fetch
+  // and re-admit; route the post-proof write through applyWithoutCatalogGate.
+  const writeClient: LabelClient =
+    client instanceof ScmLabelClient
+      ? {
+          fetchLabels: (r, n) => client.fetchLabels(r, n),
+          apply: (r, n, a, rem) => client.applyWithoutCatalogGate(r, n, a, rem),
+        }
+      : client;
+
+  const ensureOrMiss = ():
+    | { readonly ok: true }
+    | { readonly ok: false; readonly result: DesignCritiqueChipResult } => {
+    const ensured = ensureChip(repo, args.chip, seams.ghRest);
+    if (ensured.ok) {
+      return { ok: true };
+    }
+    const missClass = ensured.missClass;
+    const message = `${CHIP_ENSURE_FAILED_TOKEN} (${missClass}): ${ensured.error}`;
+    const payload = {
+      repo,
+      issue: args.issue,
+      chip: args.chip,
+      applied: false,
+      miss: true,
+      missClass,
+      blocking: false,
+      error: message,
+    };
+    if (args.json) {
+      return {
+        ok: false,
+        result: { exitCode: 0, stdout: `${JSON.stringify(payload)}\n`, stderr: "" },
+      };
+    }
+    return {
+      ok: false,
+      result: {
+        exitCode: 0,
+        stdout: "",
+        stderr:
+          `${CHIP_APPLY_MISS_TOKEN}: ${message}\n` +
+          "ingest is not blocked; remaining-set hygiene is optional for a write-capable identity\n",
+      },
+    };
+  };
+
   try {
     let applied: { remaining: string[]; add: readonly string[]; remove: readonly string[] };
     if (args.chip === "design-critique:ingest-ready") {
+      // Arc + digest proof before ensure so ensure-fail cannot bypass proof
+      // refusal and refused writes do not leave a new repo-wide label (#5326).
       const comments = fetchComments(repo, args.issue);
-      const outcome = applyIngestReadyRemainingSet(client, repo, args.issue, comments);
+      const liveIssueBody = fetchBody(repo, args.issue);
+      const verdict = proveLiveThreadCompletedArcForIngestReady({
+        comments,
+        issueNumber: args.issue,
+      });
+      if (verdict.status !== "complete") {
+        const proofErr = new IngestReadyCompletedArcProofError(args.issue, verdict, comments);
+        let standingLabels: string[] = [];
+        try {
+          standingLabels = client.fetchLabels(repo, args.issue);
+        } catch {
+          standingLabels = [];
+        }
+        if (standingLabels.includes(INGEST_READY_CHIP)) {
+          const overlay = formatStaleIngestReadyDiagnostic({
+            repo,
+            issueNumber: args.issue,
+            labels: standingLabels,
+            verdict,
+          }).text;
+          return proofFailResult(args, repo, new Error(`${proofErr.message}\n${overlay}`));
+        }
+        return proofFailResult(args, repo, proofErr);
+      }
+      const cited = comments.find((comment) => comment.id === verdict.citedLeanId);
+      const citedLeanBody = cited?.body ?? "";
+      const digestAdmission = evaluateTargetDigestAdmission({
+        citedLeanBody,
+        liveIssueBody,
+      });
+      if (digestAdmission.status === "blocked") {
+        const blockedVerdict = {
+          status: "blocked" as const,
+          reason: "stale-target" as const,
+          detail: digestAdmission.detail,
+        };
+        const proofErr = new IngestReadyCompletedArcProofError(
+          args.issue,
+          blockedVerdict,
+          comments,
+        );
+        let standingLabels: string[] = [];
+        try {
+          standingLabels = client.fetchLabels(repo, args.issue);
+        } catch {
+          standingLabels = [];
+        }
+        if (standingLabels.includes(INGEST_READY_CHIP)) {
+          const overlay = formatStaleIngestReadyDiagnostic({
+            repo,
+            issueNumber: args.issue,
+            labels: standingLabels,
+            verdict: blockedVerdict,
+            digestAdmission,
+            liveIssueBody,
+            citedLeanBody,
+          }).text;
+          return proofFailResult(args, repo, new Error(`${proofErr.message}\n${overlay}`));
+        }
+        return proofFailResult(args, repo, proofErr);
+      }
+
+      const ensured = ensureOrMiss();
+      if (!ensured.ok) {
+        return ensured.result;
+      }
+
+      const outcome = applyIngestReadyRemainingSet(
+        writeClient,
+        repo,
+        args.issue,
+        comments,
+        liveIssueBody,
+      );
       if (!outcome.ok) {
         const proofErr = new IngestReadyCompletedArcProofError(
           args.issue,
@@ -252,6 +411,9 @@ export function runDesignCritiqueChip(
             issueNumber: args.issue,
             labels: standingLabels,
             verdict: outcome.verdict,
+            digestAdmission: outcome.digestAdmission,
+            liveIssueBody: outcome.liveIssueBody,
+            citedLeanBody: outcome.citedLeanBody,
           }).text;
           return proofFailResult(args, repo, new Error(`${proofErr.message}\n${overlay}`));
         }
@@ -259,8 +421,22 @@ export function runDesignCritiqueChip(
       }
       applied = outcome;
     } else {
-      applied = applyDesignCritiqueCatalogChip(client, repo, args.issue, args.chip);
+      // Ensure-on-write for non-ingest catalog chips (#5326).
+      const ensured = ensureOrMiss();
+      if (!ensured.ok) {
+        return ensured.result;
+      }
+      applied = applyDesignCritiqueCatalogChip(writeClient, repo, args.issue, args.chip);
     }
+
+    // First-arc judgmentGates advisory: no pin-present durable policy writer for
+    // judgmentGates (S1); loud advisory when deposited and gate dark (#5326).
+    let gateAdvisory = "";
+    const projectRoot = seams.projectRoot ?? resolveProjectRootFromGit() ?? process.cwd();
+    if (isDesignCritiqueDeposited(projectRoot) && !hasDesignCritiqueJudgmentGate(projectRoot)) {
+      gateAdvisory = formatDesignCritiqueJudgmentGatesRemediation();
+    }
+
     const payload = {
       repo,
       issue: args.issue,
@@ -268,9 +444,14 @@ export function runDesignCritiqueChip(
       add: [...applied.add],
       remove: [...applied.remove],
       remaining: [...applied.remaining],
+      ...(gateAdvisory.length > 0 ? { judgmentGatesAdvisory: gateAdvisory } : {}),
     };
     if (args.json) {
-      return { exitCode: 0, stdout: `${JSON.stringify(payload)}\n`, stderr: "" };
+      return {
+        exitCode: 0,
+        stdout: `${JSON.stringify(payload)}\n`,
+        stderr: gateAdvisory.length > 0 ? `${gateAdvisory}\n` : "",
+      };
     }
     const wrote = applied.add.length > 0 || applied.remove.length > 0;
     const detail =
@@ -282,14 +463,15 @@ export function runDesignCritiqueChip(
     return {
       exitCode: 0,
       stdout: `${wrote ? "applied" : "unchanged"} ${args.chip} on ${repo}#${args.issue} (${detail})\n`,
-      stderr: "",
+      stderr: gateAdvisory.length > 0 ? `${gateAdvisory}\n` : "",
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     const proofFail =
       err instanceof IngestReadyCompletedArcProofError ||
       err instanceof DesignCritiqueIngestBlockedError ||
-      err instanceof IssueCommentFetchError;
+      err instanceof IssueCommentFetchError ||
+      err instanceof GitHubBodyError;
     const payload = {
       repo,
       issue: args.issue,

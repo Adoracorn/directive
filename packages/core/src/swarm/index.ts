@@ -1,10 +1,23 @@
+export * from "./approach1-babysitter.js";
+export * from "./brief-transport.js";
+export * from "./cohort-review-monitors.js";
+export {
+  parseCohortReviewMonitorsArgv,
+  verifyCohortReviewMonitorsMain,
+} from "./cohort-review-monitors-cli.js";
 export * from "./complete-cohort.js";
 export { completeCohortMain } from "./complete-cohort-cli.js";
 export * from "./constants.js";
+export * from "./dest-place.js";
 export * from "./finalize-cohort.js";
 export { finalizeCohortMain, parseFinalizeCohortArgv } from "./finalize-cohort-cli.js";
+export * from "./finalize-owed.js";
+export { finalizeOwedMain, parseFinalizeOwedArgv } from "./finalize-owed-cli.js";
+export * from "./immutable-projection.js";
 export * from "./launch.js";
 export { launchMain, parseLaunchArgv } from "./launch-cli.js";
+export * from "./lifecycle-diff.js";
+export * from "./origin-active-brief.js";
 export * from "./pre-dispatch.js";
 export { parsePreDispatchArgv, preDispatchMain } from "./pre-dispatch-cli.js";
 export * from "./readiness.js";

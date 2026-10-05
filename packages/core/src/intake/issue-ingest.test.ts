@@ -48,6 +48,19 @@ import {
 } from "./issue-ingest.js";
 import { extractBoundRemedyHarvest } from "./markdown-scanners.js";
 
+/** Tester 1 Issue A body from nheroux-bit/show-env-report-uat#1 (#4671). */
+const TESTER1_ISSUE_A_BODY = [
+  "show-env-report prints an environment report to stdout.",
+  "Requirements:",
+  "1. The report is valid JSON.",
+  "2. It contains `os`, `nodeVersion`, and `cwd`.",
+  "3. It contains a `generatedAt` field with the current time in ISO 8601 format.",
+].join("\n");
+
+/** Tester 1 Issue B bare prose — stays #4374 (#4671). */
+const TESTER1_ISSUE_B_BODY =
+  "--help prints usage and exits with code 0. Tests cover both commands.";
+
 function completed(stdout: string, stderr: string, returncode: number): CompletedProcess {
   return { stdout, stderr, returncode };
 }
@@ -164,6 +177,79 @@ describe("buildIssueVbrief", () => {
     };
     expect(metadata.intended_placement?.schema).toBe(INTENDED_PLACEMENT_SCHEMA);
     expect(metadata.intended_placement?.files).toEqual([]);
+  });
+
+  it("Issue A: Requirements: harvest yields items + derived clauses; CREATED is non-silent only on empty (#4671)", () => {
+    const [vbrief] = buildIssueVbrief(
+      {
+        number: 1,
+        title: "Issue A",
+        url: "https://github.com/nheroux-bit/show-env-report-uat/issues/1",
+        body: TESTER1_ISSUE_A_BODY,
+        labels: [],
+      },
+      "proposed",
+      "https://github.com/nheroux-bit/show-env-report-uat",
+    );
+    const plan = vbrief.plan as Record<string, unknown>;
+    const items = plan.items as { title: string }[];
+    expect(items.map((i) => i.title)).toEqual([
+      "The report is valid JSON.",
+      "It contains `os`, `nodeVersion`, and `cwd`.",
+      "It contains a `generatedAt` field with the current time in ISO 8601 format.",
+    ]);
+    const acceptance = plan.acceptance as {
+      none_stated: boolean;
+      source_rung: string;
+      quality_notice?: string;
+      clauses: { text: string }[];
+    };
+    expect(acceptance.none_stated).toBe(true);
+    expect(acceptance.source_rung).toBe("derived");
+    expect(acceptance.clauses.map((c) => c.text)).toEqual([
+      "The report is valid JSON.",
+      "It contains `os`, `nodeVersion`, and `cwd`.",
+      "It contains a `generatedAt` field with the current time in ISO 8601 format.",
+    ]);
+    expect(acceptance.quality_notice ?? "").not.toContain("plan.items is empty after body harvest");
+    expect(formatIngestCreatedMessage("proposed", "issue-a.xbrief.json", plan)).toBe(
+      "CREATED proposed/issue-a.xbrief.json",
+    );
+  });
+
+  it("Issue B: bare prose stays empty items with mandatory empty-after-harvest CREATED notice (#4671)", () => {
+    const commentRequirements = {
+      id: 99,
+      body: "Requirements:\n1. must not lift from comment thread",
+      user: { login: "commenter" },
+      created_at: "2026-09-16T00:00:00Z",
+      updated_at: "2026-09-16T00:00:00Z",
+      html_url: "https://github.com/o/r/issues/2#issuecomment-99",
+      author_association: "NONE",
+    };
+    const [vbrief] = buildIssueVbrief(
+      {
+        number: 2,
+        title: "Issue B",
+        url: "https://github.com/nheroux-bit/show-env-report-uat/issues/2",
+        body: TESTER1_ISSUE_B_BODY,
+        labels: [],
+        [ISSUE_COMMENT_THREAD_KEY]: [commentRequirements],
+      },
+      "proposed",
+      "https://github.com/nheroux-bit/show-env-report-uat",
+    );
+    const plan = vbrief.plan as Record<string, unknown>;
+    expect(plan.items).toEqual([]);
+    const acceptance = plan.acceptance as { quality_notice?: string; none_stated?: boolean };
+    expect(acceptance.quality_notice).toMatch(/plan\.items is empty after body harvest/);
+    expect(formatIngestCreatedMessage("proposed", "issue-b.xbrief.json", plan)).toContain(
+      "plan.items is empty after body harvest",
+    );
+    // Body-only harvest: comment-thread Requirements: must not become plan.items.
+    expect(composeOverviewWithComments(TESTER1_ISSUE_B_BODY, [commentRequirements])).toContain(
+      "must not lift from comment thread",
+    );
   });
 
   it("derives numbered clauses at intake when no commands are stated (#3323)", () => {
@@ -929,6 +1015,55 @@ describe("extractCrossRefs", () => {
 describe("extractPlanItems", () => {
   it("returns empty for body without structure", () => {
     expect(extractPlanItems("Just prose, no checklist.")).toEqual([]);
+  });
+
+  it("harvests Tester 1 Issue A numbered list under whole-line Requirements: (#4671)", () => {
+    expect(extractPlanItems(TESTER1_ISSUE_A_BODY)).toEqual([
+      { title: "The report is valid JSON.", status: "proposed" },
+      { title: "It contains `os`, `nodeVersion`, and `cwd`.", status: "proposed" },
+      {
+        title: "It contains a `generatedAt` field with the current time in ISO 8601 format.",
+        status: "proposed",
+      },
+    ]);
+  });
+
+  it("locks Requirements: case-insensitive whole-line colon-label; rejects singular and inline (#4671)", () => {
+    expect(extractPlanItems("requirements:\n1. lower-case label\n")).toEqual([
+      { title: "lower-case label", status: "proposed" },
+    ]);
+    expect(extractPlanItems("Requirement:\n1. singular\n")).toEqual([]);
+    expect(extractPlanItems("Requirements: inline remainder\n1. not harvested\n")).toEqual([]);
+  });
+
+  it("terminates Requirements: slice at next ATX heading or same-shape Label: (#4671)", () => {
+    const withHeading = ["Requirements:", "1. keep me", "## Later", "1. drop me"].join("\n");
+    expect(extractPlanItems(withHeading).map((i) => i.title)).toEqual(["keep me"]);
+    const withLabel = ["Requirements:", "1. keep me", "Notes:", "1. drop me"].join("\n");
+    expect(extractPlanItems(withLabel).map((i) => i.title)).toEqual(["keep me"]);
+  });
+
+  it("harvests a later non-empty Requirements: when the first section is empty (#4671)", () => {
+    const body = [
+      "Requirements:",
+      "",
+      "Notes:",
+      "1. not requirements",
+      "",
+      "Requirements:",
+      "1. real item",
+      "2. second item",
+    ].join("\n");
+    expect(extractPlanItems(body).map((i) => i.title)).toEqual(["real item", "second item"]);
+  });
+
+  it("stops Requirements: harvest at an indented ATX heading (0–3 spaces) (#4671)", () => {
+    const body = ["Requirements:", "1. keep me", "  ## Notes", "1. drop me"].join("\n");
+    expect(extractPlanItems(body).map((i) => i.title)).toEqual(["keep me"]);
+  });
+
+  it("leaves bare-prose Issue B empty (stays #4374) (#4671)", () => {
+    expect(extractPlanItems(TESTER1_ISSUE_B_BODY)).toEqual([]);
   });
 
   it("preserves inline code in acceptance-criteria checkbox titles (#1269 shape)", () => {
@@ -1705,6 +1840,28 @@ describe("buildIssueVbrief Spec-path Overview placement (#4524)", () => {
     expect(narratives.Overview).toContain("drop the script");
     expect(narratives.Overview).toContain("```rhai");
     expect(meta[ISSUE_BODY_KEY]).toBeUndefined();
+  });
+
+  it("persists empty-string issueBody on Spec-path when the origin body is empty (#5055)", () => {
+    const [vbrief] = buildIssueVbrief(
+      {
+        number: 5055,
+        title: "empty-body Spec-path",
+        url: "https://github.com/o/r/issues/5055",
+        body: "",
+        labels: [],
+      },
+      "proposed",
+      "https://github.com/o/r",
+      { specPathHarvest: harvest },
+    );
+    const plan = vbrief.plan as Record<string, unknown>;
+    const meta = (plan.metadata ?? {}) as Record<string, unknown>;
+    expect(Object.hasOwn(meta, ISSUE_BODY_KEY)).toBe(true);
+    expect(meta[ISSUE_BODY_KEY]).toBe("");
+    expect((plan.narratives as Record<string, string>).Overview).toContain(
+      "Replace Overview with harvest remainder",
+    );
   });
 });
 
@@ -2681,4 +2838,380 @@ describe("#4119 plan.id mint, admission, and repair", () => {
     },
     process.platform === "win32" ? 240_000 : 15_000,
   );
+});
+
+describe("ingestOne residual mode (#5177 Prefer-A)", () => {
+  const residualLeanId = 5913432618;
+  const residualTableId = 5913490001;
+  const residualSynthesisId = 5913491364;
+  const residualArcThread = [
+    {
+      id: residualLeanId,
+      body: "**Lean:** Prefer-A residual re-ingest Bound.\n",
+    },
+    {
+      id: residualTableId,
+      body: "## Verified-claims table\n",
+    },
+    {
+      id: residualSynthesisId,
+      body:
+        "design-critique: synthesis accepted, because agents agreed (empty disagreement set)\n\n" +
+        `Bound contract: successor lean ${residualLeanId}, verified-claims table ${residualTableId}.\n`,
+    },
+  ];
+
+  function residualIssue(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 5453269518,
+      number: 4544,
+      title: "residual reopen",
+      state: "open",
+      url: "https://github.com/o/r/issues/4544",
+      labels: [],
+      [ISSUE_COMMENT_THREAD_KEY]: residualArcThread,
+      ...overrides,
+    };
+  }
+
+  function writeOwnedCompleted(xbriefDir: string, issue: number, restId: number): void {
+    const dir = join(xbriefDir, "completed");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, `2026-09-23-${issue}-shipped.xbrief.json`),
+      JSON.stringify({
+        xBRIEFInfo: {
+          version: "0.8",
+          description: `Scope xBRIEF ingested from GitHub issue #${issue}`,
+        },
+        plan: {
+          title: `shipped ${issue}`,
+          id: `github.issue.${restId}`,
+          status: "completed",
+          narratives: {
+            Origin: `Ingested from https://github.com/o/r/issues/${issue}`,
+          },
+          metadata: {
+            "x-directive/plan-id": {
+              version: 1,
+              source: "github-rest-id",
+              github_issue_id: restId,
+              origin: `o/r#${issue}`,
+              id: `github.issue.${restId}`,
+            },
+          },
+          references: [
+            {
+              uri: `https://github.com/o/r/issues/${issue}`,
+              type: "x-xbrief/github-issue",
+            },
+          ],
+        },
+      }),
+      "utf8",
+    );
+  }
+
+  it("names residual recovery on completed duplicate without --residual", () => {
+    const root = mkdtempSync(join(tmpdir(), "5177-dup-"));
+    const xbriefDir = join(root, "xbrief");
+    mkdirSync(xbriefDir, { recursive: true });
+    try {
+      writeOwnedCompleted(xbriefDir, 4544, 5453269518);
+      const [result, , msg] = ingestOne(
+        {
+          id: 5453269518,
+          number: 4544,
+          title: "reopen",
+          state: "open",
+          url: "https://github.com/o/r/issues/4544",
+          labels: [],
+        },
+        {
+          vbriefDir: xbriefDir,
+          status: "proposed",
+          repoUrl: "https://github.com/o/r",
+          cwd: root,
+          scmCall: () => completed("[]", "", 0),
+        },
+      );
+      expect(result).toBe("duplicate");
+      expect(msg).toContain("issue:ingest --residual -- 4544");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("mints a lean-scoped residual plan.id beside completed history", () => {
+    const root = mkdtempSync(join(tmpdir(), "5177-mint-"));
+    const xbriefDir = join(root, "xbrief");
+    mkdirSync(xbriefDir, { recursive: true });
+    try {
+      writeOwnedCompleted(xbriefDir, 4544, 5453269518);
+      const [result, path, msg] = ingestOne(residualIssue(), {
+        vbriefDir: xbriefDir,
+        status: "proposed",
+        repoUrl: "https://github.com/o/r",
+        cwd: root,
+        residual: true,
+        scmCall: () => completed("[]", "", 0),
+      });
+      expect(result).toBe("created");
+      expect(path).toBeTruthy();
+      const parsed = JSON.parse(readFileSync(path as string, "utf8")) as {
+        plan: Record<string, unknown>;
+      };
+      const plan = parsed.plan;
+      expect(plan.id).toBe(`github.issue.residual.5453269518.lean.${residualLeanId}`);
+      expect(plan.id).not.toBe("github.issue.5453269518");
+      const meta = (plan.metadata as Record<string, unknown>)["x-directive/plan-id"] as Record<
+        string,
+        unknown
+      >;
+      expect(meta.source).toBe("github-residual");
+      const lineage = (plan.metadata as Record<string, unknown>)[
+        "x-directive/residual-lineage"
+      ] as Record<string, unknown>;
+      expect(lineage.predecessor_plan_id).toBe("github.issue.5453269518");
+      expect(lineage.bound_lean_comment_id).toBe(residualLeanId);
+      expect(String(lineage.predecessor_path)).toContain("completed/");
+      expect(msg).toContain("residual plan.id=");
+      expect(existsSync(join(xbriefDir, "completed"))).toBe(true);
+      expect(readdirSync(join(xbriefDir, "completed")).length).toBeGreaterThan(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses residual mint when Bound leanCommentId is unresolved", () => {
+    const root = mkdtempSync(join(tmpdir(), "5177-no-lean-"));
+    const xbriefDir = join(root, "xbrief");
+    mkdirSync(xbriefDir, { recursive: true });
+    try {
+      writeOwnedCompleted(xbriefDir, 4544, 5453269518);
+      const [result, , msg] = ingestOne(residualIssue({ [ISSUE_COMMENT_THREAD_KEY]: [] }), {
+        vbriefDir: xbriefDir,
+        status: "proposed",
+        repoUrl: "https://github.com/o/r",
+        cwd: root,
+        residual: true,
+        scmCall: () => completed("[]", "", 0),
+      });
+      expect(result).toBe("refused");
+      expect(msg).toMatch(/leanCommentId not resolved/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a second residual mint when one is already non-terminal", () => {
+    const root = mkdtempSync(join(tmpdir(), "5177-second-"));
+    const xbriefDir = join(root, "xbrief");
+    mkdirSync(xbriefDir, { recursive: true });
+    try {
+      writeOwnedCompleted(xbriefDir, 4544, 5453269518);
+      const [first] = ingestOne(residualIssue(), {
+        vbriefDir: xbriefDir,
+        status: "proposed",
+        repoUrl: "https://github.com/o/r",
+        cwd: root,
+        residual: true,
+        scmCall: () => completed("[]", "", 0),
+      });
+      expect(first).toBe("created");
+      const [second, , msg] = ingestOne(residualIssue({ title: "residual reopen again" }), {
+        vbriefDir: xbriefDir,
+        status: "proposed",
+        repoUrl: "https://github.com/o/r",
+        cwd: root,
+        residual: true,
+        scmCall: () => completed("[]", "", 0),
+      });
+      expect(second).toBe("duplicate");
+      expect(msg).toContain("residual already admitted");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("records the selected completed brief's actual planId in residual lineage", () => {
+    const root = mkdtempSync(join(tmpdir(), "5177-lineage-"));
+    const xbriefDir = join(root, "xbrief");
+    mkdirSync(xbriefDir, { recursive: true });
+    try {
+      const dir = join(xbriefDir, "completed");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "2026-09-23-4544-fallback.xbrief.json"),
+        JSON.stringify({
+          xBRIEFInfo: {
+            version: "0.8",
+            description: "Scope xBRIEF ingested from GitHub issue #4544",
+          },
+          plan: {
+            title: "shipped fallback",
+            id: "github.issue.fallback.o.r.4544",
+            status: "completed",
+            narratives: {
+              Origin: "Ingested from https://github.com/o/r/issues/4544",
+            },
+            metadata: {
+              "x-directive/plan-id": {
+                version: 1,
+                source: "github-repo-fallback",
+                github_issue_id: null,
+                origin: "o/r#4544",
+                id: "github.issue.fallback.o.r.4544",
+              },
+            },
+            references: [
+              {
+                uri: "https://github.com/o/r/issues/4544",
+                type: "x-xbrief/github-issue",
+              },
+            ],
+          },
+        }),
+        "utf8",
+      );
+      const [result, path] = ingestOne(residualIssue(), {
+        vbriefDir: xbriefDir,
+        status: "proposed",
+        repoUrl: "https://github.com/o/r",
+        cwd: root,
+        residual: true,
+        scmCall: () => completed("[]", "", 0),
+      });
+      expect(result).toBe("created");
+      const parsed = JSON.parse(readFileSync(path as string, "utf8")) as {
+        plan: Record<string, unknown>;
+      };
+      const lineage = (parsed.plan.metadata as Record<string, unknown>)[
+        "x-directive/residual-lineage"
+      ] as Record<string, unknown>;
+      expect(lineage.predecessor_plan_id).toBe("github.issue.fallback.o.r.4544");
+      expect(lineage.predecessor_plan_id).not.toBe("github.issue.5453269518");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lineages a later completed residual, not the original ship", () => {
+    const root = mkdtempSync(join(tmpdir(), "5177-lineage-latest-"));
+    const xbriefDir = join(root, "xbrief");
+    mkdirSync(xbriefDir, { recursive: true });
+    try {
+      const dir = join(xbriefDir, "completed");
+      mkdirSync(dir, { recursive: true });
+      writeOwnedCompleted(xbriefDir, 4544, 5453269518);
+      writeFileSync(
+        join(dir, "2026-09-30-4544-residual-shipped.xbrief.json"),
+        JSON.stringify({
+          xBRIEFInfo: {
+            version: "0.8",
+            description: "Scope xBRIEF ingested from GitHub issue #4544",
+          },
+          plan: {
+            title: "residual shipped",
+            id: "github.issue.residual.5453269518.lean.9",
+            status: "completed",
+            narratives: {
+              Origin: "Ingested from https://github.com/o/r/issues/4544",
+            },
+            metadata: {
+              "x-directive/plan-id": {
+                version: 1,
+                source: "github-residual",
+                github_issue_id: 5453269518,
+                origin: "o/r#4544",
+                id: "github.issue.residual.5453269518.lean.9",
+              },
+            },
+            references: [
+              {
+                uri: "https://github.com/o/r/issues/4544",
+                type: "x-xbrief/github-issue",
+              },
+            ],
+          },
+        }),
+        "utf8",
+      );
+      const [result, path] = ingestOne(residualIssue({ title: "second residual reopen" }), {
+        vbriefDir: xbriefDir,
+        status: "proposed",
+        repoUrl: "https://github.com/o/r",
+        cwd: root,
+        residual: true,
+        scmCall: () => completed("[]", "", 0),
+      });
+      expect(result).toBe("created");
+      const parsed = JSON.parse(readFileSync(path as string, "utf8")) as {
+        plan: Record<string, unknown>;
+      };
+      const lineage = (parsed.plan.metadata as Record<string, unknown>)[
+        "x-directive/residual-lineage"
+      ] as Record<string, unknown>;
+      expect(lineage.predecessor_plan_id).toBe("github.issue.residual.5453269518.lean.9");
+      expect(lineage.predecessor_plan_id).not.toBe("github.issue.5453269518");
+      expect(String(lineage.predecessor_path)).toContain("2026-09-30-4544-residual-shipped");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses residual mint when only a foreign-repo same-number completed brief exists", () => {
+    const root = mkdtempSync(join(tmpdir(), "5177-cross-repo-"));
+    const xbriefDir = join(root, "xbrief");
+    mkdirSync(xbriefDir, { recursive: true });
+    try {
+      const dir = join(xbriefDir, "completed");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, "2026-09-23-4544-foreign.xbrief.json"),
+        JSON.stringify({
+          xBRIEFInfo: {
+            version: "0.8",
+            description: "Scope xBRIEF ingested from GitHub issue #4544",
+          },
+          plan: {
+            title: "foreign shipped",
+            id: "github.issue.99",
+            status: "completed",
+            narratives: {
+              Origin: "Ingested from https://github.com/other/repo/issues/4544",
+            },
+            metadata: {
+              "x-directive/plan-id": {
+                version: 1,
+                source: "github-rest-id",
+                github_issue_id: 99,
+                origin: "other/repo#4544",
+                id: "github.issue.99",
+              },
+            },
+            references: [
+              {
+                uri: "https://github.com/other/repo/issues/4544",
+                type: "x-xbrief/github-issue",
+              },
+            ],
+          },
+        }),
+        "utf8",
+      );
+      const [result, , msg] = ingestOne(residualIssue(), {
+        vbriefDir: xbriefDir,
+        status: "proposed",
+        repoUrl: "https://github.com/o/r",
+        cwd: root,
+        residual: true,
+        scmCall: () => completed("[]", "", 0),
+      });
+      expect(result).toBe("refused");
+      expect(msg).toMatch(/no owned completed/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

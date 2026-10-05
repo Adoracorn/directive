@@ -110,6 +110,11 @@ describe("gate-lists (#2791)", () => {
     expect(framework).not.toContain("verify:completed-tracked");
   });
 
+  it("includes verify:presentation-coverage on framework and consumer lists (#5079)", () => {
+    expect(FRAMEWORK_CHECK_GATES.map(checkGateId)).toContain("verify:presentation-coverage");
+    expect(CONSUMER_CHECK_GATES.map(checkGateId)).toContain("verify:presentation-coverage");
+  });
+
   it("includes verify:telemetry-coverage on the framework list only (#3362)", () => {
     expect(FRAMEWORK_CHECK_GATES.map(checkGateId)).toContain("verify:telemetry-coverage");
     expect(CONSUMER_CHECK_GATES.map(checkGateId)).not.toContain("verify:telemetry-coverage");
@@ -123,6 +128,34 @@ describe("gate-lists (#2791)", () => {
   it("includes verify:closing-keywords on the framework list only (#3969)", () => {
     expect(FRAMEWORK_CHECK_GATES.map(checkGateId)).toContain("verify:closing-keywords");
     expect(CONSUMER_CHECK_GATES.map(checkGateId)).not.toContain("verify:closing-keywords");
+  });
+
+  it("includes verify:changelog-unreleased on the framework list only (#633)", () => {
+    expect(FRAMEWORK_CHECK_GATES.map(checkGateId)).toContain("verify:changelog-unreleased");
+    expect(CONSUMER_CHECK_GATES.map(checkGateId)).not.toContain("verify:changelog-unreleased");
+    expect(gatesForCheckTarget("check:framework-source").map(checkGateId)).toContain(
+      "verify:changelog-unreleased",
+    );
+    expect(gatesForCheckTarget("check:consumer").map(checkGateId)).not.toContain(
+      "verify:changelog-unreleased",
+    );
+  });
+
+  it("Taskfile check:framework-source lists verify:changelog-unreleased (#633)", () => {
+    const here = fileURLToPath(new URL(".", import.meta.url));
+    const taskfile = readFileSync(join(resolve(here, "../../../../"), "Taskfile.yml"), "utf8");
+    const start = taskfile.indexOf("check:framework-source:");
+    expect(start).toBeGreaterThan(-1);
+    const rest = taskfile.slice(start);
+    const cmds = rest.indexOf("cmds:");
+    const deps = cmds === -1 ? rest : rest.slice(0, cmds);
+    expect(deps).toContain("- verify:changelog-unreleased");
+    const consumerStart = taskfile.indexOf("check:consumer:");
+    expect(consumerStart).toBeGreaterThan(-1);
+    const consumerRest = taskfile.slice(consumerStart);
+    const consumerCmds = consumerRest.indexOf("cmds:");
+    const consumerDeps = consumerCmds === -1 ? consumerRest : consumerRest.slice(0, consumerCmds);
+    expect(consumerDeps).not.toContain("verify:changelog-unreleased");
   });
 
   it("omits verify:docs-impact from CONSUMER_CHECK_GATES (#4356)", () => {
@@ -197,6 +230,8 @@ describe("gate-lists (#2791)", () => {
       "verify:evaluator-surface",
       "verify:observable-scope",
       "verify:intent-constraint",
+      "verify:presentation-ceiling",
+      "verify:durable-effect-acquisition",
     ]) {
       expect(framework).toContain(gate);
       expect(consumer).toContain(gate);

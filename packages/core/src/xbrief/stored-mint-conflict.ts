@@ -17,6 +17,7 @@ import {
   resolveIngestProvenanceOwner,
 } from "../intake/issue-ingest.js";
 import { type IssueOrigin, issueOriginKey } from "../intake/reconcile-issues.js";
+import { residualIdMatchesRestIssue } from "../intake/residual-identity.js";
 import { extractPlanId } from "../scope/parent-lineage.js";
 
 export const ADOPT_STORED_PLAN_ID_VERB = "xbrief:adopt-stored-plan-id";
@@ -84,7 +85,11 @@ export function readStoredPlanIdBinding(plan: Record<string, unknown>): StoredPl
     return { kind: "malformed", detail: "stored plan-id binding version is not supported." };
   }
   const source = binding.source;
-  if (source !== "github-rest-id" && source !== "github-repo-fallback") {
+  if (
+    source !== "github-rest-id" &&
+    source !== "github-repo-fallback" &&
+    source !== "github-residual"
+  ) {
     return {
       kind: "malformed",
       detail: "stored plan-id binding source is not a known mint source.",
@@ -105,13 +110,26 @@ export function readStoredPlanIdBinding(plan: Record<string, unknown>): StoredPl
   if (typeof id !== "string" || id.trim().length === 0) {
     return { kind: "malformed", detail: "stored plan-id binding id is malformed." };
   }
-  if (source === "github-rest-id") {
+  if (source === "github-rest-id" || source === "github-residual") {
     if (typeof binding.github_issue_id !== "number") {
       return { kind: "malformed", detail: "stored plan-id binding github_issue_id is malformed." };
     }
     const restId = parsePositiveGithubIssueId(binding.github_issue_id);
     if (restId === null) {
       return { kind: "malformed", detail: "stored plan-id binding github_issue_id is malformed." };
+    }
+    if (source === "github-residual") {
+      const residualOk = /^github\.issue\.residual\.\d+(?:\.lean\.\d+)?$/.test(id.trim());
+      if (
+        !residualOk ||
+        id.trim() === `github.issue.${restId}` ||
+        !residualIdMatchesRestIssue(id.trim(), restId)
+      ) {
+        return {
+          kind: "malformed",
+          detail: "stored residual plan-id binding id does not match github_issue_id.",
+        };
+      }
     }
     return {
       kind: "ok",
@@ -164,6 +182,19 @@ function bindingConflictDetail(
     }
     return null;
   }
+  if (binding.source === "github-residual") {
+    const residualOk = /^github\.issue\.residual\.\d+(?:\.lean\.\d+)?$/.test(binding.id);
+    const rest = binding.githubIssueId;
+    if (
+      !residualOk ||
+      rest === null ||
+      binding.id === `github.issue.${rest}` ||
+      !residualIdMatchesRestIssue(binding.id, rest)
+    ) {
+      return `stored residual plan-id ${binding.id} disagrees with github_issue_id ${binding.githubIssueId}.`;
+    }
+    return null;
+  }
   const origin = parseOriginKey(binding.origin);
   if (origin === null) {
     return "stored plan-id origin is not a canonical origin key.";
@@ -192,6 +223,10 @@ function bindingConflictDetail(
 /**
  * Stored-mint conflict for one artifact. Null when there is no parsed binding
  * or the binding agrees. Does not scan sibling briefs.
+ *
+ * Residual REST-segment mismatches are parse-malformed so adopt refuses them;
+ * they still surface here so xbrief:verify rejects instead of silent-accepting
+ * via malformed→null (#5177 Prefer-A).
  */
 export function storedMintIdentityConflict(
   data: Record<string, unknown>,
@@ -199,6 +234,12 @@ export function storedMintIdentityConflict(
   const plan = asPlanRecord(data);
   if (plan === null) return null;
   const parsed = readStoredPlanIdBinding(plan);
+  if (parsed.kind === "malformed") {
+    if (parsed.detail.includes("does not match github_issue_id")) {
+      return { detail: parsed.detail, disagree: false };
+    }
+    return null;
+  }
   if (parsed.kind !== "ok") return null;
   const planId = extractPlanId(data);
   const detail = bindingConflictDetail(parsed.binding, planId, data);

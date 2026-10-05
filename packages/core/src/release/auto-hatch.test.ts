@@ -3,8 +3,10 @@ import {
   buildCoverageDebtIssueDraft,
   classifyCoverageMetrics,
   classifyStep5Failure,
+  countFailedTestsFromSanitizedOutput,
   evaluateAutoHatch,
   extractCoverageDebtCitationsFromChangelog,
+  extractSkipCiIncidentCitationsFromChangelog,
   filterOpenCoverageDebtIssues,
   formatAutoHatchBanner,
   issueHasCoverageDebtMarkers,
@@ -93,6 +95,17 @@ describe("classifyStep5Failure", () => {
     ).toBe("REAL_FAILURE");
   });
 
+  it("classifies REAL_FAILURE from failedTests even when reason is thin (#4244)", () => {
+    expect(
+      classifyStep5Failure({
+        output: "task check failed (exit 1)",
+        totals: hairlineTotals,
+        exitCode: 1,
+        failedTests: 1,
+      }),
+    ).toBe("REAL_FAILURE");
+  });
+
   it("classifies UNKNOWN when unparseable", () => {
     expect(classifyStep5Failure({ output: "task check failed (exit 1)" })).toBe("UNKNOWN");
     expect(classifyStep5Failure({})).toBe("UNKNOWN");
@@ -162,6 +175,19 @@ describe("ledger helpers", () => {
       "no debt",
     ].join("\n");
     expect(extractCoverageDebtCitationsFromChangelog(cl)).toEqual([3103, 3185]);
+  });
+
+  it("extracts skip-ci spend citations (#5239 S1)", () => {
+    const cl = [
+      "## [Unreleased]",
+      "",
+      "## [0.119.13]",
+      "skipped with --allow-skip-ci=5239",
+      "",
+      "## [0.119.10]",
+      "allow-skip-ci=#5107",
+    ].join("\n");
+    expect(extractSkipCiIncidentCitationsFromChangelog(cl)).toEqual([5107, 5239]);
   });
 
   it("merges ledger sets", () => {
@@ -258,6 +284,17 @@ describe("draft + banner + reason helpers", () => {
     expect(parseExitCodeFromReason("task check failed (exit 1)")).toBe(1);
     expect(parseExitCodeFromReason("task check timed out after 20m")).toBeNull();
     expect(reasonLooksLikeTimeout("task check timed out after 20m")).toBe(true);
+  });
+
+  it("counts failed tests from sanitized cause or encoded reason (#4244)", () => {
+    expect(countFailedTestsFromSanitizedOutput("Tests 2 failed")).toBe(2);
+    expect(countFailedTestsFromSanitizedOutput("Tests  3 failed | 10 passed (13)")).toBe(3);
+    expect(countFailedTestsFromSanitizedOutput("task check failed (exit 1; 2 failed tests)")).toBe(
+      2,
+    );
+    expect(countFailedTestsFromSanitizedOutput("task check failed (exit 1)")).toBeNull();
+    expect(countFailedTestsFromSanitizedOutput("Test Files  1 failed (1)")).toBeNull();
+    expect(countFailedTestsFromSanitizedOutput("")).toBeNull();
   });
 });
 

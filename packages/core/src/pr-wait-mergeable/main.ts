@@ -1,4 +1,10 @@
 import { parseProtected } from "../pr-protected-issues/parse.js";
+import {
+  reportWaitHeartbeatWrite,
+  startWaitHeartbeatRefresher,
+  WAIT_HEARTBEAT_REFRESH_SECONDS,
+  writePrWatchWaitHeartbeat,
+} from "../pr-watch/main.js";
 import { waitMergeableAndMerge } from "./cascade.js";
 import { EXIT_CONFIG_ERROR, EXIT_MERGED, EXIT_TIMEOUT_OR_ESCALATION } from "./constants.js";
 import { toResultDict } from "./result.js";
@@ -153,6 +159,11 @@ export interface RunWaitMergeableOptions {
   readonly skipMergeApprovalHeadGate?: boolean;
   readonly fetchPrHeadShaFn?: Parameters<typeof waitMergeableAndMerge>[2]["fetchPrHeadShaFn"];
   readonly mergeApprovalHeadFn?: Parameters<typeof waitMergeableAndMerge>[2]["mergeApprovalHeadFn"];
+  /**
+   * Heartbeat refresh interval while the blocking monitor runs (#5020 P1).
+   * Defaults to {@link WAIT_HEARTBEAT_REFRESH_SECONDS}; injectable for tests.
+   */
+  readonly heartbeatRefreshSeconds?: number;
 }
 
 export function runWaitMergeable(
@@ -180,50 +191,85 @@ export function runWaitMergeable(
     return EXIT_CONFIG_ERROR;
   }
 
-  const result = waitMergeableAndMerge(args.prNumber as number, repo, {
-    capMinutes: args.capMinutes,
-    protected: protectedIssues,
-    protectedFn: options.protectedFn,
-    monitorFn: options.monitorFn,
-    mergeFn: options.mergeFn,
-    semanticGreenFn: options.semanticGreenFn,
-    cascadeMode: args.cascadeMode,
-    requireMasterCiGreen: args.requireMasterCiGreen,
-    baseBranch: args.baseBranch,
-    // Explicit CLI root (or cwd) so remote-target cascade does not resolve
-    // minGreptileConfidence from an unrelated directory (#3102).
-    projectRoot: args.projectRoot ?? process.cwd(),
-    skipHumanMergeGate: options.skipHumanMergeGate,
-    skipMergeApprovalHeadGate: options.skipMergeApprovalHeadGate,
-    fetchPrHeadShaFn: options.fetchPrHeadShaFn,
-    mergeApprovalHeadFn: options.mergeApprovalHeadFn,
+  const projectRoot = args.projectRoot ?? process.cwd();
+  const prNumber = args.prNumber as number;
+  const hbSink = (line: string): void => {
+    process.stderr.write(line.replace(/^pr_watch:/, "pr_wait_mergeable:"));
+  };
+  // Post-CLEAN live arm: same hasActivePollingHeartbeat seam as pr:watch (#5020).
+  reportWaitHeartbeatWrite(
+    writePrWatchWaitHeartbeat(projectRoot, prNumber, {
+      phase: "polling",
+      parentId: "pr-wait-mergeable",
+      lastMessage: "pr:wait-mergeable-and-merge running",
+    }),
+    hbSink,
+  );
+  // Refresh for the full wait lifetime — default cap is 60m but heartbeat
+  // stales at 30m if written only once before the blocking monitor (#5020 P1).
+  const refresher = startWaitHeartbeatRefresher(projectRoot, prNumber, {
+    parentId: "pr-wait-mergeable",
+    lastMessage: "pr:wait-mergeable-and-merge running",
+    intervalSeconds: options.heartbeatRefreshSeconds ?? WAIT_HEARTBEAT_REFRESH_SECONDS,
   });
 
-  const summaryLabel = summaryLabelForExit(result.exitCode);
-  process.stderr.write(
-    `[pr_wait_mergeable] PR #${result.prNumber} repo=${result.repo} ` +
-      `result=${summaryLabel} outcome=${result.outcome}\n`,
-  );
+  try {
+    const result = waitMergeableAndMerge(prNumber, repo, {
+      capMinutes: args.capMinutes,
+      protected: protectedIssues,
+      protectedFn: options.protectedFn,
+      monitorFn: options.monitorFn,
+      mergeFn: options.mergeFn,
+      semanticGreenFn: options.semanticGreenFn,
+      cascadeMode: args.cascadeMode,
+      requireMasterCiGreen: args.requireMasterCiGreen,
+      baseBranch: args.baseBranch,
+      // Explicit CLI root (or cwd) so remote-target cascade does not resolve
+      // minGreptileConfidence from an unrelated directory (#3102).
+      projectRoot,
+      skipHumanMergeGate: options.skipHumanMergeGate,
+      skipMergeApprovalHeadGate: options.skipMergeApprovalHeadGate,
+      fetchPrHeadShaFn: options.fetchPrHeadShaFn,
+      mergeApprovalHeadFn: options.mergeApprovalHeadFn,
+    });
 
-  if (args.emitJson) {
-    process.stdout.write(`${pythonJsonDumps(toResultDict(result))}\n`);
-  } else {
-    const lines: string[] = [];
-    lines.push(`PR #${result.prNumber} wait-mergeable-and-merge result: ${summaryLabel}`);
-    lines.push(`  outcome: ${result.outcome}`);
-    if (result.error !== null) {
-      lines.push(`  error:   ${result.error}`);
-    }
-    if (result.mergeStdout.trim().length > 0) {
-      lines.push("  merge stdout:");
-      for (const line of result.mergeStdout.trim().split("\n")) {
-        lines.push(`    ${line}`);
+    const summaryLabel = summaryLabelForExit(result.exitCode);
+    process.stderr.write(
+      `[pr_wait_mergeable] PR #${result.prNumber} repo=${result.repo} ` +
+        `result=${summaryLabel} outcome=${result.outcome}\n`,
+    );
+
+    if (args.emitJson) {
+      process.stdout.write(`${pythonJsonDumps(toResultDict(result))}\n`);
+    } else {
+      const lines: string[] = [];
+      lines.push(`PR #${result.prNumber} wait-mergeable-and-merge result: ${summaryLabel}`);
+      lines.push(`  outcome: ${result.outcome}`);
+      if (result.error !== null) {
+        lines.push(`  error:   ${result.error}`);
       }
+      if (result.mergeStdout.trim().length > 0) {
+        lines.push("  merge stdout:");
+        for (const line of result.mergeStdout.trim().split("\n")) {
+          lines.push(`    ${line}`);
+        }
+      }
+      process.stdout.write(`${lines.join("\n")}\n`);
     }
-    process.stdout.write(`${lines.join("\n")}\n`);
-  }
 
-  return result.exitCode;
+    return result.exitCode;
+  } finally {
+    refresher.stop();
+    reportWaitHeartbeatWrite(
+      writePrWatchWaitHeartbeat(projectRoot, prNumber, {
+        phase: "terminal",
+        terminalState: "exited",
+        parentId: "pr-wait-mergeable",
+        lastMessage: "pr:wait-mergeable-and-merge exited",
+      }),
+      hbSink,
+    );
+  }
 }
 
 export function cmdPrWaitMergeable(

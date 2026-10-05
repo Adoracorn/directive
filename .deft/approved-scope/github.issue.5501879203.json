@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "xbriefRelPath": "xbrief/active/2026-09-27-4774-uat-tester-4-pr-scope-verification-does-not-detect-unrelated.xbrief.json",
+  "planId": "github.issue.5501879203",
+  "approvedAt": "2026-09-27T15:24:43Z",
+  "fileScope": [
+    "CHANGELOG.md",
+    "packages/cli/src/verify-scope-provenance.ts",
+    "packages/core/src/scope-provenance/base-fence.test.ts",
+    "packages/core/src/scope-provenance/base-fence.ts",
+    "packages/core/src/scope-provenance/evaluate-git.test.ts",
+    "packages/core/src/scope-provenance/evaluate.test.ts",
+    "packages/core/src/scope-provenance/evaluate.ts",
+    "packages/core/src/scope-provenance/index.ts",
+    "packages/core/src/scope-provenance/intent.test.ts"
+  ],
+  "fileScopeDigest": "24c5868c6412b7eb34445e9b9f805ed15f66e1a925988c7eee84cba74ef6a934",
+  "humanApproval": {
+    "kind": "operator",
+    "actor": "Scott",
+    "mintedAt": "2026-09-27T15:24:43Z",
+    "mintedVia": "scope:record-approved-scope"
+  },
+  "intentDigest": "25f44bf504f4330818cafc24f0ba2d960d3f3f403221d5773822c4831b30499d",
+  "digestAlgo": "intent-extract-v1"
+}
