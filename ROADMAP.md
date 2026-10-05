@@ -30,36 +30,34 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 - **#1299** -- When to use CRUD tool vs direct vBRIEF authoring (contributor doc) -- `[proposed]`
 - **#2651** -- ADR-002: Forge-provider Azure DevOps adoption gate (proposed) -- `[proposed]`
 - **#3014** -- research(deposit): opt-in minimal consumer AGENTS profile for app-bank / greenfield -- `[proposed]`
-- **#3729** -- bug(session): the occupancy lease is exclusion-only -- an agent that never claims is never gated -- `[proposed]`
-- **#3739** -- bug(hooks): nested hosts get a 5s budget the framework itself calls too small, and a killed hook renders identically to an allow -- `[proposed]`
 
 ## Completed
 
-_Showing 25 of 1729 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1752 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- **#5355** -- [framework-gap] Interview regression coverage does not exercise phase drift and proposal growth across turns -- `[completed]`
+- **#5354** -- [framework-gap] Canonical interview strategy contradicts setup on PRD authority and scope promotion -- `[completed]`
+- **#5353** -- [framework-gap] Interview progress rules hide remaining scope while enforcing one-question-at-a-time interaction -- `[completed]`
+- **#5352** -- [framework-gap] Design interview revisions and handoffs do not preserve a bounded phase and approval scope -- `[completed]`
+- **#5351** -- [framework-gap] Full interview completion has no bounded material-decision contract -- `[completed]`
+- **#1589** -- epic: spec reconstruction + drift guard - Prefer-A Bound leftover after #5315 -- `[completed]`
+- **#5318** -- fix(swarm): fail closed when cohort PRs lack live Approach 1 babysitters -- `[completed]`
+- **#3739** -- bug(hooks): nested hosts get a 5s budget the framework itself calls too small, and a killed hook renders identically to an allow -- `[completed]`
+- **#5233** -- ARC ingest-ready can pass adverse pain audits without required follow-through -- `[completed]`
+- **#5326** -- feat(design-critique): ensure consumer catalog chip labels and judgmentGates (skill soft-misses today) -- `[completed]`
+- **#5321** -- bug(harness): host agent memory must not override Directive process SoT without USER.md consent -- `[completed]`
+- **#1164** -- feat(coding): two testing rules missing from coding/testing.md — test integrity + mock boundary -- `[completed]`
+- **#1511** -- Flip #1419 agentic-prioritization gates from advisory to enforce mode (advise -> observe -> block) -- `[completed]`
+- **#1492** -- RFC: promote the system-of-record gate from advisory to wired (schema home, gate tier, sentinel integration) -- `[completed]`
+- **#3675** -- fix(scope): delivery gate accepts any delivery-branch ancestor as merge evidence -- `[completed]`
+- **#1613** -- feat(vbrief,build): STOP conditions on vBRIEF task items — halt and report when preconditions fail -- `[completed]`
+- **#5278** -- bug(swarm,grok-build): parent-steer inbox exists but cancel/kill has no query-first preflight (#4286 leftover) -- `[completed]`
+- **#5281** -- policy(swarm,grok-build): gate host kill_command_or_subagent behind pre-cancel attestation (#5278 leftover) -- `[completed]`
+- **#3703** -- bug(swarm): verify:routing is a fail-closed pre-dispatch gate that nothing invokes -- `[completed]`
+- **#5284** -- bug(design-critique): SUPERSEDES_RE misses bold Recut-supersedes; bindLeanPredecessorValid blocks legitimate harvest Recuts (#5278 leftover) -- `[completed]`
+- **#3729** -- bug(session): the occupancy lease is exclusion-only -- an agent that never claims is never gated -- `[completed]`
+- **#5285** -- bug(release): v0.120.0 Windows Step 5 fail — presentation-coverage snapshot symlink EPERM -- `[completed]`
+- **#3715** -- leftover-complete: Prefer-A Bound #3715 after #5289 -- `[completed]`
 - **#4912** -- leftover(#633): pre-PR skill skip and omitted checklist stay undetectable -- `[completed]`
 - **#479** -- feat(vbrief,resilience): prevent false memory propagation and context rot in agent sessions -- `[completed]`
-- **#633** -- Make pre-PR quality gate deterministic (CI-enforced) instead of advisory -- `[completed]`
-- **#5239** -- bug(release): v0.119.13 Windows Step 5 hang under 60m at chronology.test.ts -- `[completed]`
-- **#3495** -- feat(lifecycle): nothing detects an issue closed by a merged PR with no xBRIEF — completed-tracked is blind to unscoped work -- `[completed]`
-- **#3819** -- bug(lifecycle): the completed-artifact guard checks that a transition stamp exists, not that its disposition is valid -- `[completed]`
-- **#3875** -- Route-table closeout invokers for prescribed merge paths (#3875) -- `[completed]`
-- **#3920** -- Workspace requirement_sources staleness at intake + verify:ac/completion (#3920) -- `[completed]`
-- **#548** -- fix(spec-render): ignore bare -- in parseIncludeScopesFlag (DCR R.548 residual) -- `[completed]`
-- **#5245** -- BLOCKER: 0.119.13 consumer upgrade rejects its marker/lock and corrupts binary assets -- `[completed]`
-- **#3921** -- investigation(session): thin prompts re-invoke session ritual ~2x - more turns and context, LESS lifecycle work; the consumer-realistic shape is the worse one and no instrument reports it -- `[completed]`
-- **#3921** -- fix(session): closed session_start trigger; refuse mint-on-steal -- `[completed]`
-- **#5251** -- bug(roadmap:render): ignore bare -- as outPath (POSIX separator mis-route) -- `[completed]`
-- **#4544** -- Fail-closed AGENTS header completion chokepoint after #5178 (DCR residual #4544) -- `[completed]`
-- **#3925** -- SECURITY: the #3322 oracle-integrity detector is self-certifiable - independent_rederivation is read from the agent-writable stream and filters the flag away; field transcript shows an agent identifying the bypass -- `[completed]`
-- **#4233** -- AppSec: 1 HIGH @ 7236655e -- Incomplete #3110: node/tsx can mint/suspend UAT while authz:* CLI denies -- `[completed]`
-- **#3944** -- bug(pr-watch,review-cycle): the merge-readiness verdict reports summary-only P1 counts, so CLEAN can coexist with an open inline P1 -- `[completed]`
-- **#3979** -- bug(harness,swarm): a subagent that does no work and claims success is recorded as a successful completion -- `[completed]`
-- **#4015** -- feat(consumer-check-contract): gate reachability on pull_request is unmodelled, so a skipped gate reads as clean -- `[completed]`
-- **#5192** -- [framework-gap] bug(scope): hard membership mint contradicts the shipped no-mint proceed contract -- `[completed]`
-- **#5229** -- recurrence(#5219): host monitor/shell watch still bypasses Approach 1 after merge-path-arm ship -- `[completed]`
-- **#4709** -- bug(authz): inactive-path grant-store Write plants operator-cli and reopens first-write -- `[completed]`
-- **#4244** -- bug(coverage): coverage-final.json is never produced — hatch, hotspots, and forward-coverage diff half have no producer -- `[completed]`
-- **#3884** -- bug(session,hooks): rebasing onto a moved master revokes a worker's edit authority, and the printed recovery requires a lease it must not take -- `[completed]`
-- **#5219** -- recurrence(#4821): Grok parent shell pr:watch is not Approach 1 babysit when spawn_subagent is available -- `[completed]`
 

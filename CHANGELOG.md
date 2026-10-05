@@ -16,6 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.121.0] - 2026-10-05
+
+> Spec reconstruction + advisory drift (#1589), cohort babysit inventory (#5318), host memory as external context (#5321), query-before-cancel (#5278), PlanItem stopConditions (#1613), SoR foundation (#1492), plus Windows presentation-coverage and related fixes.
+
+### Added
+
 - **Interview phase-boundary checks (#5355).** Detects unexpected proposals after an interview phase is complete, completion before required decisions are accepted, and lost deferrals or phase changes on resume. Tracking #5355.
 
 ### Fixed
@@ -6885,7 +6897,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.120.0...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.121.0...HEAD
+[0.121.0]: https://github.com/deftai/directive/compare/v0.120.0...v0.121.0
 [0.120.0]: https://github.com/deftai/directive/compare/v0.119.13...v0.120.0
 [0.119.13]: https://github.com/deftai/directive/compare/v0.119.12...v0.119.13
 [0.119.12]: https://github.com/deftai/directive/compare/v0.119.11...v0.119.12
