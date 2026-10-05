@@ -57,7 +57,10 @@ describe("contentRoot three operating modes (#11 S2 / @deftai/directive-content)
     return root;
   }
 
-  function installContentPackage(projectRoot: string): string {
+  function installContentPackage(
+    projectRoot: string,
+    options: { stageTemplates?: boolean } = {},
+  ): string {
     writeFileSync(join(projectRoot, "package.json"), '{"name":"fixture-project"}', "utf-8");
     const pkgDir = join(projectRoot, "node_modules", "@deftai", "directive-content");
     mkdirSync(pkgDir, { recursive: true });
@@ -66,6 +69,10 @@ describe("contentRoot three operating modes (#11 S2 / @deftai/directive-content)
       JSON.stringify({ name: CONTENT_PACKAGE_NAME, version: "0.0.0" }),
       "utf-8",
     );
+    if (options.stageTemplates !== false) {
+      mkdirSync(join(pkgDir, "templates"), { recursive: true });
+      writeFileSync(join(pkgDir, "templates", "agents-entry.md"), "# staged", "utf-8");
+    }
     return pkgDir;
   }
 
@@ -77,6 +84,42 @@ describe("contentRoot three operating modes (#11 S2 / @deftai/directive-content)
 
     expect(contentRoot(frameworkRoot)).toBe(pkgDir);
     expect(resolveContentPackageRoot(frameworkRoot)).toBe(pkgDir);
+  });
+
+  it("in-repo-vendored: ignores bare workspace content package without staged templates (#1589)", () => {
+    const project = freshProject();
+    const frameworkRoot = join(project, "directive-source");
+    mkdirSync(join(frameworkRoot, CONTENT_DIRNAME), { recursive: true });
+    writeFileSync(join(frameworkRoot, CONTENT_DIRNAME, "keep"), "", "utf-8");
+    const pkgDir = installContentPackage(project, { stageTemplates: false });
+
+    expect(resolveContentPackageRoot(frameworkRoot)).toBe(pkgDir);
+    expect(contentRoot(frameworkRoot)).toBe(join(frameworkRoot, CONTENT_DIRNAME));
+  });
+
+  it("in-repo-vendored: keeps content/ when package has only vbrief schemas (#1589)", () => {
+    const project = freshProject();
+    const frameworkRoot = join(project, "directive-source");
+    mkdirSync(join(frameworkRoot, CONTENT_DIRNAME, "templates"), { recursive: true });
+    writeFileSync(
+      join(frameworkRoot, CONTENT_DIRNAME, "templates", "agents-entry.md"),
+      "# keep",
+      "utf-8",
+    );
+    const pkgDir = installContentPackage(project, { stageTemplates: false });
+    mkdirSync(join(pkgDir, "vbrief", "schemas"), { recursive: true });
+
+    expect(contentRoot(frameworkRoot)).toBe(join(frameworkRoot, CONTENT_DIRNAME));
+  });
+
+  it("in-repo-vendored: prefers schemas-only content package when content/ is absent (#4310)", () => {
+    const project = freshProject();
+    const frameworkRoot = join(project, "directive-source");
+    mkdirSync(frameworkRoot, { recursive: true });
+    const pkgDir = installContentPackage(project, { stageTemplates: false });
+    mkdirSync(join(pkgDir, "vbrief", "schemas"), { recursive: true });
+
+    expect(contentRoot(frameworkRoot)).toBe(pkgDir);
   });
 
   it("in-repo-vendored: falls back to content/ when the npm package is absent", () => {

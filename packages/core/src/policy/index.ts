@@ -91,6 +91,7 @@ import {
   FIELD_RUNTIME_AUTHORITY_CLI_ALIAS,
   inspectRuntimeAuthority,
 } from "./runtime-authority.js";
+import { FIELD_SPEC_GUARD, FIELD_SPEC_GUARD_CLI_ALIAS, inspectSpecGuard } from "./spec-guard.js";
 import {
   FIELD_STALENESS_TICKLER,
   FIELD_STALENESS_TICKLER_CLI_ALIAS,
@@ -141,6 +142,7 @@ export * from "./require-human-merge.js";
 export * from "./resolve.js";
 export * from "./reviewers.js";
 export * from "./runtime-authority.js";
+export * from "./spec-guard.js";
 export * from "./staleness-tickler.js";
 export * from "./sync-default.js";
 export * from "./sync-max-files.js";
@@ -681,6 +683,19 @@ function inspectProjectInvariantsField(
   };
 }
 
+function inspectSpecGuardField(
+  data: Record<string, unknown> | null,
+  projectRoot?: string,
+): PolicyField {
+  const field = inspectSpecGuard(data, projectRoot);
+  return {
+    name: field.name,
+    current: field.current,
+    default: field.default,
+    source: field.source,
+  };
+}
+
 const REGISTERED_POLICIES: readonly Inspector[] = [
   inspectAllowDirectCommits,
   inspectDestructiveGhVerbsField,
@@ -735,6 +750,7 @@ const REGISTERED_POLICIES: readonly Inspector[] = [
   inspectSyncMaxFilesField,
   inspectForgeOutageRetryMinutesField,
   inspectProjectInvariantsField,
+  inspectSpecGuardField,
 ];
 
 /** Walk registered inspectors and return one row per field (#1148). */
@@ -790,7 +806,10 @@ export function inspectOnePolicy(name: string, projectRoot: string): PolicyField
                                               ? FIELD_FORGE_OUTAGE_RETRY_MINUTES
                                               : name === FIELD_PROJECT_INVARIANTS_CLI_ALIAS
                                                 ? FIELD_PROJECT_INVARIANTS
-                                                : name;
+                                                : name === FIELD_SPEC_GUARD_CLI_ALIAS ||
+                                                    name === FIELD_SPEC_GUARD
+                                                  ? FIELD_SPEC_GUARD
+                                                  : name;
   for (const field of inspectAllPolicies(projectRoot)) {
     if (field.name === normalized) return field;
   }

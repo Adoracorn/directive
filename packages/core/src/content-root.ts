@@ -21,10 +21,12 @@
  * without a branch. Mirrors scripts/_content_root.py::content_root.
  *
  * #11 / C4 adds a third source: when `@deftai/directive-content` is installed
- * in `node_modules`, the resolver prefers that package root (already flattened)
- * and falls back to the vendored `.deft/core/` deposit / in-repo `content/`
- * layout across in-repo-vendored, hybrid npm-engine, and external-workspace
- * operating modes.
+ * in `node_modules` **and has staged shippable content** (templates/ or skills/),
+ * the resolver prefers that package root (already flattened) and falls back to
+ * the vendored `.deft/core/` deposit / in-repo `content/` layout across
+ * in-repo-vendored, hybrid npm-engine, and external-workspace operating modes.
+ * A bare workspace `packages/content` package (package.json + stage-pack only)
+ * must not shadow in-repo `content/` (#1589 agents-md-freshness on CI).
  *
  * Refs #1875 (content/ move), #1669 (Wave-1 LockedDecisions C1 flatten), #11.
  */
@@ -73,18 +75,52 @@ export function resolveContentPackageRoot(searchFrom: string): string | null {
   return null;
 }
 
+function directoryExists(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True when an installed `@deftai/directive-content` root has staged shippable
+ * content (prepack / consumer deposit). The workspace `packages/content`
+ * package ships only `package.json` + `stage-pack.mjs` in git; preferring that
+ * empty root shadows in-repo `content/templates` and fails
+ * `agents-md-freshness` on rule-relocation PRs (#1589 CI).
+ * Agent markers are templates/skills. Flattened `vbrief/` alone is enough only
+ * when in-repo `content/` is absent (#4310 schemas-only deposits) so a
+ * schemas-only package cannot hide in-repo templates/skills (#1589).
+ */
+function contentPackageHasAgentContent(packageRoot: string): boolean {
+  return (
+    directoryExists(join(packageRoot, "templates")) || directoryExists(join(packageRoot, "skills"))
+  );
+}
+
+function contentPackageHasVbrief(packageRoot: string): boolean {
+  return directoryExists(join(packageRoot, "vbrief"));
+}
+
 /** Return the directory that holds flattened shippable content. */
 export function contentRoot(frameworkRoot: string): string {
   const packageRoot = resolveContentPackageRoot(frameworkRoot);
-  if (packageRoot) return packageRoot;
-
   const candidate = join(frameworkRoot, CONTENT_DIRNAME);
-  try {
-    if (statSync(candidate).isDirectory()) {
-      return candidate;
+  const hasInRepoContent = directoryExists(candidate);
+
+  if (packageRoot !== null) {
+    if (contentPackageHasAgentContent(packageRoot)) {
+      return packageRoot;
     }
-  } catch {
-    // No content/ dir -> consumer (flattened) deposit; fall through.
+    // Schemas-only npm root: prefer only when there is no competing content/.
+    if (contentPackageHasVbrief(packageRoot) && !hasInRepoContent) {
+      return packageRoot;
+    }
+  }
+
+  if (hasInRepoContent) {
+    return candidate;
   }
   return frameworkRoot;
 }
