@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Complete the #1589 scope brief after product #5315.** Record completion of the brief for shipped spec reconstruction and advisory drift checks. Enforce-mode work continues on #5350.
+
 - chore(xbrief): widen #1164 file_scope to include docs/RULE-MAP.md (Path B precommitment for product land).
 
 ### Added
