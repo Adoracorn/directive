@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interview phase-boundary checks (#5355).** Detects unexpected proposals after an interview phase is complete, completion before required decisions are accepted, and lost deferrals or phase changes on resume. Tracking #5355.
+
 ### Changed
 
 - **Interview strategy matches setup on PRD authority and promote (#5354).** Pack SoT + render remove Full-path Generate-PRD approval-gate and Light/Full promote-on-approval; approval leaves scopes in `proposed/`; `PRD.md` stays optional `task prd:render` export only. Workflow Overview routes through PROJECT-DEFINITION + proposed scopes (optional PRD export edge), not a PRD approval gate. Syncs `templates/make-spec.md`. Polarity content-contract locks strategy ↔ setup ↔ interview (including diagram). Tracking #5354.
