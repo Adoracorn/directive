@@ -11,8 +11,16 @@
  * marker, remediates via confirmed-Overview CAS when available, then evaluates
  * so refuse conjuncts are reached without depending on the agent remembering
  * to stamp or invoke check / verify:consumer-header-placeholder by name.
+ *
+ * Residual after #5253 (Prefer-A Bound lean 6000271029): pin 7c775edf had only
+ * two production enforce callers (delivered codeBearing scope:complete;
+ * occupancy persistProductMutationMarker=true). Dirty/untracked product paths
+ * are additional this-session product-mutation evidence for weak stacks that
+ * skip those callers (hookless / Shell-bypass / no-marker exits). Process-only
+ * stays legal when neither marker nor dirty product paths exist.
  * Returned failure — no throw.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { containedWrite } from "../fs/contained-write.js";
@@ -46,6 +54,13 @@ export interface ConsumerHeaderPlaceholderSeams {
   readonly readAgentsMd?: () => AgentsMdReadResult | string | null;
   /** Test seam: force product-mutation boolean; skips durable-marker lookup. */
   readonly sessionChangedProductFiles?: boolean;
+  /**
+   * Test seam: force dirty-product evidence for reachability (#4544 residual).
+   * When set, skips git porcelain. undefined → probe the worktree.
+   */
+  readonly dirtyProductEvidence?: boolean;
+  /** Test seam: inject `git status --porcelain` (null = probe unknown). */
+  readonly gitPorcelain?: string | null;
 }
 
 export interface CompletionChokepointSeams {
@@ -74,6 +89,165 @@ export type ConsumerHeaderCompletionChokepointResult = {
   };
 };
 
+/** Deposit / Process-only path prefixes — not first-ship product evidence. */
+const NON_PRODUCT_PATH_PREFIXES = [
+  ".deft/",
+  ".deft-scratch/",
+  ".deft-cache/",
+  "xbrief/",
+  "vbrief/",
+  ".git/",
+  "node_modules/",
+  "dist/",
+  "coverage/",
+  ".planning/",
+  "temp/",
+  ".cursor/",
+  ".claude/",
+  ".codex/",
+  ".github/",
+] as const;
+
+const NON_PRODUCT_BASENAMES = new Set([
+  "AGENTS.md",
+  "Agents.md",
+  "CLAUDE.md",
+  "USER.md",
+  ".gitignore",
+  ".gitattributes",
+  ".no-deft-directive",
+  ".deft-directive-disable",
+  ".deft-run-summary.json",
+  // package.json / lockfiles ARE product evidence (#4544 Greptile P1): dependency-
+  // only sessions must not Process-only-pass scaffold edit-me.
+  "README.md",
+  "LICENSE",
+  "CHANGELOG.md",
+]);
+
+/**
+ * Greenfield smoke docs-impact body fixtures live only at the consumer root.
+ * Exact root paths stay Process-only so smoke stays Class-1-safe without an
+ * Overview seed in greenfield-python-free-smoke.ts; nested paths such as
+ * `src/docs-impact-valid.md` remain product evidence (#4544 Greptile P1).
+ */
+const ROOT_ONLY_NON_PRODUCT_PATHS = new Set(["docs-impact-invalid.md", "docs-impact-valid.md"]);
+
+function toPosixRel(rel: string): string {
+  // Git porcelain already uses `/`. On POSIX a literal `\` in a filename is
+  // valid; rewriting it to `/` would false-match deposit prefixes (e.g.
+  // `xbrief\app.ts` → `xbrief/…`). Only normalize separators on win32.
+  const normalized = process.platform === "win32" ? rel.replace(/\\/g, "/") : rel;
+  return normalized.replace(/^\.\//, "");
+}
+
+/** True when a relative path is deposit / Process-only, not product evidence. */
+export function isNonProductMutationPath(relPath: string): boolean {
+  const posix = toPosixRel(relPath);
+  if (posix.length === 0 || posix === ".") return true;
+  if (ROOT_ONLY_NON_PRODUCT_PATHS.has(posix)) return true;
+  const base = posix.includes("/") ? posix.slice(posix.lastIndexOf("/") + 1) : posix;
+  if (NON_PRODUCT_BASENAMES.has(base)) return true;
+  return NON_PRODUCT_PATH_PREFIXES.some(
+    (prefix) => posix === prefix.slice(0, -1) || posix.startsWith(prefix),
+  );
+}
+
+type PorcelainEntry = { readonly xy: string; readonly path: string };
+
+/** Strip git porcelain C-style quoting so path classifiers see real paths. */
+function unquotePorcelainPath(path: string): string {
+  if (path.length < 2 || path[0] !== '"' || path[path.length - 1] !== '"') {
+    return path;
+  }
+  return path.slice(1, -1).replace(/\\([\\"ntr])/g, (_m, c: string) => {
+    if (c === "n") return "\n";
+    if (c === "t") return "\t";
+    if (c === "r") return "\r";
+    return c;
+  });
+}
+
+function parsePorcelainEntries(stdout: string): PorcelainEntry[] {
+  const entries: PorcelainEntry[] = [];
+  for (const raw of stdout.replace(/\r\n/g, "\n").split("\n")) {
+    if (raw.length < 4) continue;
+    const xy = raw.slice(0, 2);
+    // XY<space>path  or  XY<space>old -> new
+    const entry = raw.slice(3);
+    if (entry.includes(" -> ")) {
+      const renamed = entry.split(" -> ").pop();
+      if (renamed !== undefined && renamed.length > 0) {
+        entries.push({ xy, path: unquotePorcelainPath(renamed) });
+      }
+    } else if (entry.length > 0) {
+      entries.push({ xy, path: unquotePorcelainPath(entry) });
+    }
+  }
+  return entries;
+}
+
+function parsePorcelainPaths(stdout: string): string[] {
+  return parsePorcelainEntries(stdout).map((e) => e.path);
+}
+
+function readGitPorcelainAtRoot(projectRoot: string): string | null {
+  try {
+    const result = spawnSync("git", ["status", "--porcelain", "-uall"], {
+      cwd: resolve(projectRoot),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    if (result.error || result.status !== 0) return null;
+    return typeof result.stdout === "string" ? result.stdout : "";
+  } catch {
+    return null;
+  }
+}
+
+export type DirtyProductEvidenceProbe =
+  | { readonly kind: "dirty" }
+  | { readonly kind: "clean" }
+  | { readonly kind: "unknown"; readonly detail: string };
+
+/**
+ * Product-mutation evidence beyond Prefer-A marker (#4544 residual).
+ * Any dirty/untracked porcelain path outside deposit/Process-only prefixes —
+ * catches hookless / Shell-bypass product writes (including tracked edits) that
+ * never stamped persistProductMutationMarker. Clean trees stay Process-only.
+ * Probe `unknown` (git unavailable) is returned distinctly so callers can
+ * choose fail-closed check vs non-stranding occupancy release.
+ */
+export function probeDirtyProductMutationEvidence(
+  projectRoot: string,
+  seams: { readonly dirtyProductEvidence?: boolean; readonly gitPorcelain?: string | null } = {},
+): DirtyProductEvidenceProbe {
+  if (seams.dirtyProductEvidence !== undefined) {
+    return seams.dirtyProductEvidence ? { kind: "dirty" } : { kind: "clean" };
+  }
+  const porcelain =
+    seams.gitPorcelain !== undefined ? seams.gitPorcelain : readGitPorcelainAtRoot(projectRoot);
+  if (porcelain === null) {
+    return {
+      kind: "unknown",
+      detail: "git status unavailable; cannot classify dirty product evidence",
+    };
+  }
+  for (const rel of parsePorcelainPaths(porcelain)) {
+    if (!isNonProductMutationPath(rel)) return { kind: "dirty" };
+  }
+  return { kind: "clean" };
+}
+
+/** True when probe reports dirty; unknown/clean are false (callers must handle unknown). */
+export function hasDirtyProductMutationEvidence(
+  projectRoot: string,
+  seams: { readonly dirtyProductEvidence?: boolean; readonly gitPorcelain?: string | null } = {},
+): boolean {
+  return probeDirtyProductMutationEvidence(projectRoot, seams).kind === "dirty";
+}
+
 function readAgentsMdAtRoot(projectRoot: string): AgentsMdReadResult {
   const path = join(projectRoot, "AGENTS.md");
   if (!existsSync(path)) return { kind: "missing" };
@@ -100,26 +274,26 @@ function normalizeNarrativeKey(key: string): string {
   return key.toLowerCase().replace(/[\s_-]+/g, "");
 }
 
-function resolveProjectDefinitionPath(projectRoot: string): string | null {
+/**
+ * Selected PROJECT-DEFINITION only — no cross-artifact Overview fallthrough.
+ * DEFT_PROJECT_PATH (when set) wins; else xbrief; else vbrief. Empty Overview
+ * on the selected file refuses (null); never read a sibling layout (#4544 P1).
+ */
+function selectedProjectDefinitionPath(projectRoot: string): string | null {
+  const root = resolve(projectRoot);
   const override = process.env.DEFT_PROJECT_PATH?.trim();
   if (override) {
     const configured = resolve(projectRoot, override);
     return existsSync(configured) ? configured : null;
   }
-  const migrated = join(resolve(projectRoot), "xbrief", "PROJECT-DEFINITION.xbrief.json");
+  const migrated = join(root, "xbrief", "PROJECT-DEFINITION.xbrief.json");
   if (existsSync(migrated)) return migrated;
-  const legacy = join(resolve(projectRoot), "vbrief", "PROJECT-DEFINITION.vbrief.json");
+  const legacy = join(root, "vbrief", "PROJECT-DEFINITION.vbrief.json");
   if (existsSync(legacy)) return legacy;
   return null;
 }
 
-/**
- * Confirmed Overview from PROJECT-DEFINITION narratives (setup Phase 3 CAS input).
- * Empty / missing Overview returns null — refuse path, not soft-missing pass.
- */
-export function readConfirmedOverviewAtRoot(projectRoot: string): string | null {
-  const path = resolveProjectDefinitionPath(projectRoot);
-  if (path === null) return null;
+function overviewFromProjectDefinitionFile(path: string): string | null {
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
     const root = asRecord(parsed);
@@ -136,6 +310,17 @@ export function readConfirmedOverviewAtRoot(projectRoot: string): string | null 
   } catch {
     return null;
   }
+}
+
+/**
+ * Confirmed Overview from the selected PROJECT-DEFINITION only (setup Phase 3).
+ * Empty / missing Overview on that artifact returns null — refuse path, not a
+ * soft pass via another layout's narratives (#4544 residual / Greptile P1).
+ */
+export function readConfirmedOverviewAtRoot(projectRoot: string): string | null {
+  const selected = selectedProjectDefinitionPath(projectRoot);
+  if (selected === null) return null;
+  return overviewFromProjectDefinitionFile(selected);
 }
 
 /** Evaluate the Prefer-A first-ship placeholder gate at a project root. */
@@ -171,9 +356,32 @@ export function evaluateConsumerHeaderPlaceholderAtRoot(
     });
   }
 
+  if (marker.kind === "present") {
+    return evaluateFirstShipHeaderPlaceholderGate({
+      agentsMd: agentsRead.kind === "ok" ? agentsRead.text : null,
+      productMutationCompletion: true,
+    });
+  }
+
+  // #4544 residual after #5253: dirty/untracked product paths are evidence for
+  // stacks that skipped occupancy persistProductMutationMarker / delivered
+  // complete. Reuse enforce (stamp + Overview CAS); do not invent a second
+  // evaluator. Git probe unknown → Process-only (cannot prove product dirt;
+  // Prefer-A marker still fail-closes when present/unreadable).
+  const dirtyProbe = probeDirtyProductMutationEvidence(projectRoot, {
+    dirtyProductEvidence: seams.dirtyProductEvidence,
+    gitPorcelain: seams.gitPorcelain,
+  });
+  if (dirtyProbe.kind === "dirty") {
+    const chokepoint = enforceConsumerHeaderPlaceholderAtCompletionChokepoint(projectRoot, {
+      readAgentsMd: seams.readAgentsMd,
+    });
+    return chokepoint.evaluation;
+  }
+
   return evaluateFirstShipHeaderPlaceholderGate({
     agentsMd: agentsRead.kind === "ok" ? agentsRead.text : null,
-    productMutationCompletion: marker.kind === "present",
+    productMutationCompletion: false,
   });
 }
 
@@ -420,4 +628,31 @@ export function enforceConsumerHeaderPlaceholderAtCompletionChokepoint(
       wroteAgentsMd,
     },
   };
+}
+
+/**
+ * Reachability wrapper: enforce when Prefer-A marker or dirty product evidence
+ * shows product mutation; skip (Process-only legal) when neither is present.
+ */
+export function enforceConsumerHeaderPlaceholderWhenProductEvidence(
+  projectRoot: string,
+  seams: CompletionChokepointSeams & {
+    readonly dirtyProductEvidence?: boolean;
+    readonly gitPorcelain?: string | null;
+  } = {},
+):
+  | ConsumerHeaderCompletionChokepointResult
+  | { readonly ok: true; readonly skipped: true; readonly reason: "no-product-evidence" } {
+  const marker = lookupProductMutationCompletion(projectRoot);
+  const dirtyProbe = probeDirtyProductMutationEvidence(projectRoot, {
+    dirtyProductEvidence: seams.dirtyProductEvidence,
+    gitPorcelain: seams.gitPorcelain,
+  });
+  // Git unavailable must not strand occupancy:release when no Prefer-A marker
+  // proves product mutation (#4544 P1). Unknown ≡ no proven product evidence.
+  const dirty = dirtyProbe.kind === "dirty";
+  if (marker.kind !== "present" && marker.kind !== "unreadable" && !dirty) {
+    return { ok: true, skipped: true, reason: "no-product-evidence" };
+  }
+  return enforceConsumerHeaderPlaceholderAtCompletionChokepoint(projectRoot, seams);
 }
