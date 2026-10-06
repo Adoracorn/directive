@@ -477,7 +477,8 @@
         "conflict_group": "occupancy-max-lease-overnight-reclaim",
         "targetDigest": "sha256:1fad898e2c73fd11d70df5f883add81b311da319a5dd462c53304301a034838e",
         "dispatchSha": "84b71a993e9d3246db16faad395e35f31120c9d3"
-      }
+      },
+      "productPullRequest": 5416
     },
     "acceptance": {
       "ambiguity_attestation": "none_found",
@@ -519,6 +520,6 @@
       ]
     },
     "id": "github.issue.5729564159",
-    "updated": "2026-10-06T14:57:25Z"
+    "updated": "2026-10-06T16:04:03.856Z"
   }
 }
