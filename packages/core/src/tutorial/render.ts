@@ -20,11 +20,17 @@ export interface TutorialBeat {
   readonly wired: boolean;
   readonly where: string;
   readonly about: string;
+  /** Shown on the write step after Plan/Done are accepted. */
+  readonly aboutAfterPlan?: string;
   readonly terms: readonly string[];
   readonly caveat: string;
   readonly output: string;
   readonly command: string | null;
   readonly next: string;
+  /** Shown on the write step after Plan/Done are accepted. */
+  readonly nextAfterPlan?: string;
+  /** Shown on the result step after the check has been run. */
+  readonly nextAfterCheck?: string;
 }
 
 export interface PracticeProject {
@@ -123,10 +129,16 @@ export function fillBeat(
     ...beat,
     where: fillSlots(beat.where, fields),
     about: fillSlots(beat.about, fields),
+    aboutAfterPlan:
+      beat.aboutAfterPlan === undefined ? undefined : fillSlots(beat.aboutAfterPlan, fields),
     caveat: fillSlots(beat.caveat, fields),
     output: fillSlots(beat.output, fields),
     command: beat.command === null ? null : fillSlots(beat.command, fields),
     next: fillSlots(beat.next, fields),
+    nextAfterPlan:
+      beat.nextAfterPlan === undefined ? undefined : fillSlots(beat.nextAfterPlan, fields),
+    nextAfterCheck:
+      beat.nextAfterCheck === undefined ? undefined : fillSlots(beat.nextAfterCheck, fields),
   };
 }
 
@@ -190,29 +202,44 @@ export function renderBeat(
   beat: TutorialBeat,
   glossary: ReadonlyMap<string, GlossaryEntry>,
   fields: Readonly<Record<string, string>> = {},
+  options: { readonly planAccepted?: boolean; readonly checkVerdict?: boolean } = {},
 ): string {
   const filled = fillBeat(beat, fields);
-  const words = filled.terms.map((term) => {
-    const entry = glossary.get(term);
-    if (entry === undefined) {
-      throw new Error(`tutorial glossary missing term: ${term}`);
-    }
-    return termBlock(entry);
-  });
-  const parts: string[] = [
-    filled.where,
-    "",
-    filled.about,
-    "",
-    ...words.flatMap((word) => [word, ""]),
-    `Something to keep in mind: ${filled.caveat}`,
-    "",
-  ];
-  if (filled.output.trim().length > 0) {
+  const useAfterPlan =
+    options.planAccepted === true &&
+    (filled.aboutAfterPlan !== undefined || filled.nextAfterPlan !== undefined);
+  const useAfterCheck =
+    options.checkVerdict === true && filled.nextAfterCheck !== undefined;
+  const about = useAfterPlan && filled.aboutAfterPlan !== undefined ? filled.aboutAfterPlan : filled.about;
+  let next = filled.next;
+  if (useAfterCheck && filled.nextAfterCheck !== undefined) {
+    next = filled.nextAfterCheck;
+  } else if (useAfterPlan && filled.nextAfterPlan !== undefined) {
+    next = filled.nextAfterPlan;
+  }
+  const parts: string[] = useAfterCheck
+    ? [filled.where, ""]
+    : [filled.where, "", about, ""];
+  // After Plan/Done is accepted, skip glossary + caveat — the person already read them.
+  // After the check runs, only show the verdict menu.
+  if (!useAfterPlan && !useAfterCheck) {
+    const words = filled.terms.map((term) => {
+      const entry = glossary.get(term);
+      if (entry === undefined) {
+        throw new Error(`tutorial glossary missing term: ${term}`);
+      }
+      return termBlock(entry);
+    });
+    parts.push(...words.flatMap((word) => [word, ""]));
+    parts.push(`Something to keep in mind: ${filled.caveat}`, "");
+  }
+  if (!useAfterCheck && filled.output.trim().length > 0) {
     parts.push(filled.output, "");
   }
-  parts.push(`Next: ${filled.next}`);
-  return parts.join("\n").replace(/\n{3,}/g, "\n\n");
+  if (next.trim().length > 0) {
+    parts.push(next);
+  }
+  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
 }
 
 export function renderWiredSession(

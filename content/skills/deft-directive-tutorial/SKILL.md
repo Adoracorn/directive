@@ -41,13 +41,23 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 
 ## Menu
 
-! After start, the person picks **Signal**, **Postcard**, or **Echo** (`deft tutorial:advance --project <id>`).
-! Every option uses the same seven steps. Only the toy changes.
+! After start, the person picks from a numbered menu: **1 Signal**, **2 Postcard**, **3 Echo**, or **4 Leave**.
+! Record a project pick with `deft tutorial:advance --project signal|postcard|echo` (or `1|2|3`).
+! Leave runs `deft tutorial:leave` (also `--project 4` / `--project leave` on advance).
+! Every project option uses the same seven steps. Only the toy changes.
 ! Practice work runs in `repoPath`, a disposable local Git repository.
+! On every later step the person may still leave (`deft tutorial:leave`).
 ⊗ Use the person's real project as the sandbox.
 ⊗ `git push`. ⊗ Open a pull request.
 
 ## Each step
+
+## Numbered choices
+
+! Whenever the person must pick, show a numbered menu (1, 2, 3…). Accept the number or the option label.
+! Include Leave on every choice menu where leaving is allowed.
+⊗ Ask for free yes/no/go prose when a numbered menu is defined on the step.
+
 
 ! Run `deft tutorial:inspect --json` or `deft tutorial:resume --json`.
 ! Say `beatText` as written.
@@ -57,16 +67,17 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 ! Record progress with `deft tutorial:advance` and the matching flags.
 ⊗ Move on when advance refuses.
 
-- Step 1 choose: `--project signal|postcard|echo`
-- Step 2 write: `--content "..." --work-item <path> --confirm`
-- Step 3 start: `--confirm`
-- Step 4 change: `--content-seen` (alias `--line-seen`)
-- Step 5 prove: `--check pass` or `--check fail` (fail stays on this step)
-- Step 6 close: `--complete` (only after a pass)
+- Step 1 choose: `--project signal|postcard|echo` (or `1|2|3`); Leave → `deft tutorial:leave`
+- Step 2 write: first `--confirm` (Plan/Done), then `--content "..." --work-item <path>`
+- Step 3 start: `--confirm` (menu: 1 Yes / 2 Leave)
+- Step 4 change: `--content-seen` (menu: 1 Go / 2 Leave)
+- Step 5 prove: menu 1 Go (run check), then 1 Yes verified / 2 No / 3 Leave → `--check pass|fail` (fail stays)
+- Step 6 close: `--complete` (menu: 1 Go / 2 Leave; only after a pass)
 - Step 7 leave: `advance` with no extra flags
 
 ## Progress
 
+! `deft tutorial:leave` records skipped and clears the sitting; explicit start still works.
 ! Progress is stored in user preferences (`tutorial-state.json` next to USER.md), not in the product project.
 ! `deft tutorial:reset` clears progress and does not re-fire the automatic offer by itself.
 ! Mid-tutorial `deft tutorial:skip` moves one step and does not mark the work done.
@@ -75,3 +86,4 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 
 ! Say whether the sitting is paused, skipped, or finished, and which step is current.
 ⊗ Claim the work is done before step 6 has closed it.
+

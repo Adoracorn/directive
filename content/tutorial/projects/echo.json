@@ -5,6 +5,7 @@
   "fields": {
     "name": "Echo",
     "contentExample": "Q: What is Directive? A: A step-by-step guide for building with AI.",
+    "contentPrompt": "Reply with a question and answer Echo should use — or using the example is fine.",
     "workSentence": "Echo answers one question with this reply.",
     "acceptanceSentence": "asking the question returns exactly that reply.",
     "ownedFiles": "echo.mjs, echo.test.mjs, and package.json",

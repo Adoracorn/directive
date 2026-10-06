@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import {
   advanceTutorial,
   loadTutorialState,
+  leaveTutorial,
   offerTutorial,
   resetTutorial,
   resumeTutorial,
@@ -35,6 +36,7 @@ const SUBCOMMANDS = [
   "advance",
   "resume",
   "skip",
+  "leave",
   "reset",
   "decline",
   "defer",
@@ -125,7 +127,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   const [subcommand, ...rest] = argv;
   if (subcommand === undefined || !isSubcommand(subcommand)) {
     io.writeErr(
-      "usage: deft tutorial:offer|start|inspect|advance|resume|skip|reset [--project signal|postcard|echo] [--json]\n",
+      "usage: deft tutorial:offer|start|inspect|advance|resume|skip|leave|reset [--project signal|postcard|echo|1|2|3] [--json]\n",
     );
     return 1;
   }
@@ -180,12 +182,69 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
       case "skip":
         step = skipBeat(state, beats);
         break;
+      case "leave":
+        step = leaveTutorial(state);
+        break;
       case "reset":
         step = resetTutorial(state);
         break;
-      case "advance":
+      case "advance": {
+        const projectFlag = flagValue(rest, "--project")?.trim().toLowerCase();
+        const leavePick =
+          projectFlag === "leave" ||
+          (state.currentBeat === "choose" && projectFlag === "4") ||
+          (state.currentBeat === "write" &&
+            !state.planAccepted &&
+            projectFlag === "3") ||
+          (state.currentBeat === "write" &&
+            state.planAccepted &&
+            (projectFlag === "2" || projectFlag === "3")) ||
+          ((state.currentBeat === "start" ||
+            state.currentBeat === "change" ||
+            state.currentBeat === "close") &&
+            projectFlag === "2") ||
+          (state.currentBeat === "result" && projectFlag === "2" && !hasFlag(rest, "--check")) ||
+          (state.currentBeat === "result" && projectFlag === "3");
+        if (leavePick) {
+          step = leaveTutorial(state);
+          break;
+        }
+        // Write step menu: 1 Yes / 2 No / 3 Leave (before Plan/Done is accepted).
+        if (state.currentBeat === "write" && !state.planAccepted) {
+          if (projectFlag === "2" || projectFlag === "no") {
+            step = {
+              ok: false,
+              message: "Plan or Done was not accepted. Stay on this step and adjust with the person.",
+              state,
+              beatId: state.currentBeat,
+              offerNow: false,
+            };
+            break;
+          }
+          if (projectFlag === "1" || projectFlag === "yes") {
+            step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
+            break;
+          }
+        }
+        // Start: 1 Yes → confirm
+        if (state.currentBeat === "start" && (projectFlag === "1" || projectFlag === "yes")) {
+          step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
+          break;
+        }
+        // Change: 1 Go → content seen
+        if (state.currentBeat === "change" && (projectFlag === "1" || projectFlag === "go")) {
+          step = advanceTutorial(state, beats, { ...actionFrom(rest), contentSeen: true });
+          break;
+        }
+        // Result: agent runs the check, then records --check pass|fail (numbered verdict menu).
+        // Close: 1 Go → complete
+        if (state.currentBeat === "close" && (projectFlag === "1" || projectFlag === "go")) {
+          step = advanceTutorial(state, beats, { ...actionFrom(rest), complete: true });
+          break;
+        }
         step = advanceTutorial(state, beats, actionFrom(rest));
         break;
+      }
       default:
         return 1;
     }
@@ -203,7 +262,11 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   const fields = projectFields(tutorial.projects, step.state.selectedProject);
   const filled = beat === undefined ? null : fillBeat(beat, fields);
   const beatText =
-    beat === undefined ? null : renderBeat(beat, tutorial.glossary, fields);
+    beat === undefined
+      ? null
+      : renderBeat(beat, tutorial.glossary, fields, {
+          planAccepted: step.state.planAccepted,
+        });
   const command = filled?.command ?? null;
 
   if (asJson) {

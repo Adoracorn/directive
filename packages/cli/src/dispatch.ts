@@ -375,6 +375,7 @@ export const TUTORIAL_ALIAS_SUBCOMMANDS: Readonly<Record<string, string>> = {
   "tutorial:advance": "advance",
   "tutorial:resume": "resume",
   "tutorial:skip": "skip",
+  "tutorial:leave": "leave",
   "tutorial:reset": "reset",
   "tutorial:decline": "decline",
   "tutorial:defer": "defer",

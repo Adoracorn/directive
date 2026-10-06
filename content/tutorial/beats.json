@@ -6,12 +6,12 @@
       "name": "Welcome & choose",
       "wired": true,
       "where": "Welcome to the Directive Tutorial! Step 1 of 7.",
-      "about": "Pick one practice project for this sitting. Each option teaches the same path; only the toy changes.\n\n1. Signal — a tiny CLI that prints your personal status line\n2. Postcard — a one-page local site that shows a short message\n3. Echo — a mini bot that answers one question with a reply you choose\n\nYour choice runs in a disposable local sandbox. This sitting does not push to GitHub.",
-      "terms": ["Directive"],
+      "about": "First, a quick word on Directive: it is the step-by-step guide that runs this sitting. It keeps a shared path so a later sitting can continue from the same place.\n\nPick one practice project. Each option teaches the same path; only the toy changes.\n\n1. Signal \u2014 a tiny CLI that prints your personal status line\n2. Postcard \u2014 a one-page local site that shows a short message\n3. Echo \u2014 a mini bot that answers one question with a reply you choose\n4. Leave \u2014 stop this sitting for now (you can start again later)\n\nYour choice runs in a disposable local sandbox. This sitting does not push to GitHub.",
+      "terms": [],
       "caveat": "Name and preferences stay in setup. This sitting does not ask those again.",
       "output": "",
       "command": null,
-      "next": "Reply with Signal, Postcard, or Echo."
+      "next": ""
     },
     {
       "id": "write",
@@ -19,12 +19,18 @@
       "name": "Write it down",
       "wired": true,
       "where": "Step 2 of 7.",
-      "about": "Next, the plan for {name} goes into a work file so it is not stuck in this chat. Two sentences will be written down.\n\nPlan: {workSentence}\nDone looks like: {acceptanceSentence}\n\nYour content for this toy: {contentExample}",
-      "terms": ["work file", "work item", "acceptance"],
+      "about": "Next, the plan for {name} goes into a work file so it is not stuck in this chat. Two sentences will be written down.\n\nPlan: {workSentence}\nDone looks like: {acceptanceSentence}",
+      "aboutAfterPlan": "Plan and Done are accepted. Now supply the toy content {name} should use.\n\nExample: {contentExample}",
+      "terms": [
+        "work file",
+        "work item",
+        "acceptance"
+      ],
       "caveat": "Writing it down is not permission to build yet.",
       "output": "",
       "command": null,
-      "next": "Reply with the content {name} should use (see the example), then say yes if the Plan and Done sentences look right."
+      "next": "Do Plan and Done look right?\n\n1. Yes\n2. No\n3. Leave",
+      "nextAfterPlan": "{contentPrompt}\n\n1. Use the example\n2. Leave"
     },
     {
       "id": "start",
@@ -33,11 +39,16 @@
       "wired": true,
       "where": "Step 3 of 7.",
       "about": "You are about to approve this one work item and start it. After you say yes, the work moves from proposed to ready, then into progress on its own branch so the change stays reviewable and easy to undo. Owned files for this item: {ownedFiles}.",
-      "terms": ["branch", "proposed", "ready", "in progress"],
-      "caveat": "Saying yes starts the work. This practice project stays on this machine — no GitHub push and no pull request.",
+      "terms": [
+        "branch",
+        "proposed",
+        "ready",
+        "in progress"
+      ],
+      "caveat": "Saying yes starts the work. This practice project stays on this machine \u2014 no GitHub push and no pull request.",
       "output": "",
       "command": "{startCommand}",
-      "next": "Say yes to confirm and start."
+      "next": "Ready to confirm and start?\n\n1. Yes\n2. Leave"
     },
     {
       "id": "change",
@@ -46,11 +57,13 @@
       "wired": true,
       "where": "Step 4 of 7.",
       "about": "Time to build. The session will change only what this work owns so {name} does its one job with your content. Nothing else.",
-      "terms": ["in-scope files"],
+      "terms": [
+        "in-scope files"
+      ],
       "caveat": "Do not add a second feature or a pull request. Only change {ownedFilesChange}.",
       "output": "",
       "command": "{testCommand}",
-      "next": "Say go. The session will write the files and run the local test."
+      "next": "Ready for the session to write the files and run the local test?\n\n1. Go\n2. Leave"
     },
     {
       "id": "result",
@@ -59,11 +72,15 @@
       "wired": true,
       "where": "Step 5 of 7.",
       "about": "Now run Directive's acceptance check. It reads the acceptance sentence on the work file and reports whether the result matches.",
-      "terms": ["check", "evidence"],
+      "terms": [
+        "check",
+        "evidence"
+      ],
       "caveat": "A green local test only means your own test passed. The acceptance check is separate. If it was not verified, stay on this step, fix the mismatch, and run the same check again.",
       "output": "",
       "command": "{verifyCommand}",
-      "next": "Say go to run the acceptance check, then say whether it verified."
+      "next": "Run the acceptance check?\n\n1. Go\n2. Leave",
+      "nextAfterCheck": "Did the acceptance check verify?\n\n1. Yes \u2014 verified\n2. No \u2014 not verified\n3. Leave"
     },
     {
       "id": "close",
@@ -72,11 +89,13 @@
       "wired": true,
       "where": "Step 6 of 7.",
       "about": "Mark the work finished only after the acceptance sentence was verified. Then the work list for this practice sitting is empty.",
-      "terms": ["done"],
+      "terms": [
+        "done"
+      ],
       "caveat": "Do not mark the work done until the acceptance line was actually verified.",
       "output": "",
       "command": "{completeCommand}",
-      "next": "Say go to complete the work item."
+      "next": "Complete the work item?\n\n1. Go\n2. Leave"
     },
     {
       "id": "leave",
@@ -84,12 +103,12 @@
       "name": "Leave",
       "wired": true,
       "where": "Step 7 of 7.",
-      "about": "You walked the same path a real project uses: write the plan down, start on a branch, build, check, and close. Real delivery also includes GitHub, review, and merge — not taught here. You can re-run this tutorial anytime. Next, continue real project setup when you are ready.",
+      "about": "You walked the same path a real project uses: write the plan down, start on a branch, build, check, and close. Real delivery also includes GitHub, review, and merge \u2014 not taught here. You can re-run this tutorial anytime. Next, continue real project setup when you are ready.",
       "terms": [],
       "caveat": "This sitting does not publish the project or open a pull request.",
       "output": "",
       "command": null,
-      "next": "You are done with this tutorial. Optional longer course: https://github.com/deftai/directive-training"
+      "next": "You are done with this tutorial."
     }
   ]
 }

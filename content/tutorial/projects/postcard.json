@@ -1,10 +1,11 @@
 {
   "id": "postcard",
   "title": "Postcard",
-  "pitch": "A one-page local site that shows a short message you choose.",
+  "pitch": "A one-page local site that shows a short message.",
   "fields": {
     "name": "Postcard",
     "contentExample": "Wish you were here.",
+    "contentPrompt": "Reply with the message Postcard should show — or using the example is fine.",
     "workSentence": "Postcard shows this message on a one-page local site.",
     "acceptanceSentence": "opening the page shows exactly that message.",
     "ownedFiles": "index.html, postcard.test.mjs, and package.json",

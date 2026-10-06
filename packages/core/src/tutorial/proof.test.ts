@@ -76,6 +76,7 @@ describe("Directive Tutorial proof (#4981)", () => {
     const resumed = run(projectRoot, prefs, ["resume", "--json"]);
     expect(JSON.parse(resumed.out).state.currentBeat).toBe("write");
 
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
     expect(
       run(projectRoot, prefs, [
         "advance",
@@ -83,7 +84,6 @@ describe("Directive Tutorial proof (#4981)", () => {
         "Q: Hi? A: Hello.",
         "--work-item",
         "xbrief/proposed/echo.xbrief.json",
-        "--confirm",
       ]).code,
     ).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);

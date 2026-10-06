@@ -5,6 +5,7 @@
   "fields": {
     "name": "Signal",
     "contentExample": "Kristen — on the bridge.",
+    "contentPrompt": "Reply with the status line Signal should print — or using the example is fine.",
     "workSentence": "Signal prints this status line.",
     "acceptanceSentence": "running it prints exactly that text.",
     "ownedFiles": "signal.mjs, signal.test.mjs, and package.json",

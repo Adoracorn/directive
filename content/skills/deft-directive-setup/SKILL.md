@@ -339,7 +339,7 @@ for project-scoped settings (strategy, coverage).
 ! After Name is first persisted to USER.md in this Phase 1 write (status still `not_started`), run `deft tutorial:offer --json`.
 ! When `"offerNow": true`, present this deterministic menu before the Phase 2 transition:
 
-> "Directive Tutorial is ready. What next?"
+> "Directive Tutorial is ready. What would you like to do?"
 > 1. Start tutorial
 > 2. Skip for now
 > 3. Discuss

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   advanceTutorial,
   emptyTutorialState,
+  leaveTutorial,
   loadTutorialState,
   offerTutorial,
   resetTutorial,
@@ -80,10 +81,12 @@ describe("Directive Tutorial state (#4981)", () => {
   it("keeps a failed check on prove-it and advances only after a pass", () => {
     let state = begin();
     state = advanceTutorial(state, beats, { project: "postcard" }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    expect(state.currentBeat).toBe("write");
+    expect(state.planAccepted).toBe(true);
     state = advanceTutorial(state, beats, {
       content: "Wish you were here.",
       workItemPath: "xbrief/proposed/postcard.xbrief.json",
-      confirm: true,
     }).state;
     state = advanceTutorial(state, beats, { confirm: true }).state;
     state = advanceTutorial(state, beats, { contentSeen: true }).state;
@@ -102,10 +105,10 @@ describe("Directive Tutorial state (#4981)", () => {
   it("closes only after a passed check, then completes on leave", () => {
     let state = begin();
     state = advanceTutorial(state, beats, { project: "echo" }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
     state = advanceTutorial(state, beats, {
       content: "Q: Hi? A: Hello.",
       workItemPath: "xbrief/proposed/echo.xbrief.json",
-      confirm: true,
     }).state;
     state = advanceTutorial(state, beats, { confirm: true }).state;
     state = advanceTutorial(state, beats, { contentSeen: true }).state;
@@ -136,5 +139,18 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(skipped.ok).toBe(true);
     expect(skipped.state.currentBeat).toBe("start");
     expect(skipped.state.status).toBe("in_progress");
+  });
+
+  it("accepts numbered menu picks and leave clears the sitting", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "2" }).state;
+    expect(state.selectedProject).toBe("postcard");
+    expect(state.currentBeat).toBe("write");
+
+    const left = leaveTutorial(state);
+    expect(left.ok).toBe(true);
+    expect(left.state.status).toBe("skipped");
+    expect(left.state.currentBeat).toBeNull();
+    expect(shouldOfferTutorial(left.state)).toBe(false);
   });
 });

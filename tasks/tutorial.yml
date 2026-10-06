@@ -66,6 +66,16 @@ tasks:
         vars:
           ENGINE_CMD: 'tutorial skip --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
 
+  leave:
+    desc: "Leave the Directive Tutorial sitting; explicit start still works (#4981)"
+    dir: '{{.USER_WORKING_DIR}}'
+    deps:
+      - task: :engine:_ts-build
+    cmds:
+      - task: :engine:invoke
+        vars:
+          ENGINE_CMD: 'tutorial leave --project-root "{{.USER_WORKING_DIR}}" {{.CLI_ARGS}}'
+
   reset:
     desc: "Clear tutorial progress without offering again (#4981)"
     dir: '{{.USER_WORKING_DIR}}'

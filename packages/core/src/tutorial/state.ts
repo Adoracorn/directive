@@ -37,6 +37,8 @@ export interface TutorialState {
   readonly workItemPath: string | null;
   readonly repoPath: string | null;
   readonly checkPassed: boolean | null;
+  /** Write step: Plan/Done accepted before toy content is collected. */
+  readonly planAccepted: boolean;
   readonly planConfirmed: boolean;
   readonly contentSeen: boolean;
   readonly offeredAt: string | null;
@@ -75,6 +77,7 @@ export function emptyTutorialState(): TutorialState {
     workItemPath: null,
     repoPath: null,
     checkPassed: null,
+    planAccepted: false,
     planConfirmed: false,
     contentSeen: false,
     offeredAt: null,
@@ -86,6 +89,35 @@ export function emptyTutorialState(): TutorialState {
 
 export function isProjectId(value: string): value is TutorialProjectId {
   return (PROJECT_IDS as readonly string[]).includes(value);
+}
+
+/** Menu numbers on step 1, or the project id. */
+export function resolveProjectChoice(value: string): TutorialProjectId | null {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "1" || normalized === "signal") return "signal";
+  if (normalized === "2" || normalized === "postcard") return "postcard";
+  if (normalized === "3" || normalized === "echo") return "echo";
+  return isProjectId(normalized) ? normalized : null;
+}
+
+/**
+ * Leave the sitting at any step. Records skipped so the automatic offer
+ * does not fire again; explicit start still works.
+ */
+export function leaveTutorial(state: TutorialState): TutorialStep {
+  if (state.status === "completed" && state.currentBeat === null) {
+    return step(false, "The tutorial is already finished. Reset before leaving again.", state, null);
+  }
+  if (state.status === "not_started" && state.currentBeat === null) {
+    return skipOffer(state);
+  }
+  const next: TutorialState = {
+    ...emptyTutorialState(),
+    status: "skipped",
+    offeredAt: state.offeredAt ?? nowIso(),
+    skippedAt: nowIso(),
+  };
+  return step(true, "Left the tutorial. Explicit start still works.", next, null);
 }
 
 export function shouldOfferTutorial(state: TutorialState): boolean {
@@ -174,6 +206,7 @@ function normalizeState(raw: Partial<TutorialState> & Record<string, unknown>): 
     workItemPath: typeof raw.workItemPath === "string" ? raw.workItemPath : null,
     repoPath: typeof raw.repoPath === "string" ? raw.repoPath : null,
     checkPassed: raw.checkPassed === true ? true : raw.checkPassed === false ? false : null,
+    planAccepted: raw.planAccepted === true,
     planConfirmed: raw.planConfirmed === true,
     contentSeen: raw.contentSeen === true || raw.lineSeen === true,
     offeredAt: typeof raw.offeredAt === "string" ? raw.offeredAt : null,
@@ -287,11 +320,11 @@ export function startTutorial(
 
   let selected: TutorialProjectId | null = state.selectedProject;
   if (project !== undefined) {
-    const normalized = project.trim().toLowerCase();
-    if (!isProjectId(normalized)) {
-      return step(false, "Pick Signal, Postcard, or Echo.", state, null);
+    const resolved = resolveProjectChoice(project);
+    if (resolved === null) {
+      return step(false, "Pick 1 Signal, 2 Postcard, 3 Echo, or 4 Leave.", state, null);
     }
-    selected = normalized;
+    selected = resolved;
   }
 
   const next: TutorialState = {
@@ -368,6 +401,15 @@ export function advanceTutorial(
     return step(true, gate.message, gate.state, state.currentBeat);
   }
 
+  // Write step phase 1: Plan/Done accepted — stay and ask for toy content next.
+  if (
+    state.currentBeat === "write" &&
+    gate.state.planAccepted === true &&
+    (gate.state.content === null || gate.state.content.trim().length === 0)
+  ) {
+    return step(true, gate.message, gate.state, state.currentBeat);
+  }
+
   if (state.currentBeat === "leave") {
     return step(true, gate.message, gate.state, "leave");
   }
@@ -387,27 +429,47 @@ function gateAdvance(
 ): { ok: boolean; message: string; state?: TutorialState } {
   switch (state.currentBeat) {
     case "choose": {
-      const raw = action.project?.trim().toLowerCase() ?? "";
-      if (!isProjectId(raw)) {
-        return { ok: false, message: "Pick Signal, Postcard, or Echo before this step can move on." };
+      const raw = action.project?.trim() ?? "";
+      const resolved = resolveProjectChoice(raw);
+      if (resolved === null) {
+        return {
+          ok: false,
+          message: "Pick 1, 2, 3, or 4 (Leave) before this step can move on.",
+        };
       }
       return {
         ok: true,
         message: "Practice project recorded.",
-        state: { ...state, selectedProject: raw },
+        state: { ...state, selectedProject: resolved },
       };
     }
     case "write": {
+      if (!state.planAccepted) {
+        if (action.confirm !== true) {
+          return {
+            ok: false,
+            message: "Say yes if Plan and Done look right before this step can move on.",
+          };
+        }
+        return {
+          ok: true,
+          message: "Plan and Done accepted. Ask for the toy content next.",
+          state: { ...state, planAccepted: true },
+        };
+      }
       const content = action.content?.trim() ?? state.content?.trim() ?? "";
       if (content.length === 0) {
-        return { ok: false, message: "The person has to supply the toy content before this step can move on." };
+        return {
+          ok: false,
+          message: "The person has to supply the toy content before this step can move on.",
+        };
       }
       const workItemPath = action.workItemPath?.trim() ?? "";
       if (workItemPath.length === 0) {
-        return { ok: false, message: "The proposed work file has to exist before this step can move on." };
-      }
-      if (action.confirm !== true) {
-        return { ok: false, message: "The person has to say yes to the plan before this step can move on." };
+        return {
+          ok: false,
+          message: "The proposed work file has to exist before this step can move on.",
+        };
       }
       return {
         ok: true,

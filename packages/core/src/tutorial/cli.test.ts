@@ -67,7 +67,8 @@ describe("deft tutorial commands (#4981)", () => {
     expect(body.state.repoPath).toBe(resolve(repo));
     expect(body.state.selectedProject).toBe("signal");
     expect(body.beatText).toContain("Welcome to the Directive Tutorial!");
-    expect(body.beatText).toContain("Reply with Signal, Postcard, or Echo.");
+    expect(body.beatText).toContain("4. Leave");
+    expect(body.beatText).not.toContain("Next:");
     expect(body.beatText).not.toContain("{name}");
   });
 
@@ -85,6 +86,7 @@ describe("deft tutorial commands (#4981)", () => {
     const repo = tempDir("deft-tutorial-repo-");
     expect(run(projectRoot, prefs, ["start", "--repo", repo]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--project", "postcard"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
     expect(
       run(projectRoot, prefs, [
         "advance",
@@ -92,7 +94,6 @@ describe("deft tutorial commands (#4981)", () => {
         "Wish you were here.",
         "--work-item",
         "xbrief/proposed/postcard.xbrief.json",
-        "--confirm",
       ]).code,
     ).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
