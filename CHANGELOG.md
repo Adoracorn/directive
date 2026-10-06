@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **pnpm-based Directive upgrades no longer reject unchanged dependencies with empty lockfile entries (#5384).** Existing unrelated dependencies must still remain unchanged, while new lockfile entries may accompany a Directive upgrade. Tracking #5384. Refs #5245, #3193.
+
 ### Removed
 
 ## [0.122.0] - 2026-10-06
