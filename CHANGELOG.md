@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.122.0] - 2026-10-06
+
+> Path B activation vs productPullRequest (#5387), structured-question hard-stop hatch (#5373), worktree VERSION reconstitution (#5390), CLI DX (#5391), first-ship AGENTS.md (#4544), occupancy overnight reclaim (#5413), Visage xBRIEF validate compat (#5422), plus spec-guard enforce and related leftover-complete.
+
 - Complete the #5350 scope brief after product #5376; move the spec-guard enforce Prefer-A Bound brief into xbrief/completed.
 - Complete the #5391 scope brief after product #5401; move the CLI DX Prefer-A Bound brief into xbrief/completed.
 
@@ -6944,7 +6957,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.121.0...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.122.0...HEAD
+[0.122.0]: https://github.com/deftai/directive/compare/v0.121.0...v0.122.0
 [0.121.0]: https://github.com/deftai/directive/compare/v0.120.0...v0.121.0
 [0.120.0]: https://github.com/deftai/directive/compare/v0.119.13...v0.120.0
 [0.119.13]: https://github.com/deftai/directive/compare/v0.119.12...v0.119.13
