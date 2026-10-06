@@ -1,5 +1,5 @@
 /**
- * verify:scope-provenance evaluation (#3145 / #4956 / #4774 / #5192).
+ * verify:scope-provenance evaluation (#3145 / #4956 / #4774 / #5192 / #5412).
  *
  * Path fence (#4956): the active brief's `file_scope` on the merge base is the
  * precommitment. Changed production files are checked against that base list
@@ -18,6 +18,12 @@
  * omit a mint. Peer coverage never clears a missing own allowlist. Same-PR
  * approval rewrite stays fail-closed. Missing-mint remediation is split or
  * land a widened concrete brief — never renew mint.
+ *
+ * Changed-lifecycle admission (#5192 item 6 / #5412): live discovery and an
+ * injected activeXbriefs map share one predicate. Seed is live xbrief/active/
+ * or injected non-pending entries; pending paths (live or injected) admit
+ * only when active on the merge base. Brand-new pending that was never
+ * active on base must not become an active scope via the diff or the map.
  *
  * Intent-pin checks (#3385) remain for existing base-committed records.
  *
@@ -464,6 +470,57 @@ function resolveMergeBaseBriefRead(
   return { baseRel: headN, read: headRead };
 }
 
+/** True when a lifecycle path is pending|completed|cancelled (#5412 limb 1). */
+function isMovedLifecycleFolder(rel: string): boolean {
+  const n = normalizeRepoRelPath(rel);
+  return (
+    n.startsWith("xbrief/pending/") ||
+    n.startsWith("xbrief/completed/") ||
+    n.startsWith("xbrief/cancelled/")
+  );
+}
+
+/**
+ * Active-on-merge-base probe for changed-lifecycle admission (#5412 / #5192).
+ * Reuses preMoveSameBasenameLifecyclePaths (active before pending) and optional
+ * listLifecycleBriefsAtRef / baseXbriefs census for plan.id hits. Unreadable
+ * base probes and census read failures fail closed by returning true so later
+ * gates can surface (renamed moves must not silently drop the fence).
+ */
+function wasActiveOnMergeBase(input: {
+  readonly headRel: string;
+  readonly headPlanId: string | null;
+  readonly readAtBase: (rel: string) => BaseBriefReadLocal;
+  readonly census: readonly CensusBrief[] | null;
+  readonly censusReadFailed?: boolean;
+  /** changedFiles-injected snapshot seam — no fail-closed admit on missing census. */
+  readonly changedFilesInjected?: boolean;
+}): boolean {
+  const headN = normalizeRepoRelPath(input.headRel);
+  for (const candidate of preMoveSameBasenameLifecyclePaths(headN)) {
+    if (!candidate.startsWith("xbrief/active/")) continue;
+    const read = input.readAtBase(candidate);
+    if (read.kind === "error") return true;
+    if (read.kind === "text") return true;
+    break;
+  }
+  if (input.headPlanId === null) return false;
+  if (input.census === null) {
+    // Live / activeXbriefs-only: admit on census read failure so renamed moves
+    // and membership identity checks cannot drop the fence. changedFiles-
+    // injected snapshots must supply baseXbriefs for plan.id rename matching.
+    return input.censusReadFailed === true && input.changedFilesInjected !== true;
+  }
+  const activeHits = input.census.filter(
+    (b) =>
+      normalizeRepoRelPath(b.rel).startsWith("xbrief/active/") &&
+      b.planId !== null &&
+      b.planId === input.headPlanId,
+  );
+  // Ambiguous duplicate active plan.id → admit so continuity refuse can fire.
+  return activeHits.length >= 1;
+}
+
 /** Head lifecycle paths for continuity move exclusivity (#5192). */
 function listHeadLifecycleRels(input: {
   readonly projectRoot: string;
@@ -696,10 +753,16 @@ export function evaluateScopeProvenance(
 
   let activeEntries: Array<{ rel: string; raw: string }>;
   if (options.activeXbriefs !== undefined) {
-    activeEntries = [...options.activeXbriefs.entries()].map(([rel, raw]) => ({
-      rel: normalizeRepoRelPath(rel),
-      raw,
-    }));
+    // Injected map is the seed for active/ and terminal completed|cancelled
+    // entries (existing #5192 fixtures). Pending paths in the map still go
+    // through wasActiveOnMergeBase so brand-new planning cannot bypass
+    // admission by stuffing the map (#5412 Greptile P1).
+    activeEntries = [];
+    for (const [rel, raw] of options.activeXbriefs.entries()) {
+      const n = normalizeRepoRelPath(rel);
+      if (n.startsWith("xbrief/pending/")) continue;
+      activeEntries.push({ rel: n, raw });
+    }
   } else {
     activeEntries = [];
     for (const rel of listActiveXbriefPaths(root)) {
@@ -713,34 +776,107 @@ export function evaluateScopeProvenance(
     }
   }
 
-  // #5192 item 6: also evaluate lifecycle briefs in the change set that left
-  // active/ (moved/completed) so completing in the same PR cannot drop fences.
-  // When an injected map omits a changed completed/cancelled path, fall through
-  // to HEAD disk. Do not re-add pending/ (or other omitted folders) — that would
-  // bind a new pending brief over an unrelated active story's product paths.
+  // Shared readAtBase for admission + per-story evaluation (#5412 / #5192).
+  const readAtBase = (baseRel: string): BaseBriefReadLocal => {
+    if (options.baseXbriefs !== undefined) {
+      const injected = options.baseXbriefs.get(normalizeRepoRelPath(baseRel));
+      return injected === undefined ? { kind: "missing" } : { kind: "text", text: injected };
+    }
+    if (options.readAtBase !== undefined) {
+      try {
+        const injected = options.readAtBase(baseRel);
+        return injected === null ? { kind: "missing" } : { kind: "text", text: injected };
+      } catch (err) {
+        return {
+          kind: "error",
+          message: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+    if (discoveryBaseRef === null || discoveryBaseRef === "") return { kind: "missing" };
+    const read = readRepoFileAtRef(root, discoveryBaseRef, baseRel);
+    if (read.status === "ok") return { kind: "text", text: read.text };
+    if (read.status === "missing") return { kind: "missing" };
+    return { kind: "error", message: read.message };
+  };
+
+  // Admission census: injected base map, else live listLifecycleBriefsAtRef.
+  // Lazy until a moved-lifecycle candidate needs plan.id matching; shared with
+  // the per-story membership loop below (#5412 Greptile P1/P2). Only
+  // changedFiles-injected seams without baseXbriefs skip live ls-tree
+  // (isolated snapshot callers). activeXbriefs-only on a real checkout still
+  // runs the census so membership fail-closed identity checks remain.
+  const changedFilesInjected = options.changedFiles !== undefined;
+  let admissionCensus: readonly CensusBrief[] | null = null;
+  let admissionCensusReadFailed = false;
+  let admissionCensusResolved = false;
+  const ensureAdmissionCensus = (): void => {
+    if (admissionCensusResolved) return;
+    admissionCensusResolved = true;
+    if (options.baseXbriefs !== undefined) {
+      admissionCensus = censusFromBaseMap(options.baseXbriefs);
+      return;
+    }
+    if (changedFilesInjected) return;
+    if (discoveryBaseRef === null || discoveryBaseRef === "") return;
+    try {
+      const listed = listLifecycleBriefsAtRef(root, discoveryBaseRef, readAtBase);
+      if (listed.kind === "ok") admissionCensus = listed.briefs;
+      else admissionCensusReadFailed = true;
+    } catch {
+      admissionCensusReadFailed = true;
+    }
+  };
+  if (options.baseXbriefs !== undefined) ensureAdmissionCensus();
+
+  // #5192 item 6 / #5412: shared live+injected changed-lifecycle admission.
+  // Seed is live xbrief/active/ or injected non-pending entries. Admit a
+  // changed pending|completed|cancelled brief only when it was active on the
+  // merge base — never bind brand-new pending solely because it is in the
+  // diff or the injected map.
   const seenEvalRels = new Set(activeEntries.map((e) => e.rel));
   for (const changedRel of changed) {
     const n = normalizeRepoRelPath(changedRel);
     if (!isLifecycleXbriefPath(n) || seenEvalRels.has(n)) continue;
+    if (!isMovedLifecycleFolder(n)) continue;
+
+    let raw: string | undefined;
     if (options.activeXbriefs !== undefined) {
       const injected = options.activeXbriefs.get(n);
-      if (injected !== undefined) {
-        activeEntries.push({ rel: n, raw: injected });
-        seenEvalRels.add(n);
+      if (injected !== undefined) raw = injected;
+    }
+    if (raw === undefined) {
+      const full = join(root, n);
+      if (!existsSync(full)) continue;
+      try {
+        raw = readFileSync(full, "utf8");
+      } catch {
         continue;
       }
-      const isCompletedOrCancelled =
-        n.startsWith("xbrief/completed/") || n.startsWith("xbrief/cancelled/");
-      if (!isCompletedOrCancelled) continue;
     }
-    const full = join(root, n);
-    if (!existsSync(full)) continue;
+
+    let headPlanId: string | null = null;
     try {
-      activeEntries.push({ rel: n, raw: readFileSync(full, "utf8") });
-      seenEvalRels.add(n);
+      headPlanId = extractPlanId(JSON.parse(raw) as unknown);
     } catch {
-      // skip unreadable
+      headPlanId = null;
     }
+    ensureAdmissionCensus();
+    if (
+      !wasActiveOnMergeBase({
+        headRel: n,
+        headPlanId,
+        readAtBase,
+        census: admissionCensus,
+        censusReadFailed: admissionCensusReadFailed,
+        changedFilesInjected,
+      })
+    ) {
+      continue;
+    }
+
+    activeEntries.push({ rel: n, raw });
+    seenEvalRels.add(n);
   }
 
   const headLifecycleRels = listHeadLifecycleRels({
@@ -883,36 +1019,6 @@ export function evaluateScopeProvenance(
     }
     const approvalRecordRewritten = approvalInGitChange || approvalDiskOnly || preimageInGitChange;
 
-    type BaseBriefRead =
-      | { readonly kind: "text"; readonly text: string }
-      | { readonly kind: "missing" }
-      | { readonly kind: "error"; readonly message: string };
-
-    const readAtBase = (baseRel: string): BaseBriefRead => {
-      if (options.baseXbriefs !== undefined) {
-        // Injected base map is authoritative: absent key means missing on base.
-        const injected = options.baseXbriefs.get(normalizeRepoRelPath(baseRel));
-        return injected === undefined ? { kind: "missing" } : { kind: "text", text: injected };
-      }
-      if (options.readAtBase !== undefined) {
-        try {
-          const injected = options.readAtBase(baseRel);
-          return injected === null ? { kind: "missing" } : { kind: "text", text: injected };
-        } catch (err) {
-          return {
-            kind: "error",
-            message: err instanceof Error ? err.message : String(err),
-          };
-        }
-      }
-      if (discoveryBaseRef === null || discoveryBaseRef === "") return { kind: "missing" };
-      // Non-missing git failures fail closed via kind:error (#4956).
-      const read = readRepoFileAtRef(root, discoveryBaseRef, baseRel);
-      if (read.status === "ok") return { kind: "text", text: read.text };
-      if (read.status === "missing") return { kind: "missing" };
-      return { kind: "error", message: read.message };
-    };
-
     // Same-PR approved-scope rewrite still fails closed when a digest file is
     // co-changed (legacy anti-forgery). Remediation does not schedule a proceed
     // mint ceremony (#4956).
@@ -938,29 +1044,17 @@ export function evaluateScopeProvenance(
     const membershipTrigger =
       modified || [...changedSet].some((p) => isLifecycleXbriefPath(normalizeRepoRelPath(p)));
 
-    // Merge-base census for continuity (injected map preferred). Skip live git
-    // ls-tree on pure injected seams (changedFiles / readAtBase without map).
+    // Merge-base census for continuity — reuse admission census when resolved
+    // so live listLifecycleBriefsAtRef runs at most once per evaluate (#5412).
     let census: CensusBrief[] = [];
     let censusError: string | null = null;
-    if (options.baseXbriefs !== undefined) {
-      census = censusFromBaseMap(options.baseXbriefs);
-    } else if (
-      discoveryBaseRef !== null &&
-      discoveryBaseRef !== "" &&
-      options.changedFiles === undefined
-    ) {
-      try {
-        const listed = listLifecycleBriefsAtRef(root, discoveryBaseRef, readAtBase);
-        if (listed.kind === "error") {
-          censusError = listed.detail;
-          census = [];
-        } else {
-          census = listed.briefs;
-        }
-      } catch (err) {
-        censusError = err instanceof Error ? err.message : String(err);
-        census = [];
-      }
+    ensureAdmissionCensus();
+    if (admissionCensusReadFailed) {
+      censusError =
+        "merge-base lifecycle census read failed; refuse rather than hide duplicate identities (#5192)";
+      census = [];
+    } else if (admissionCensus !== null) {
+      census = [...admissionCensus];
     }
     if (censusError !== null && membershipTrigger) {
       findings.push({
