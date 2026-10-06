@@ -71,7 +71,7 @@ Same as managed below; `task codebase:map`, `task verify:codebase-map-fresh`.
 
 ## Spec reconstruction + drift guard (#1589)
 
-Same as managed below; `task spec:reconstruct`, `task verify:spec-drift`, `task policy:show --field=specGuard`. Brownfield draft-only reconstruct + advise `plan.policy.specGuard` / `x-directive/specImpact` / `verify:spec-drift`; `sqaPass` schema-only in v1.
+Same as managed below; `task spec:reconstruct`, `task verify:spec-drift`, `task policy:show --field=specGuard`, `task policy:set-spec-guard-enforcement`. Brownfield draft-only reconstruct + advise|shadow|enforce `plan.policy.specGuard` / `x-directive/specImpact` / `verify:spec-drift`; `sqaPass` schema-only in v1.
 
 ## Skills
 
@@ -166,7 +166,7 @@ Note: root-relative paths (this repo IS deft/); run `task agents:refresh` after 
 
 <!-- placeholder -->
 
-<!-- deft:managed-section v3 sha=7c775edf3b5e refreshed=2026-10-05T18:42:35Z session=6568cf40ecc6 -->
+<!-- deft:managed-section v3 sha=d0ab57864eb7 refreshed=2026-10-06T06:25:57Z session=1d13494fc93c -->
 # Deft — AI Development Framework
 
 Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
@@ -240,8 +240,9 @@ Deft is installed in .deft/core/. Full guidelines: .deft/core/main.md
 ## Spec reconstruction + drift guard (#1589)
 
 ! Brownfield recover: `deft spec:reconstruct` (draft-only; never auto-promote) + skill `deft-directive-spec-reconstruct`. Code oracle = `#1595` MAP. Sufficiency feeds `resolveSpecAuthority`.
-! Advise drift: `plan.policy.specGuard` via `deft policy:show --field=specGuard`; completion impact `x-directive/specImpact` (`none|delta|new`); audit `deft verify:spec-drift` (0/1/2). Extends `syncSpecificationAfterScopeMove` (#2566). `sqaPass` schema-only in v1.
-⊗ Treat registry/render/`verify:spec-prd-fresh` alone as requirements-match proof; ⊗ bare `specImpact` / bare `plan.policy.specGuard`; ⊗ splice into `deft check` in v1.
+! Drift guard: `plan.policy.specGuard` via `deft policy:show --field=specGuard`; completion impact `x-directive/specImpact` (`none|delta|new`); audit `deft verify:spec-drift` (0/1/2). Extends `syncSpecificationAfterScopeMove` (#2566). `sqaPass` schema-only in v1.
+! Enforcement ladder `advise|shadow|enforce` (default advise). Promote: `deft policy:set-spec-guard-enforcement -- --set shadow|enforce --confirm` — refuse advise→enforce skip without recorded shadow attestation. Shadow runs the same evaluator and records warnings; MUST NOT refuse `scope:complete` or fail CI solely for shadow hits. Under enforce: exit 1 and 2 hard-fail for named consumers (pre-move `scope:complete` + `tasks/verify.yml`); per-item coverage + completion-scoped rewrite proof on durable SPECIFICATION; override hatch `deft authz:grant -- --template spec-drift-override --target <baseline> --plan-ref <scopeId> --story-ids <ids> --confirm`. Seed/reseed: `deft verify:spec-drift -- --seed|--reseed`.
+⊗ Treat registry/render/`verify:spec-prd-fresh` alone as requirements-match proof; ⊗ bare `specImpact` / bare `plan.policy.specGuard`; ⊗ splice into `deft check` in v1; ⊗ one-shot advise→enforce without shadow; ⊗ agent-forged override via completing-brief edit.
 
 ## Skills
 
