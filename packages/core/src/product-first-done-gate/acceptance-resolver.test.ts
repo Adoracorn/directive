@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { evaluateLiteralAcceptanceFromPlan } from "../literal-acceptance/evaluate.js";
 import {
+  CLAUSE_WALK_FAILED_REMEDY,
+  CLAUSE_WALK_FAILED_SHIPPED_REMEDY,
   clauseWalkBlocks,
   formatAcceptanceVerdict,
   formatPassLeadClauseCounts,
   relabelVerifyAcPassLead,
   resolveAcceptanceGateProfile,
   resolveAcceptanceVerdict,
+  resolveClauseWalkFailedRemedy,
 } from "./acceptance-resolver.js";
 import { evaluateVerifyAcFromPlan } from "./evaluate.js";
 
@@ -189,6 +192,64 @@ describe("resolveAcceptanceVerdict (#3497)", () => {
     expect(verdict.predicate).toBe("clause-walk-failed");
     expect(verdict.observed).toContain("1 failed");
     expect(verdict.remedy).toContain("#3323");
+    expect(verdict.remedy).toBe(CLAUSE_WALK_FAILED_REMEDY);
+  });
+
+  it("names stampable npm run check when merge+pr and defect polarity remain (#5393)", () => {
+    const reading = {
+      ok: false,
+      code: 1,
+      message: "verify:ac FAILED (#3284)",
+      resolution: "fail" as const,
+      sourceRung: "derived" as const,
+      runs: [{ ok: true, command: "npm test" }],
+      commands: [{}],
+      acceptance: { commands: [{}] },
+      clauseOutcomes: [
+        {
+          id: 1,
+          outcome: "failed",
+          detail: "expected token(s) missing from fixed.ts: possibly undefined",
+          text: 'fails with "possibly undefined"',
+        },
+      ],
+      completionContext: { mergeCommit: "abc1234deadbeef", prNumber: 42 },
+    };
+    expect(resolveClauseWalkFailedRemedy(reading)).toBe(CLAUSE_WALK_FAILED_SHIPPED_REMEDY);
+    const verdict = resolveAcceptanceVerdict(reading);
+    expect(verdict.predicate).toBe("clause-walk-failed");
+    expect(verdict.remedy).toContain("npm run check");
+    expect(verdict.remedy).toContain("disposition is not a substitute");
+    expect(verdict.remedy).not.toBe(CLAUSE_WALK_FAILED_REMEDY);
+  });
+
+  it("keeps ship/bind remedy when defect polarity is mixed with an artifact fail (#5393)", () => {
+    const reading = {
+      ok: false,
+      code: 1,
+      message: "verify:ac FAILED (#3284)",
+      resolution: "fail" as const,
+      sourceRung: "derived" as const,
+      runs: [{ ok: true, command: "npm test" }],
+      commands: [{}],
+      acceptance: { commands: [{}] },
+      clauseOutcomes: [
+        {
+          id: 1,
+          outcome: "failed",
+          detail: "artifact missing at stated path packages/core/src/a.ts",
+          text: "packages/core/src/a.ts must exist",
+        },
+        {
+          id: 2,
+          outcome: "unverifiable",
+          detail: "defect-description quoted-token check is not an acceptance oracle",
+          text: 'fails with "possibly undefined"',
+        },
+      ],
+      completionContext: { mergeCommit: "abc1234deadbeef", prNumber: 42 },
+    };
+    expect(resolveClauseWalkFailedRemedy(reading)).toBe(CLAUSE_WALK_FAILED_REMEDY);
   });
 });
 
