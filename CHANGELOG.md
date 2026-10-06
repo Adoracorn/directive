@@ -20,8 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Overnight occupancy reclaim on primary (#5413).** Raise `OCCUPANCY_MAX_LEASE_MS` to TTL×72 (24h); extend same-owner primary residue reclaim for age-capped or heartbeat-stale matching residue without `--primary-claim-exception`; branch age-cap remediation for blocked primary vs admitted reclaim. Tracking #5413. Refs #3599, #3755, #4290.
 
-- **Presence-only `## In plain English` gate before ingest-ready (#5415).** `evaluateCompletedArcRecord` requires an operative non-empty summary on `citedLeanId` and `synthesisCommentId` after lean/table/pain clearance; comment-lead `model: <slug>` / `role: triage|critic|parent` lines do not count as summary (ordinary `Role:` / `Model:` prose still counts); closed reason `missing-plain-english`. Path-1 auto-synthesis requires a parent-supplied non-empty summary and recovers via candidate repair (not a GitHub patch of the synthetic id), while keeping any published lean failure text. No prose-quality parser; previously accepted ingest-ready records are not silently restamped. Tracking #5415. Refs #3929, #4309, #5413.
-
 - **Hard-stop hatch for structured questions (#5373).** Prefer-A Bound: refuse-missing-hatch on hook-admitted question tools (`QUESTION_TOOL_NAMES` subset); Cursor plan-choice deny-and-render keeps Discuss then Back; Discuss-pause latch only where selection ingress is observed; `I have questions` accepted-input alias; Grok `ask_user_question` audit row + render-absent residual named. Tracking #5373. Refs #1470, #767.
 
 ### Fixed
@@ -40,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Record human approval for the #5415 Path B intent limit.** Lands the mint-only intent-constraint record on the delivery merge base so the follow-on product PR can pass the intent gate. Tracking #5415.
 - **Keep active #5413 Prefer-A Bound brief for Path B continuity.** Lands the continuity-resolved active xBRIEF with concrete file_scope on master so product PR #5416 can pass verify:scope-provenance membership (#5192 / #4774). Leaves metadata.productPullRequest unset on this activation land. Tracking #5413.
 - **Mint approved-scope for #5373 (RULE-MAP membership).** Operator TTY remint of `.deft/approved-scope/github.issue.5713952089{,.intent}.json` so product PR #5410 membership includes `docs/RULE-MAP.md`. Mint-only — no product code. Tracking #5373.
 - **Keep active #5350 Prefer-A Bound brief for Path B continuity.** Lands the continuity-resolved active xBRIEF with concrete file_scope on master so product PR #5376 can pass verify:scope-provenance membership (#5192 / #4774). Leaves metadata.productPullRequest unset on this activation land. Tracking #5350.
