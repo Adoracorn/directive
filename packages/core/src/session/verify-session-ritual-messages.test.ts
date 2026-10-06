@@ -227,8 +227,55 @@ describe("verify-session-ritual failed-step messaging", () => {
     });
     expect(result.code).toBe(1);
     expect(result.message).toContain("gated step 'doctor' failed");
-    expect(result.message).not.toContain("Recovery: run");
+    // Generic live doctor failure (VERSION present / no #5390 class) stays cold.
+    expect(result.message).not.toContain("session:start --rearm");
     expect(result.recoveryTier).toBe("cold");
+  });
+
+  it("names --rearm when doctor failed and .deft/core/VERSION is missing (#5390)", () => {
+    const { root, head } = initRoot();
+    mkdirSync(join(root, ".deft", "core"), { recursive: true });
+    writeFileSync(join(root, ".deft", "core", "main.md"), "# payload\n", "utf8");
+    writeRitualState(
+      root,
+      newRitualStatePayload({
+        sessionId: "s",
+        gitHead: head,
+        worktreePath: resolve(root),
+        startedAt: NOW,
+        quickSteps: {
+          alignment: ritualStep({ ok: true, ts: NOW }),
+          branch_policy: ritualStep({ ok: true, ts: NOW }),
+          triage_welcome: ritualStep({ ok: true, ts: NOW }),
+          verify_tools: ritualStep({ ok: true, ts: NOW }),
+        },
+        gatedSteps: {
+          agent_hooks: ritualStep({ ok: true, ts: NOW }),
+          doctor: ritualStep({
+            ok: false,
+            ts: NOW,
+            message:
+              "manifest-agreement: Bare .deft-version exists but YAML manifest is missing. " +
+              "Linked worktree payload is present and bare agrees with recoverable source provenance — " +
+              "run `deft session:start` (#5390).",
+          }),
+          cache_fresh: ritualStep({ ok: true, ts: NOW }),
+        },
+      }),
+    );
+    const result = verifySessionRitual(root, {
+      bypass: false,
+      tier: "gated",
+      now: NOW,
+      runGit: fakeGit(head, resolve(root)),
+      // Do not re-execute gated steps — inspect the recorded #5390-class stamp.
+      executeGatedSteps: [],
+    });
+    expect(result.code).toBe(1);
+    expect(result.message).toContain("gated step 'doctor' failed");
+    expect(result.message).toContain("session:start --rearm");
+    expect(result.message).toContain("session:ready");
+    expect(result.recoveryTier).toBe("rearm");
   });
 
   it("reports gated cache_fresh stale recovery with runnable cache fetch-all (#2574)", () => {
