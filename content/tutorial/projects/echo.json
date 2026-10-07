@@ -12,8 +12,8 @@
     "ownedFilesChange": "echo.mjs, echo.test.mjs, and the test script in package.json",
     "testCommand": "npm test",
     "branch": "feat/echo-answers-one-question",
-    "startCommand": "git switch -c feat/echo-answers-one-question",
-    "verifyCommand": "deft verify:ac <active-work-file>",
-    "completeCommand": "deft scope:complete -- <active-work-file>"
+    "startCommand": "git switch -c {branch}\ndeft scope:promote -- {workItemPath}\ndeft scope:activate -- {workItemPath}",
+    "verifyCommand": "deft verify:ac {activeWorkItemPath}",
+    "completeCommand": "deft scope:complete -- {activeWorkItemPath}"
   }
 }

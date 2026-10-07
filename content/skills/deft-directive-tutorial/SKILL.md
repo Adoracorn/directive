@@ -41,9 +41,11 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 
 ## Menu
 
-! After start, the person picks from a numbered menu: **1 Signal**, **2 Postcard**, **3 Echo**, or **4 Leave**.
+! After start, the person picks from a numbered menu: **1 Signal**, **2 Postcard**, **3 Echo**, **4 Leave**, **5 Discuss**, **6 Back**.
 ! Record a project pick with `deft tutorial:advance --project signal|postcard|echo` (or `1|2|3`).
 ! Leave runs `deft tutorial:leave` (also `--project 4` / `--project leave` on advance).
+! Discuss (`--project discuss` / menu Discuss) pauses and asks what to discuss; do not advance.
+! Back (`--project back` / menu Back) moves one wired step earlier; on step 1 refuse Leave or Discuss.
 ! Every project option uses the same seven steps. Only the toy changes.
 ! Practice work runs in `repoPath`, a disposable local Git repository.
 ! On every later step the person may still leave (`deft tutorial:leave`).
@@ -56,7 +58,9 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 
 ! Whenever the person must pick, show a numbered menu (1, 2, 3…). Accept the number or the option label.
 ! Include Leave on every choice menu where leaving is allowed.
+! End every structured menu with **Discuss** then **Back**, in that order (`contracts/deterministic-questions.md`).
 ⊗ Ask for free yes/no/go prose when a numbered menu is defined on the step.
+⊗ Strip Discuss/Back from the rendered `beatText` menus.
 
 
 ! Run `deft tutorial:inspect --json` or `deft tutorial:resume --json`.
@@ -67,13 +71,13 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 ! Record progress with `deft tutorial:advance` and the matching flags.
 ⊗ Move on when advance refuses.
 
-- Step 1 choose: `--project signal|postcard|echo` (or `1|2|3`); Leave → `deft tutorial:leave`
-- Step 2 write: first `--content "..."` (or `--project 1` / Use the example), then `--confirm` (Plan/Done; menu 1 Yes / 2 No — change the plan / 3 Leave), then `--work-item <path>` (may combine with confirm)
-- Step 3 start: `--confirm` (menu: 1 Yes / 2 Leave)
-- Step 4 change: `--content-seen` (menu: 1 Go / 2 Leave)
-- Step 5 prove: menu 1 Go (run check), then record `--check pass|fail` (fail stays; pass stays on Continue). Menu after pass: 1 Continue / 2 Leave → `--project 1` or `--confirm`. After fail: 1 Try again / 2 Leave
-- Step 6 close: `--complete` (menu: 1 Go / 2 Leave; only after a pass + Continue)
-- Step 7 leave: `advance` with no extra flags
+- Step 1 choose: `--project signal|postcard|echo` (or `1|2|3`); Leave → `deft tutorial:leave`; Discuss / Back as above
+- Step 2 write: first `--content "..."` (or `--project 1` / Use the example), then `--confirm` (Plan/Done; menu 1 Yes / 2 No — change the plan / 3 Leave / 4 Discuss / 5 Back), then `--work-item <path>` (may combine with confirm). After Plan/Done is accepted without a path, show the work-file prompt — do not re-ask for content.
+- Step 3 start: `--confirm` (menu: 1 Yes / 2 Leave / 3 Discuss / 4 Back). Commands promote and activate the proposed work file, then create the branch.
+- Step 4 change: `--content-seen` (menu: 1 Go / 2 Leave / 3 Discuss / 4 Back)
+- Step 5 prove: menu 1 Go (run check), then record `--check pass|fail` (fail stays; pass stays on Continue). Menu after pass: 1 Continue / 2 Leave / 3 Discuss / 4 Back. After fail: 1 Try again / 2 Leave / 3 Discuss / 4 Back. A combined `--project 1 --check pass` on a failed prove step records the new result.
+- Step 6 close: `--complete` (menu: 1 Go / 2 Leave / 3 Discuss / 4 Back; only after a pass + Continue)
+- Step 7 leave: `advance` with no extra flags (only after close); otherwise `deft tutorial:leave`
 
 ## Progress
 
@@ -81,6 +85,7 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 ! Progress is stored in user preferences (`tutorial-state.json` next to USER.md), not in the product project.
 ! `deft tutorial:reset` clears progress and does not re-fire the automatic offer by itself.
 ! Mid-tutorial `deft tutorial:skip` moves one step and does not mark the work done.
+! Completed status requires reset before another start; a fresh start does not reuse prior content, work-file path, or check results.
 
 ## Exit
 

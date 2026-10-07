@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { tutorialMain, type TutorialIo } from "./cli.js";
+import { type TutorialIo, tutorialMain } from "./cli.js";
 import { loadTutorial, projectFields, renderWiredSession } from "./render.js";
 
 const frameworkRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
@@ -76,9 +76,7 @@ describe("Directive Tutorial proof (#4981)", () => {
     const resumed = run(projectRoot, prefs, ["resume", "--json"]);
     expect(JSON.parse(resumed.out).state.currentBeat).toBe("write");
 
-    expect(
-      run(projectRoot, prefs, ["advance", "--content", "Q: Hi? A: Hello."]).code,
-    ).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content", "Q: Hi? A: Hello."]).code).toBe(0);
     expect(
       run(projectRoot, prefs, [
         "advance",

@@ -4,14 +4,17 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fillBeat, loadTutorial, projectFields, renderBeat, type TutorialBeat } from "./render.js";
 import {
+  type AdvanceAction,
   advanceTutorial,
-  loadTutorialState,
+  backBeat,
   leaveTutorial,
+  loadTutorialState,
   offerTutorial,
   resetTutorial,
   resumeTutorial,
@@ -19,10 +22,8 @@ import {
   skipBeat,
   skipOffer,
   startTutorial,
-  type AdvanceAction,
   type TutorialStep,
 } from "./state.js";
-import { loadTutorial, renderBeat, fillBeat, projectFields, type TutorialBeat } from "./render.js";
 
 export interface TutorialIo {
   writeOut: (text: string) => void;
@@ -48,14 +49,24 @@ function isSubcommand(value: string): value is Subcommand {
   return (SUBCOMMANDS as readonly string[]).includes(value);
 }
 
+function tutorialMarkerExists(dir: string): boolean {
+  for (const candidate of [
+    join(dir, "content", "tutorial", "beats.json"),
+    join(dir, "tutorial", "beats.json"),
+  ]) {
+    try {
+      if (statSync(candidate).isFile()) return true;
+    } catch {
+      // keep looking
+    }
+  }
+  return false;
+}
+
 export function findFrameworkRoot(start: string): string | null {
   let dir = resolve(start);
   for (let depth = 0; depth < 8; depth += 1) {
-    try {
-      if (statSync(join(dir, "content", "tutorial", "beats.json")).isFile()) return dir;
-    } catch {
-      // keep walking
-    }
+    if (tutorialMarkerExists(dir)) return dir;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -81,32 +92,65 @@ function samePath(left: string, right: string): boolean {
   return resolve(left) === resolve(right);
 }
 
-function ensureRepo(projectRoot: string, requested: string | undefined, projectId: string | null): string {
+function pathIsInside(inner: string, outer: string): boolean {
+  const root = resolve(outer);
+  const target = resolve(inner);
+  return target === root || target.startsWith(root + sep);
+}
+
+function gitRoot(cwd: string): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd,
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function assertDisposableRepo(repo: string, projectRoot: string): void {
+  if (samePath(repo, projectRoot) || pathIsInside(repo, projectRoot)) {
+    throw new Error(
+      "The practice project must run in a disposable repository, not the person's project.",
+    );
+  }
+  const projectGit = gitRoot(projectRoot);
+  const repoGit = gitRoot(repo);
+  if (projectGit !== null && repoGit !== null && samePath(projectGit, repoGit)) {
+    throw new Error(
+      "The practice project must run in a disposable repository, not the person's project.",
+    );
+  }
+}
+
+function ensureRepo(
+  projectRoot: string,
+  requested: string | undefined,
+  projectId: string | null,
+): string {
   if (requested !== undefined && requested.trim().length > 0) {
     const repo = resolve(requested);
-    if (samePath(repo, projectRoot)) {
-      throw new Error("The practice project must run in a disposable repository, not the person's project.");
-    }
+    assertDisposableRepo(repo, projectRoot);
     return repo;
   }
   const prefix = projectId ? `${projectId}-` : "tutorial-";
   const repo = mkdtempSync(join(tmpdir(), prefix));
-  if (samePath(repo, projectRoot)) {
-    throw new Error("The practice project must run in a disposable repository, not the person's project.");
+  try {
+    assertDisposableRepo(repo, projectRoot);
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    return repo;
+  } catch (err) {
+    rmSync(repo, { recursive: true, force: true });
+    throw err;
   }
-  execFileSync("git", ["init", "-q"], { cwd: repo });
-  return repo;
 }
 
 function beatById(beats: readonly TutorialBeat[], id: string): TutorialBeat | undefined {
   return beats.find((beat) => beat.id === id);
 }
 
-function payload(
-  step: TutorialStep,
-  beatText: string | null,
-  command: string | null,
-): string {
+function payload(step: TutorialStep, beatText: string | null, command: string | null): string {
   return `${JSON.stringify({ ...step, beatText, command }, null, 2)}\n`;
 }
 
@@ -123,6 +167,24 @@ function actionFrom(argv: readonly string[]): AdvanceAction {
   };
 }
 
+function isDiscussPick(flag: string | undefined): boolean {
+  return flag === "discuss";
+}
+
+function isBackPick(flag: string | undefined): boolean {
+  return flag === "back";
+}
+
+function discussStep(state: Parameters<typeof leaveTutorial>[0]): TutorialStep {
+  return {
+    ok: true,
+    message: "What would you like to discuss?",
+    state,
+    beatId: state.currentBeat,
+    offerNow: false,
+  };
+}
+
 export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo()): number {
   const [subcommand, ...rest] = argv;
   if (subcommand === undefined || !isSubcommand(subcommand)) {
@@ -135,11 +197,12 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   const projectRoot = resolve(flagValue(rest, "--project-root") ?? ".");
   const frameworkRoot = resolve(flagValue(rest, "--framework-root") ?? defaultFrameworkRoot());
   const prefsHome = flagValue(rest, "--prefs-home");
-  const statePath = prefsHome !== undefined ? join(resolve(prefsHome), "tutorial-state.json") : undefined;
+  const statePath =
+    prefsHome !== undefined ? join(resolve(prefsHome), "tutorial-state.json") : undefined;
   const asJson = hasFlag(rest, "--json");
   const stateOpts = { projectRoot, path: statePath };
 
-  let tutorial;
+  let tutorial: ReturnType<typeof loadTutorial>;
   try {
     tutorial = loadTutorial(frameworkRoot);
   } catch (err: unknown) {
@@ -149,7 +212,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   }
 
   const beats = tutorial.script.beats;
-  let state = loadTutorialState(stateOpts);
+  const state = loadTutorialState(stateOpts);
   let step: TutorialStep;
 
   try {
@@ -166,7 +229,11 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         step = startTutorial(
           state,
           state.currentBeat === null || state.status !== "in_progress"
-            ? ensureRepo(projectRoot, flagValue(rest, "--repo"), projectFlag ?? state.selectedProject)
+            ? ensureRepo(
+                projectRoot,
+                flagValue(rest, "--repo"),
+                projectFlag ?? state.selectedProject,
+              )
             : (state.repoPath ?? ""),
           beats,
           projectFlag,
@@ -191,27 +258,87 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
       case "advance": {
         const projectFlag = flagValue(rest, "--project")?.trim().toLowerCase();
         const hasContent = state.content !== null && state.content.trim().length > 0;
+        const hasWorkItem = state.workItemPath !== null && state.workItemPath.trim().length > 0;
+
+        const discussPick =
+          isDiscussPick(projectFlag) ||
+          (state.currentBeat === "choose" && projectFlag === "5") ||
+          (state.currentBeat === "write" && !hasContent && projectFlag === "3") ||
+          (state.currentBeat === "write" &&
+            hasContent &&
+            !state.planAccepted &&
+            projectFlag === "4") ||
+          (state.currentBeat === "write" &&
+            state.planAccepted &&
+            !hasWorkItem &&
+            projectFlag === "2") ||
+          ((state.currentBeat === "start" ||
+            state.currentBeat === "change" ||
+            state.currentBeat === "close" ||
+            state.currentBeat === "result") &&
+            projectFlag === "3");
+        if (discussPick) {
+          step = discussStep(state);
+          break;
+        }
+
+        const backPick =
+          isBackPick(projectFlag) ||
+          (state.currentBeat === "choose" && projectFlag === "6") ||
+          (state.currentBeat === "write" && !hasContent && projectFlag === "4") ||
+          (state.currentBeat === "write" &&
+            hasContent &&
+            !state.planAccepted &&
+            projectFlag === "5") ||
+          (state.currentBeat === "write" &&
+            state.planAccepted &&
+            !hasWorkItem &&
+            projectFlag === "3") ||
+          ((state.currentBeat === "start" ||
+            state.currentBeat === "change" ||
+            state.currentBeat === "close" ||
+            state.currentBeat === "result") &&
+            projectFlag === "4");
+        if (backPick) {
+          step = backBeat(state, beats);
+          break;
+        }
+
         const leavePick =
           projectFlag === "leave" ||
           (state.currentBeat === "choose" && projectFlag === "4") ||
           (state.currentBeat === "write" && !hasContent && projectFlag === "2") ||
-          (state.currentBeat === "write" && hasContent && !state.planAccepted && projectFlag === "3") ||
-          (state.currentBeat === "write" && state.planAccepted && projectFlag === "2") ||
+          (state.currentBeat === "write" &&
+            hasContent &&
+            !state.planAccepted &&
+            projectFlag === "3") ||
+          (state.currentBeat === "write" &&
+            state.planAccepted &&
+            !hasWorkItem &&
+            projectFlag === "1") ||
           ((state.currentBeat === "start" ||
             state.currentBeat === "change" ||
             state.currentBeat === "close") &&
             projectFlag === "2") ||
-          (state.currentBeat === "result" && projectFlag === "2" && !hasFlag(rest, "--check")) ||
-          (state.currentBeat === "result" && projectFlag === "3");
+          (state.currentBeat === "result" && projectFlag === "2" && !hasFlag(rest, "--check"));
         if (leavePick) {
           step = leaveTutorial(state);
           break;
         }
 
-        // Write step: content first. 1 Use the example / free --content; 2 Leave (above).
+        // Write step: content first. 1 Use the example / free --content; Leave/Discuss/Back above.
         if (state.currentBeat === "write" && !hasContent) {
-          if (projectFlag === "1" || projectFlag === "example" || projectFlag === "use-the-example") {
-            const fields = projectFields(tutorial.projects, state.selectedProject);
+          if (
+            projectFlag === "1" ||
+            projectFlag === "example" ||
+            projectFlag === "use-the-example"
+          ) {
+            const fields = projectFields(
+              tutorial.projects,
+              state.selectedProject,
+              null,
+              state.workItemPath,
+            );
             const example = fields.contentExample?.trim() ?? "";
             if (example.length === 0) {
               step = {
@@ -228,7 +355,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           }
         }
 
-        // Write step: after content, Plan/Done menu — 1 Yes / 2 No — change the plan / 3 Leave.
+        // Write step: after content, Plan/Done menu — 1 Yes / 2 No — change the plan.
         if (state.currentBeat === "write" && hasContent && !state.planAccepted) {
           if (projectFlag === "2" || projectFlag === "no") {
             step = {
@@ -265,12 +392,17 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
           break;
         }
-        // Result fail menu: 1 Try again stays (agent re-runs check); no advance needed
+        // Result fail menu: 1 Try again — if --check is also supplied, record it now.
         if (
           state.currentBeat === "result" &&
           state.checkPassed === false &&
           (projectFlag === "1" || projectFlag === "try-again" || projectFlag === "go")
         ) {
+          const action = actionFrom(rest);
+          if (action.check === "pass" || action.check === "fail") {
+            step = advanceTutorial(state, beats, action);
+            break;
+          }
           step = {
             ok: true,
             message: "Stay on this step. Fix the mismatch and run the same check again.",
@@ -302,19 +434,28 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   }
 
   const beat = step.beatId === null ? undefined : beatById(beats, step.beatId);
-  const fields = projectFields(tutorial.projects, step.state.selectedProject, step.state.content);
+  const fields = projectFields(
+    tutorial.projects,
+    step.state.selectedProject,
+    step.state.content,
+    step.state.workItemPath,
+  );
   const filled = beat === undefined ? null : fillBeat(beat, fields);
-  // Show Plan/Done confirm only after content and before Plan/Done is accepted.
   const showPlanConfirm =
     step.beatId === "write" &&
     step.state.content !== null &&
     step.state.content.trim().length > 0 &&
     !step.state.planAccepted;
+  const showWorkItemPending =
+    step.beatId === "write" &&
+    step.state.planAccepted &&
+    (step.state.workItemPath === null || step.state.workItemPath.trim().length === 0);
   const beatText =
     beat === undefined
       ? null
       : renderBeat(beat, tutorial.glossary, fields, {
           contentReady: showPlanConfirm,
+          workItemPending: showWorkItemPending,
           checkVerdict: step.beatId === "result" && step.state.checkPassed !== null,
           checkPassed: step.state.checkPassed,
         });

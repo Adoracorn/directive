@@ -92,7 +92,9 @@ describe("Directive Tutorial session messages (#4981)", () => {
     const start = renderBeat(beatById(script, "start"), glossary, fields);
     expect(start).toContain("**branch** —");
     expect(start).not.toContain("Command:");
-    expect(fillBeat(beatById(script, "start"), fields).command).toContain("feat/signal-prints-this-line");
+    expect(fillBeat(beatById(script, "start"), fields).command).toContain(
+      "feat/signal-prints-this-line",
+    );
   });
 
   it("shows verify/continue menus after the check instead of asking the person to rubber-stamp", () => {

@@ -159,4 +159,48 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(left.state.currentBeat).toBeNull();
     expect(shouldOfferTutorial(left.state)).toBe(false);
   });
+
+  it("refuses restart after completed until reset, without reusing prior fields", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "signal" }).state;
+    state = advanceTutorial(state, beats, { content: "Alex — on the bridge." }).state;
+    state = advanceTutorial(state, beats, {
+      confirm: true,
+      workItemPath: "xbrief/proposed/signal.xbrief.json",
+    }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { contentSeen: true }).state;
+    state = advanceTutorial(state, beats, { check: "pass" }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { complete: true }).state;
+    state = advanceTutorial(state, beats, {}).state;
+    expect(state.status).toBe("completed");
+
+    const refused = startTutorial(state, "/tmp/signal-sandbox-2", beats, "echo");
+    expect(refused.ok).toBe(false);
+    expect(refused.message).toContain("Reset");
+
+    const reset = resetTutorial(state);
+    const restarted = startTutorial(reset.state, "/tmp/signal-sandbox-2", beats, "echo");
+    expect(restarted.ok).toBe(true);
+    expect(restarted.state.content).toBeNull();
+    expect(restarted.state.workItemPath).toBeNull();
+    expect(restarted.state.checkPassed).toBeNull();
+    expect(restarted.state.selectedProject).toBe("echo");
+  });
+
+  it("does not graduate via skip-to-leave when the check never passed", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "signal" }).state;
+    state = skipBeat(state, beats).state; // write -> start
+    state = skipBeat(state, beats).state; // start -> change
+    state = skipBeat(state, beats).state; // change -> result
+    state = advanceTutorial(state, beats, { check: "fail" }).state;
+    state = skipBeat(state, beats).state; // result -> close
+    state = skipBeat(state, beats).state; // close -> leave
+    expect(state.currentBeat).toBe("leave");
+    const finished = advanceTutorial(state, beats, {});
+    expect(finished.ok).toBe(false);
+    expect(finished.state.status).not.toBe("completed");
+  });
 });

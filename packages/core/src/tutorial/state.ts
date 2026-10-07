@@ -15,12 +15,7 @@ export const TUTORIAL_CONTENT_VERSION = "1";
 export const PROJECT_IDS = ["signal", "postcard", "echo"] as const;
 export type TutorialProjectId = (typeof PROJECT_IDS)[number];
 
-export type TutorialStatus =
-  | "not_started"
-  | "offered"
-  | "in_progress"
-  | "completed"
-  | "skipped";
+export type TutorialStatus = "not_started" | "offered" | "in_progress" | "completed" | "skipped";
 
 export interface TutorialBeatRef {
   readonly id: string;
@@ -106,7 +101,12 @@ export function resolveProjectChoice(value: string): TutorialProjectId | null {
  */
 export function leaveTutorial(state: TutorialState): TutorialStep {
   if (state.status === "completed" && state.currentBeat === null) {
-    return step(false, "The tutorial is already finished. Reset before leaving again.", state, null);
+    return step(
+      false,
+      "The tutorial is already finished. Reset before leaving again.",
+      state,
+      null,
+    );
   }
   if (state.status === "not_started" && state.currentBeat === null) {
     return skipOffer(state);
@@ -125,23 +125,27 @@ export function shouldOfferTutorial(state: TutorialState): boolean {
 }
 
 /** Sidecar next to the resolved USER.md path. */
-export function tutorialStatePath(options: {
-  projectRoot?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  homeDir?: string;
-} = {}): string {
+export function tutorialStatePath(
+  options: {
+    projectRoot?: string;
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+  } = {},
+): string {
   const resolved = resolveUserMdPath(options);
   return join(dirname(resolved.path), TUTORIAL_STATE_FILENAME);
 }
 
-export function loadTutorialState(options: {
-  projectRoot?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  homeDir?: string;
-  path?: string;
-} = {}): TutorialState {
+export function loadTutorialState(
+  options: {
+    projectRoot?: string;
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+    path?: string;
+  } = {},
+): TutorialState {
   const path = options.path ?? tutorialStatePath(options);
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<TutorialState> & {
@@ -263,6 +267,30 @@ function nextWired(beats: readonly TutorialBeatRef[], current: string): string |
   return ids[index + 1] ?? null;
 }
 
+function previousWired(beats: readonly TutorialBeatRef[], current: string): string | null {
+  const ids = wiredIds(beats);
+  const index = ids.indexOf(current);
+  if (index <= 0) return null;
+  return ids[index - 1] ?? null;
+}
+
+/** Step back one wired beat (Discuss/Back contract). */
+export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]): TutorialStep {
+  if (state.currentBeat === null) {
+    return step(false, "The tutorial has not started.", state, null);
+  }
+  const prior = previousWired(beats, state.currentBeat);
+  if (prior === null) {
+    return step(
+      false,
+      "This is the first step. Leave or Discuss instead.",
+      state,
+      state.currentBeat,
+    );
+  }
+  return step(true, "Moved back one step. Read it aloud.", { ...state, currentBeat: prior }, prior);
+}
+
 function withCompleted(state: TutorialState, beatId: string): TutorialState {
   if (state.completedBeats.includes(beatId)) return state;
   return { ...state, completedBeats: [...state.completedBeats, beatId] };
@@ -303,8 +331,13 @@ export function startTutorial(
   beats: readonly TutorialBeatRef[],
   project?: string,
 ): TutorialStep {
-  if (state.status === "completed" && state.currentBeat === null) {
-    return step(false, "The tutorial is already finished. Reset before starting again.", state, null);
+  if (state.status === "completed") {
+    return step(
+      false,
+      "The tutorial is already finished. Reset before starting again.",
+      state,
+      null,
+    );
   }
   if (state.currentBeat !== null && state.status === "in_progress") {
     return step(true, "The tutorial is already in progress.", state, state.currentBeat);
@@ -318,7 +351,7 @@ export function startTutorial(
     return step(false, "The practice project needs a disposable repository path.", state, null);
   }
 
-  let selected: TutorialProjectId | null = state.selectedProject;
+  let selected: TutorialProjectId | null = null;
   if (project !== undefined) {
     const resolved = resolveProjectChoice(project);
     if (resolved === null) {
@@ -327,14 +360,15 @@ export function startTutorial(
     selected = resolved;
   }
 
+  // Fresh sitting: do not reuse content / work-file / check results from a prior run.
   const next: TutorialState = {
-    ...state,
+    ...emptyTutorialState(),
     status: "in_progress",
     selectedProject: selected,
     currentBeat: first,
     repoPath: trimmed,
-    startedAt: state.startedAt ?? nowIso(),
     offeredAt: state.offeredAt ?? nowIso(),
+    startedAt: nowIso(),
   };
   return step(true, "Practice sandbox is ready. Read this step aloud.", next, first);
 }
@@ -366,18 +400,18 @@ export function skipBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
   }
   const following = nextWired(beats, state.currentBeat);
   if (following === null) {
-    return step(false, "This is the last step. Skip does not finish the work.", state, state.currentBeat);
+    return step(
+      false,
+      "This is the last step. Skip does not finish the work.",
+      state,
+      state.currentBeat,
+    );
   }
   const next = withCompleted(
     { ...state, currentBeat: following, status: "in_progress" },
     state.currentBeat,
   );
-  return step(
-    true,
-    "Skipped to the next step. The work is not finished.",
-    next,
-    following,
-  );
+  return step(true, "Skipped to the next step. The work is not finished.", next, following);
 }
 
 export function advanceTutorial(
@@ -508,7 +542,10 @@ function gateAdvance(
     }
     case "change": {
       if (action.contentSeen !== true) {
-        return { ok: false, message: "The person has to see the toy work before this step can move on." };
+        return {
+          ok: false,
+          message: "The person has to see the toy work before this step can move on.",
+        };
       }
       return { ok: true, message: "Content seen.", state: { ...state, contentSeen: true } };
     }
@@ -537,7 +574,10 @@ function gateAdvance(
     }
     case "close": {
       if (state.checkPassed !== true) {
-        return { ok: false, message: "The acceptance check must pass before the work can be closed." };
+        return {
+          ok: false,
+          message: "The acceptance check must pass before the work can be closed.",
+        };
       }
       if (action.complete !== true && action.confirm !== true) {
         return { ok: false, message: "Confirm complete before this step can move on." };
@@ -545,6 +585,14 @@ function gateAdvance(
       return { ok: true, message: "Work closed.", state };
     }
     case "leave": {
+      const closedProperly = state.checkPassed === true && state.completedBeats.includes("close");
+      if (!closedProperly) {
+        return {
+          ok: false,
+          message:
+            "Finish and close the work before completing the tutorial, or leave with deft tutorial:leave.",
+        };
+      }
       return {
         ok: true,
         message: "The practice sitting is finished.",

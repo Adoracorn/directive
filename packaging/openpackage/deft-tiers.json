@@ -13,6 +13,7 @@
       "skills": [
         "deft-directive-setup",
         "deft-directive-sync",
+        "deft-directive-tutorial",
         "deft-directive-build",
         "deft-directive-pre-pr",
         "deft-directive-review-cycle",

@@ -3,8 +3,9 @@
  *
  * Stores: shared beats, glossary, and per-menu practice project files.
  */
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { contentRoot } from "../content-root.js";
 import type { TutorialProjectId } from "./state.js";
 
 export interface GlossaryEntry {
@@ -29,6 +30,8 @@ export interface TutorialBeat {
   readonly next: string;
   /** Shown on the write step after toy content is collected (Plan/Done confirm). */
   readonly nextAfterPlan?: string;
+  /** Shown after Plan/Done is accepted and the work file path is still missing. */
+  readonly nextAfterWorkPending?: string;
   /** @deprecated Prefer nextAfterCheckPass / nextAfterCheckFail. */
   readonly nextAfterCheck?: string;
   /** Shown after a verified acceptance check. */
@@ -116,7 +119,7 @@ const FIELD_SLOT = /\{([A-Za-z0-9]+)\}/g;
 
 /** Fill `{field}` slots from the practice project. Unknown slots throw. */
 export function fillSlots(text: string, fields: Readonly<Record<string, string>>): string {
-  return text.replace(FIELD_SLOT, (slot, key: string) => {
+  return text.replace(FIELD_SLOT, (_slot, key: string) => {
     const value = fields[key];
     if (value === undefined) {
       throw new Error(`tutorial project missing field: ${key}`);
@@ -153,6 +156,10 @@ export function fillBeat(
     next: fillSlots(beat.next, fields),
     nextAfterPlan:
       beat.nextAfterPlan === undefined ? undefined : fillSlots(beat.nextAfterPlan, fields),
+    nextAfterWorkPending:
+      beat.nextAfterWorkPending === undefined
+        ? undefined
+        : fillSlots(beat.nextAfterWorkPending, fields),
     nextAfterCheck:
       beat.nextAfterCheck === undefined ? undefined : fillSlots(beat.nextAfterCheck, fields),
     nextAfterCheckPass:
@@ -166,12 +173,21 @@ export function fillBeat(
   };
 }
 
+/** Map a proposed/pending work-file path to the active path after promote+activate. */
+export function activeWorkItemPath(workItemPath: string | null): string {
+  if (workItemPath === null || workItemPath.trim().length === 0) return "";
+  return workItemPath
+    .replace(/xbrief\/proposed\//g, "xbrief/active/")
+    .replace(/xbrief\/pending\//g, "xbrief/active/");
+}
+
 export function loadTutorial(repoRoot: string): {
   glossary: ReadonlyMap<string, GlossaryEntry>;
   script: TutorialScript;
   projects: ReadonlyMap<string, PracticeProject>;
 } {
-  const dir = join(repoRoot, "content", "tutorial");
+  // contentRoot resolves source (`content/tutorial`) and deposited (`tutorial`) layouts.
+  const dir = join(contentRoot(repoRoot), "tutorial");
   const projectsDir = join(dir, "projects");
   const projects = new Map<string, PracticeProject>();
   for (const name of readdirSync(projectsDir)) {
@@ -190,20 +206,26 @@ export function projectFields(
   projects: ReadonlyMap<string, PracticeProject>,
   projectId: string | null,
   content: string | null = null,
+  workItemPath: string | null = null,
 ): Readonly<Record<string, string>> {
-  const withContent = (fields: Readonly<Record<string, string>>): Record<string, string> =>
-    expandFieldValues({ ...fields, content: content ?? "" });
+  const withPaths = (fields: Readonly<Record<string, string>>): Record<string, string> =>
+    expandFieldValues({
+      ...fields,
+      content: content ?? "",
+      workItemPath: workItemPath ?? "",
+      activeWorkItemPath: activeWorkItemPath(workItemPath),
+    });
 
   if (projectId === null) {
     // Choose step has no project yet — use Signal placeholders for shared tokens that appear later.
     const signal = projects.get("signal");
-    return withContent(signal?.fields ?? {});
+    return withPaths(signal?.fields ?? {});
   }
   const project = projects.get(projectId);
   if (project === undefined) {
     throw new Error(`tutorial project not found: ${projectId}`);
   }
-  return withContent(project.fields);
+  return withPaths(project.fields);
 }
 
 export function wiredBeats(script: TutorialScript): readonly TutorialBeat[] {
@@ -219,7 +241,9 @@ export function beatById(script: TutorialScript, id: string): TutorialBeat {
 }
 
 function termBlock(entry: GlossaryEntry): string {
-  return `**${entry.term}** — ${entry.plain} ${entry.prevents}`;
+  const prevents = entry.prevents.replace(/\r?\n/g, " ");
+  const plain = entry.plain.replace(/\r?\n/g, " ");
+  return `**${entry.term}** — ${plain} ${prevents}`;
 }
 
 /**
@@ -234,6 +258,8 @@ export function renderBeat(
     readonly contentReady?: boolean;
     /** @deprecated Use contentReady. Kept for older call sites. */
     readonly planAccepted?: boolean;
+    /** Plan accepted; waiting for --work-item (do not re-ask for content). */
+    readonly workItemPending?: boolean;
     readonly checkVerdict?: boolean;
     readonly checkPassed?: boolean | null;
   } = {},
@@ -245,6 +271,8 @@ export function renderBeat(
     (options.contentReady === true ||
       (options.contentReady === undefined && options.planAccepted === true)) &&
     (filled.aboutAfterPlan !== undefined || filled.nextAfterPlan !== undefined);
+  const useWorkPending =
+    options.workItemPending === true && filled.nextAfterWorkPending !== undefined;
   const useAfterCheck =
     options.checkVerdict === true &&
     (filled.nextAfterCheckPass !== undefined ||
@@ -259,15 +287,18 @@ export function renderBeat(
     } else {
       next = filled.nextAfterCheckFail ?? filled.nextAfterCheck ?? "";
     }
+  } else if (useWorkPending) {
+    next = filled.nextAfterWorkPending ?? "";
   } else if (useAfterContent && filled.nextAfterPlan !== undefined) {
     next = filled.nextAfterPlan;
   }
-  const parts: string[] = useAfterCheck
-    ? [filled.where, ""]
-    : [filled.where, "", about, ""];
+  const parts: string[] =
+    useAfterCheck || useWorkPending
+      ? [filled.where, "", ...(useWorkPending ? [about, ""] : [])]
+      : [filled.where, "", about, ""];
   // After content is collected, skip glossary + caveat — the person already read them.
   // After the check runs, only show the verdict menu.
-  if (!useAfterContent && !useAfterCheck) {
+  if (!useAfterContent && !useAfterCheck && !useWorkPending) {
     const words = filled.terms.map((term) => {
       const entry = glossary.get(term);
       if (entry === undefined) {
@@ -286,7 +317,10 @@ export function renderBeat(
   if (next.trim().length > 0) {
     parts.push(next);
   }
-  return parts.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";
+  return `${parts
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trimEnd()}\n`;
 }
 
 export function renderWiredSession(

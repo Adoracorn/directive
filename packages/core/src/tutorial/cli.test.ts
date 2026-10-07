@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { tutorialMain, type TutorialIo } from "./cli.js";
+import { type TutorialIo, tutorialMain } from "./cli.js";
 
 const frameworkRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const temps: string[] = [];
@@ -58,7 +58,14 @@ describe("deft tutorial commands (#4981)", () => {
     expect(skipped.out).toContain('"status": "skipped"');
     expect(run(projectRoot, prefs, ["offer", "--json"]).out).toContain('"offerNow": false');
 
-    const started = run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal", "--json"]);
+    const started = run(projectRoot, prefs, [
+      "start",
+      "--repo",
+      repo,
+      "--project",
+      "signal",
+      "--json",
+    ]);
     expect(started.code).toBe(0);
     const body = JSON.parse(started.out) as {
       beatText: string;
@@ -80,15 +87,81 @@ describe("deft tutorial commands (#4981)", () => {
     expect(refused.err).toContain("disposable repository");
   });
 
+  it("refuses a subdirectory of the person's project as the sandbox", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const nested = join(projectRoot, "nested-sandbox");
+    const refused = run(projectRoot, prefs, ["start", "--repo", nested]);
+    expect(refused.code).toBe(1);
+    expect(refused.err).toContain("disposable repository");
+  });
+
+  it("records a passing retry when --check is supplied with try-again", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    expect(run(projectRoot, prefs, ["start", "--repo", repo]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "signal"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content", "Alex — on the bridge."]).code).toBe(0);
+    expect(
+      run(projectRoot, prefs, [
+        "advance",
+        "--confirm",
+        "--work-item",
+        "xbrief/proposed/signal.xbrief.json",
+      ]).code,
+    ).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content-seen"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--check", "fail"]).code).toBe(0);
+    const retried = run(projectRoot, prefs, [
+      "advance",
+      "--project",
+      "1",
+      "--check",
+      "pass",
+      "--json",
+    ]);
+    expect(retried.code).toBe(0);
+    expect(JSON.parse(retried.out).state.checkPassed).toBe(true);
+  });
+
+  it("fills promote/activate and active work-file paths into start/verify commands", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    expect(run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    const planned = run(projectRoot, prefs, [
+      "advance",
+      "--confirm",
+      "--work-item",
+      "xbrief/proposed/signal.xbrief.json",
+      "--json",
+    ]);
+    expect(planned.code).toBe(0);
+    const startStep = run(projectRoot, prefs, ["inspect", "--json"]);
+    const startBody = JSON.parse(startStep.out) as { command: string | null };
+    expect(startBody.command).toContain("deft scope:promote -- xbrief/proposed/signal.xbrief.json");
+    expect(startBody.command).toContain(
+      "deft scope:activate -- xbrief/proposed/signal.xbrief.json",
+    );
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content-seen"]).code).toBe(0);
+    const prove = run(projectRoot, prefs, ["inspect", "--json"]);
+    const proveBody = JSON.parse(prove.out) as { command: string | null };
+    expect(proveBody.command).toContain("deft verify:ac xbrief/active/signal.xbrief.json");
+    expect(proveBody.command).not.toContain("<active-work-file>");
+  });
+
   it("walks choose → write → start → change → prove → close → leave", () => {
     const projectRoot = tempDir("deft-tutorial-cli-");
     const prefs = tempDir("deft-tutorial-prefs-");
     const repo = tempDir("deft-tutorial-repo-");
     expect(run(projectRoot, prefs, ["start", "--repo", repo]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--project", "postcard"]).code).toBe(0);
-    expect(
-      run(projectRoot, prefs, ["advance", "--content", "Wish you were here."]).code,
-    ).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content", "Wish you were here."]).code).toBe(0);
     expect(
       run(projectRoot, prefs, [
         "advance",

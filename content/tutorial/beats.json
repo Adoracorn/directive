@@ -6,7 +6,7 @@
       "name": "Welcome & choose",
       "wired": true,
       "where": "Welcome to the Directive Tutorial! Step 1 of 7.",
-      "about": "Directive is the shared path for building with AI — so a later sitting can continue from the same place instead of starting over.\n\nThis practice sitting takes about 10 minutes. You pick one toy project; each option teaches the same path. Nothing here pushes to GitHub.\n\n1. Signal — a tiny CLI that prints your personal status line\n2. Postcard — a one-page local site that shows a short message\n3. Echo — a mini bot that answers one question with a reply you choose\n4. Leave — pause for now (progress is saved; you can start again later)",
+      "about": "Directive is the shared path for building with AI — so a later sitting can continue from the same place instead of starting over.\n\nThis practice sitting takes about 10 minutes. You pick one toy project; each option teaches the same path. Nothing here pushes to GitHub.\n\n1. Signal — a tiny CLI that prints your personal status line\n2. Postcard — a one-page local site that shows a short message\n3. Echo — a mini bot that answers one question with a reply you choose\n4. Leave — pause for now (progress is saved; you can start again later)\n5. Discuss\n6. Back",
       "terms": [],
       "caveat": "Name and preferences stay in setup. This sitting does not ask those again.",
       "output": "",
@@ -27,8 +27,9 @@
       "caveat": "Writing it down is not permission to build yet.",
       "output": "",
       "command": null,
-      "next": "{contentPrompt}\n\n1. Use the example\n2. Leave",
-      "nextAfterPlan": "Do Plan and Done look right?\n\n1. Yes\n2. No — change the plan\n3. Leave"
+      "next": "{contentPrompt}\n\n1. Use the example\n2. Leave\n3. Discuss\n4. Back",
+      "nextAfterPlan": "Do Plan and Done look right?\n\n1. Yes\n2. No — change the plan\n3. Leave\n4. Discuss\n5. Back",
+      "nextAfterWorkPending": "Write the proposed work file next, then record its path with --work-item.\n\n1. Leave\n2. Discuss\n3. Back"
     },
     {
       "id": "start",
@@ -43,7 +44,7 @@
       "caveat": "Saying yes starts the work. This practice project stays on this machine — no GitHub push and no pull request.",
       "output": "",
       "command": "{startCommand}",
-      "next": "Ready to confirm and start?\n\n1. Yes\n2. Leave"
+      "next": "Ready to confirm and start?\n\n1. Yes\n2. Leave\n3. Discuss\n4. Back"
     },
     {
       "id": "change",
@@ -58,7 +59,7 @@
       "caveat": "Do not add a second feature or a pull request. Only change {ownedFilesChange}.",
       "output": "",
       "command": "{testCommand}",
-      "next": "Ready for me to write the files and run the local test?\n\n1. Go\n2. Leave"
+      "next": "Ready for me to write the files and run the local test?\n\n1. Go\n2. Leave\n3. Discuss\n4. Back"
     },
     {
       "id": "result",
@@ -73,9 +74,9 @@
       "caveat": "A green local test only means your own test passed. The acceptance check is separate.",
       "output": "",
       "command": "{verifyCommand}",
-      "next": "Run the acceptance check?\n\n1. Go\n2. Leave",
-      "nextAfterCheckPass": "The acceptance check verified.\n\n1. Continue\n2. Leave",
-      "nextAfterCheckFail": "The acceptance check did not verify. Stay on this step, fix the mismatch, and run the same check again.\n\n1. Try again\n2. Leave"
+      "next": "Run the acceptance check?\n\n1. Go\n2. Leave\n3. Discuss\n4. Back",
+      "nextAfterCheckPass": "The acceptance check verified.\n\n1. Continue\n2. Leave\n3. Discuss\n4. Back",
+      "nextAfterCheckFail": "The acceptance check did not verify. Stay on this step, fix the mismatch, and run the same check again.\n\n1. Try again\n2. Leave\n3. Discuss\n4. Back"
     },
     {
       "id": "close",
@@ -90,7 +91,7 @@
       "caveat": "",
       "output": "",
       "command": "{completeCommand}",
-      "next": "Complete the work item?\n\n1. Go\n2. Leave"
+      "next": "Complete the work item?\n\n1. Go\n2. Leave\n3. Discuss\n4. Back"
     },
     {
       "id": "leave",
