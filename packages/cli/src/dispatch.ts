@@ -3447,13 +3447,13 @@ export async function dispatch(argv: string[], io: DispatchIo = defaultIo()): Pr
                   ? [planSequenceSubcommand, ...rest]
                   : tutorialSubcommand !== undefined && canonical === "tutorial"
                     ? [tutorialSubcommand, ...rest]
-                  : productSignalSubcommand !== undefined && canonical === "product-signal"
-                    ? [productSignalSubcommand, ...rest]
-                    : freshnessSubcommand !== undefined && canonical === "freshness-report"
-                      ? [freshnessSubcommand, ...rest]
-                      : vbriefValidateSubcommand !== undefined
-                        ? [vbriefValidateSubcommand, ...rest]
-                        : rest;
+                    : productSignalSubcommand !== undefined && canonical === "product-signal"
+                      ? [productSignalSubcommand, ...rest]
+                      : freshnessSubcommand !== undefined && canonical === "freshness-report"
+                        ? [freshnessSubcommand, ...rest]
+                        : vbriefValidateSubcommand !== undefined
+                          ? [vbriefValidateSubcommand, ...rest]
+                          : rest;
     const helpRc = interceptHelp(canonical.replaceAll("-", "_"), handlerArgv, {
       write: io.writeOut,
     });

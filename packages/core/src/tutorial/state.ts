@@ -5,8 +5,9 @@
  * not in the product project and not only inside the practice sandbox.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
+import { containedWrite } from "../fs/contained-write.js";
 import { resolveUserMdPath } from "../user-config/resolve-user-md.js";
 
 export const TUTORIAL_STATE_FILENAME = "tutorial-state.json";
@@ -239,7 +240,12 @@ export function saveTutorialState(
     throw new Error("tutorial state path escapes the preferences home");
   }
   mkdirSync(root, { recursive: true });
-  writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  containedWrite({
+    root: resolvedRoot,
+    target: resolvedPath,
+    data: `${JSON.stringify(state, null, 2)}\n`,
+    mode: "replace",
+  });
 }
 
 function nowIso(): string {
