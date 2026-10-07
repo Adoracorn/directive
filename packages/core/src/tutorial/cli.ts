@@ -190,15 +190,13 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         break;
       case "advance": {
         const projectFlag = flagValue(rest, "--project")?.trim().toLowerCase();
+        const hasContent = state.content !== null && state.content.trim().length > 0;
         const leavePick =
           projectFlag === "leave" ||
           (state.currentBeat === "choose" && projectFlag === "4") ||
-          (state.currentBeat === "write" &&
-            !state.planAccepted &&
-            projectFlag === "3") ||
-          (state.currentBeat === "write" &&
-            state.planAccepted &&
-            (projectFlag === "2" || projectFlag === "3")) ||
+          (state.currentBeat === "write" && !hasContent && projectFlag === "2") ||
+          (state.currentBeat === "write" && hasContent && !state.planAccepted && projectFlag === "3") ||
+          (state.currentBeat === "write" && state.planAccepted && projectFlag === "2") ||
           ((state.currentBeat === "start" ||
             state.currentBeat === "change" ||
             state.currentBeat === "close") &&
@@ -209,13 +207,34 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           step = leaveTutorial(state);
           break;
         }
-        // Write step menu: 1 Yes / 2 No / 3 Leave (before Plan/Done is accepted).
-        if (state.currentBeat === "write" && !state.planAccepted) {
+
+        // Write step: content first. 1 Use the example / free --content; 2 Leave (above).
+        if (state.currentBeat === "write" && !hasContent) {
+          if (projectFlag === "1" || projectFlag === "example" || projectFlag === "use-the-example") {
+            const fields = projectFields(tutorial.projects, state.selectedProject);
+            const example = fields.contentExample?.trim() ?? "";
+            if (example.length === 0) {
+              step = {
+                ok: false,
+                message: "This practice project has no example content.",
+                state,
+                beatId: state.currentBeat,
+                offerNow: false,
+              };
+              break;
+            }
+            step = advanceTutorial(state, beats, { ...actionFrom(rest), content: example });
+            break;
+          }
+        }
+
+        // Write step: after content, Plan/Done menu — 1 Yes / 2 No — change the plan / 3 Leave.
+        if (state.currentBeat === "write" && hasContent && !state.planAccepted) {
           if (projectFlag === "2" || projectFlag === "no") {
             step = {
-              ok: false,
-              message: "Plan or Done was not accepted. Stay on this step and adjust with the person.",
-              state,
+              ok: true,
+              message: "Plan not accepted. Ask for new toy content.",
+              state: { ...state, content: null, planAccepted: false },
               beatId: state.currentBeat,
               offerNow: false,
             };
@@ -226,6 +245,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
             break;
           }
         }
+
         // Start: 1 Yes → confirm
         if (state.currentBeat === "start" && (projectFlag === "1" || projectFlag === "yes")) {
           step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
@@ -236,7 +256,30 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           step = advanceTutorial(state, beats, { ...actionFrom(rest), contentSeen: true });
           break;
         }
-        // Result: agent runs the check, then records --check pass|fail (numbered verdict menu).
+        // Result after verified: 1 Continue → confirm to leave prove step
+        if (
+          state.currentBeat === "result" &&
+          state.checkPassed === true &&
+          (projectFlag === "1" || projectFlag === "continue" || projectFlag === "go")
+        ) {
+          step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
+          break;
+        }
+        // Result fail menu: 1 Try again stays (agent re-runs check); no advance needed
+        if (
+          state.currentBeat === "result" &&
+          state.checkPassed === false &&
+          (projectFlag === "1" || projectFlag === "try-again" || projectFlag === "go")
+        ) {
+          step = {
+            ok: true,
+            message: "Stay on this step. Fix the mismatch and run the same check again.",
+            state,
+            beatId: state.currentBeat,
+            offerNow: false,
+          };
+          break;
+        }
         // Close: 1 Go → complete
         if (state.currentBeat === "close" && (projectFlag === "1" || projectFlag === "go")) {
           step = advanceTutorial(state, beats, { ...actionFrom(rest), complete: true });
@@ -259,13 +302,21 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   }
 
   const beat = step.beatId === null ? undefined : beatById(beats, step.beatId);
-  const fields = projectFields(tutorial.projects, step.state.selectedProject);
+  const fields = projectFields(tutorial.projects, step.state.selectedProject, step.state.content);
   const filled = beat === undefined ? null : fillBeat(beat, fields);
+  // Show Plan/Done confirm only after content and before Plan/Done is accepted.
+  const showPlanConfirm =
+    step.beatId === "write" &&
+    step.state.content !== null &&
+    step.state.content.trim().length > 0 &&
+    !step.state.planAccepted;
   const beatText =
     beat === undefined
       ? null
       : renderBeat(beat, tutorial.glossary, fields, {
-          planAccepted: step.state.planAccepted,
+          contentReady: showPlanConfirm,
+          checkVerdict: step.beatId === "result" && step.state.checkPassed !== null,
+          checkPassed: step.state.checkPassed,
         });
   const command = filled?.command ?? null;
 

@@ -15,7 +15,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..")
 
 describe("Directive Tutorial session messages (#4981)", () => {
   const { glossary, script, projects } = loadTutorial(repoRoot);
-  const fields = projectFields(projects, "signal");
+  const fields = projectFields(projects, "signal", "Alex — on the bridge.");
 
   it("reads the version-1 glossary terms", () => {
     expect([...glossary.keys()]).toEqual([
@@ -54,41 +54,69 @@ describe("Directive Tutorial session messages (#4981)", () => {
     const message = renderBeat(beatById(script, "choose"), glossary, fields);
     expect(message).toContain("Welcome to the Directive Tutorial!");
     expect(message).toContain("Step 1 of 7.");
-    expect(message).toContain("First, a quick word on Directive");
+    expect(message).toContain("about 10 minutes");
     expect(message).toContain("1. Signal");
     expect(message).toContain("2. Postcard");
     expect(message).toContain("3. Echo");
     expect(message).toContain("4. Leave");
+    expect(message).toContain("progress is saved");
     expect(message).not.toContain("**Directive** —");
     expect(message).toContain("Something to keep in mind:");
     expect(message).not.toContain("Next:");
   });
 
-  it("fills project slots on later steps without leaking commands into learner text", () => {
-    const write = renderBeat(beatById(script, "write"), glossary, fields);
+  it("asks for content first, then confirms Plan/Done with the filled line", () => {
+    const empty = projectFields(projects, "signal", null);
+    const write = renderBeat(beatById(script, "write"), glossary, empty);
     expect(write).toContain("Signal");
-    expect(write).toContain("Do Plan and Done look right?");
-    expect(write).toContain("1. Yes");
-    expect(write).toContain("2. No");
-    expect(write).toContain("3. Leave");
-    expect(write).not.toContain("Next:");
-    expect(write).not.toContain("Kristen — on the bridge.");
+    expect(write).toContain("Alex — on the bridge.");
+    expect(write).toContain("1. Use the example");
+    expect(write).toContain("2. Leave");
+    expect(write).toContain("**acceptance** —");
+    expect(write).not.toContain("Do Plan and Done look right?");
     expect(write).not.toContain("{name}");
     expect(write).not.toContain("Command:");
 
-    const afterPlan = renderBeat(beatById(script, "write"), glossary, fields, {
-      planAccepted: true,
+    const afterContent = renderBeat(beatById(script, "write"), glossary, fields, {
+      contentReady: true,
     });
-    expect(afterPlan).toContain("Kristen — on the bridge.");
-    expect(afterPlan).toContain("Now supply the toy content");
-    expect(afterPlan).toContain("Reply with the status line Signal should print");
-    expect(afterPlan).not.toContain("question and answer");
-    expect(afterPlan).not.toContain("**work file**");
-    expect(afterPlan).not.toContain("Something to keep in mind:");
+    expect(afterContent).toContain("Alex — on the bridge.");
+    expect(afterContent).toContain("Do Plan and Done look right?");
+    expect(afterContent).toContain("1. Yes");
+    expect(afterContent).toContain("2. No — change the plan");
+    expect(afterContent).toContain("3. Leave");
+    expect(afterContent).not.toContain("**acceptance**");
+    expect(afterContent).not.toContain("Something to keep in mind:");
+    expect(afterContent).not.toContain("Use the example");
 
     const start = renderBeat(beatById(script, "start"), glossary, fields);
+    expect(start).toContain("**branch** —");
     expect(start).not.toContain("Command:");
     expect(fillBeat(beatById(script, "start"), fields).command).toContain("feat/signal-prints-this-line");
+  });
+
+  it("shows verify/continue menus after the check instead of asking the person to rubber-stamp", () => {
+    const change = renderBeat(beatById(script, "change"), glossary, fields);
+    expect(change).toContain("I will change only what this work owns");
+    expect(change).toContain("Ready for me to write the files");
+
+    const pass = renderBeat(beatById(script, "result"), glossary, fields, {
+      checkVerdict: true,
+      checkPassed: true,
+    });
+    expect(pass).toContain("The acceptance check verified.");
+    expect(pass).toContain("1. Continue");
+    expect(pass).not.toContain("Did the acceptance check verify?");
+
+    const fail = renderBeat(beatById(script, "result"), glossary, fields, {
+      checkVerdict: true,
+      checkPassed: false,
+    });
+    expect(fail).toContain("did not verify");
+    expect(fail).toContain("1. Try again");
+
+    const leave = renderBeat(beatById(script, "leave"), glossary, fields);
+    expect(leave).toContain("Next up: set up your real project.");
   });
 
   it("renders the full wired session for a chosen project", () => {

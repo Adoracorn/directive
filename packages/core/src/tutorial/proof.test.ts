@@ -76,12 +76,13 @@ describe("Directive Tutorial proof (#4981)", () => {
     const resumed = run(projectRoot, prefs, ["resume", "--json"]);
     expect(JSON.parse(resumed.out).state.currentBeat).toBe("write");
 
-    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(
+      run(projectRoot, prefs, ["advance", "--content", "Q: Hi? A: Hello."]).code,
+    ).toBe(0);
     expect(
       run(projectRoot, prefs, [
         "advance",
-        "--content",
-        "Q: Hi? A: Hello.",
+        "--confirm",
         "--work-item",
         "xbrief/proposed/echo.xbrief.json",
       ]).code,
@@ -93,6 +94,7 @@ describe("Directive Tutorial proof (#4981)", () => {
       "result",
     );
     expect(run(projectRoot, prefs, ["advance", "--check", "pass"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "continue"]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--complete"]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance"]).code).toBe(0);
     expect(JSON.parse(run(projectRoot, prefs, ["inspect", "--json"]).out).state.status).toBe(

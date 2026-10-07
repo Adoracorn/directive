@@ -86,12 +86,13 @@ describe("deft tutorial commands (#4981)", () => {
     const repo = tempDir("deft-tutorial-repo-");
     expect(run(projectRoot, prefs, ["start", "--repo", repo]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--project", "postcard"]).code).toBe(0);
-    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(
+      run(projectRoot, prefs, ["advance", "--content", "Wish you were here."]).code,
+    ).toBe(0);
     expect(
       run(projectRoot, prefs, [
         "advance",
-        "--content",
-        "Wish you were here.",
+        "--confirm",
         "--work-item",
         "xbrief/proposed/postcard.xbrief.json",
       ]).code,
@@ -102,6 +103,7 @@ describe("deft tutorial commands (#4981)", () => {
     expect(failed.code).toBe(0);
     expect(JSON.parse(failed.out).state.currentBeat).toBe("result");
     expect(run(projectRoot, prefs, ["advance", "--check", "pass"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--complete"]).code).toBe(0);
     const left = run(projectRoot, prefs, ["advance", "--json"]);
     expect(JSON.parse(left.out).state.status).toBe("completed");

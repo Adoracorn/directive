@@ -68,11 +68,11 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 ⊗ Move on when advance refuses.
 
 - Step 1 choose: `--project signal|postcard|echo` (or `1|2|3`); Leave → `deft tutorial:leave`
-- Step 2 write: first `--confirm` (Plan/Done), then `--content "..." --work-item <path>`
+- Step 2 write: first `--content "..."` (or `--project 1` / Use the example), then `--confirm` (Plan/Done; menu 1 Yes / 2 No — change the plan / 3 Leave), then `--work-item <path>` (may combine with confirm)
 - Step 3 start: `--confirm` (menu: 1 Yes / 2 Leave)
 - Step 4 change: `--content-seen` (menu: 1 Go / 2 Leave)
-- Step 5 prove: menu 1 Go (run check), then 1 Yes verified / 2 No / 3 Leave → `--check pass|fail` (fail stays)
-- Step 6 close: `--complete` (menu: 1 Go / 2 Leave; only after a pass)
+- Step 5 prove: menu 1 Go (run check), then record `--check pass|fail` (fail stays; pass stays on Continue). Menu after pass: 1 Continue / 2 Leave → `--project 1` or `--confirm`. After fail: 1 Try again / 2 Leave
+- Step 6 close: `--complete` (menu: 1 Go / 2 Leave; only after a pass + Continue)
 - Step 7 leave: `advance` with no extra flags
 
 ## Progress
@@ -86,4 +86,3 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 
 ! Say whether the sitting is paused, skipped, or finished, and which step is current.
 ⊗ Claim the work is done before step 6 has closed it.
-

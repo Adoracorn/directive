@@ -37,7 +37,7 @@ export interface TutorialState {
   readonly workItemPath: string | null;
   readonly repoPath: string | null;
   readonly checkPassed: boolean | null;
-  /** Write step: Plan/Done accepted before toy content is collected. */
+  /** Write step: Plan/Done accepted after toy content is collected. */
   readonly planAccepted: boolean;
   readonly planConfirmed: boolean;
   readonly contentSeen: boolean;
@@ -397,17 +397,19 @@ export function advanceTutorial(
     return step(false, gate.message, state, state.currentBeat);
   }
 
-  if (state.currentBeat === "result" && action.check === "fail") {
+  // Prove step: record pass/fail and stay until Continue after a pass.
+  if (state.currentBeat === "result" && (action.check === "fail" || action.check === "pass")) {
     return step(true, gate.message, gate.state, state.currentBeat);
   }
 
-  // Write step phase 1: Plan/Done accepted — stay and ask for toy content next.
-  if (
-    state.currentBeat === "write" &&
-    gate.state.planAccepted === true &&
-    (gate.state.content === null || gate.state.content.trim().length === 0)
-  ) {
-    return step(true, gate.message, gate.state, state.currentBeat);
+  // Write step: stay until content, Plan/Done confirm, and work file are all recorded.
+  if (state.currentBeat === "write") {
+    const next = gate.state;
+    const hasContent = next.content !== null && next.content.trim().length > 0;
+    const hasWorkItem = next.workItemPath !== null && next.workItemPath.trim().length > 0;
+    if (!hasContent || !next.planAccepted || !hasWorkItem) {
+      return step(true, gate.message, next, state.currentBeat);
+    }
   }
 
   if (state.currentBeat === "leave") {
@@ -444,19 +446,6 @@ function gateAdvance(
       };
     }
     case "write": {
-      if (!state.planAccepted) {
-        if (action.confirm !== true) {
-          return {
-            ok: false,
-            message: "Say yes if Plan and Done look right before this step can move on.",
-          };
-        }
-        return {
-          ok: true,
-          message: "Plan and Done accepted. Ask for the toy content next.",
-          state: { ...state, planAccepted: true },
-        };
-      }
       const content = action.content?.trim() ?? state.content?.trim() ?? "";
       if (content.length === 0) {
         return {
@@ -464,6 +453,40 @@ function gateAdvance(
           message: "The person has to supply the toy content before this step can move on.",
         };
       }
+
+      // Phase 1: collect content, then stay to show Plan/Done with it filled in.
+      if (state.content === null || state.content.trim().length === 0) {
+        return {
+          ok: true,
+          message: "Toy content recorded. Show Plan and Done next.",
+          state: { ...state, content },
+        };
+      }
+
+      // Phase 2: confirm Plan/Done (content already present).
+      if (!state.planAccepted) {
+        if (action.confirm !== true) {
+          return {
+            ok: false,
+            message: "Say yes if Plan and Done look right before this step can move on.",
+          };
+        }
+        const workItemPath = action.workItemPath?.trim() ?? "";
+        if (workItemPath.length === 0) {
+          return {
+            ok: true,
+            message: "Plan and Done accepted. Write the work file next.",
+            state: { ...state, content, planAccepted: true },
+          };
+        }
+        return {
+          ok: true,
+          message: "Work file recorded.",
+          state: { ...state, content, planAccepted: true, workItemPath },
+        };
+      }
+
+      // Phase 3: proposed work file path, then leave the write step.
       const workItemPath = action.workItemPath?.trim() ?? "";
       if (workItemPath.length === 0) {
         return {
@@ -498,9 +521,19 @@ function gateAdvance(
         };
       }
       if (action.check === "pass") {
-        return { ok: true, message: "Check passed.", state: { ...state, checkPassed: true } };
+        return {
+          ok: true,
+          message: "Check verified. Continue when ready.",
+          state: { ...state, checkPassed: true },
+        };
       }
-      return { ok: false, message: "Say whether the check passed or failed." };
+      if (state.checkPassed === true && action.confirm === true) {
+        return { ok: true, message: "Continue after verified check.", state };
+      }
+      return {
+        ok: false,
+        message: "Run the acceptance check, then continue when it verifies.",
+      };
     }
     case "close": {
       if (state.checkPassed !== true) {

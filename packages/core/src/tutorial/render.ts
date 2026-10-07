@@ -20,17 +20,21 @@ export interface TutorialBeat {
   readonly wired: boolean;
   readonly where: string;
   readonly about: string;
-  /** Shown on the write step after Plan/Done are accepted. */
+  /** Shown on the write step after toy content is collected (Plan/Done confirm). */
   readonly aboutAfterPlan?: string;
   readonly terms: readonly string[];
   readonly caveat: string;
   readonly output: string;
   readonly command: string | null;
   readonly next: string;
-  /** Shown on the write step after Plan/Done are accepted. */
+  /** Shown on the write step after toy content is collected (Plan/Done confirm). */
   readonly nextAfterPlan?: string;
-  /** Shown on the result step after the check has been run. */
+  /** @deprecated Prefer nextAfterCheckPass / nextAfterCheckFail. */
   readonly nextAfterCheck?: string;
+  /** Shown after a verified acceptance check. */
+  readonly nextAfterCheckPass?: string;
+  /** Shown after a failed acceptance check. */
+  readonly nextAfterCheckFail?: string;
 }
 
 export interface PracticeProject {
@@ -121,6 +125,18 @@ export function fillSlots(text: string, fields: Readonly<Record<string, string>>
   });
 }
 
+/** Expand nested `{content}` (and other) slots inside field values once. */
+function expandFieldValues(fields: Readonly<Record<string, string>>): Record<string, string> {
+  const expanded: Record<string, string> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    expanded[key] = value.replace(FIELD_SLOT, (_slot, name: string) => {
+      const inner = fields[name];
+      return inner === undefined ? `{${name}}` : inner;
+    });
+  }
+  return expanded;
+}
+
 export function fillBeat(
   beat: TutorialBeat,
   fields: Readonly<Record<string, string>>,
@@ -139,6 +155,14 @@ export function fillBeat(
       beat.nextAfterPlan === undefined ? undefined : fillSlots(beat.nextAfterPlan, fields),
     nextAfterCheck:
       beat.nextAfterCheck === undefined ? undefined : fillSlots(beat.nextAfterCheck, fields),
+    nextAfterCheckPass:
+      beat.nextAfterCheckPass === undefined
+        ? undefined
+        : fillSlots(beat.nextAfterCheckPass, fields),
+    nextAfterCheckFail:
+      beat.nextAfterCheckFail === undefined
+        ? undefined
+        : fillSlots(beat.nextAfterCheckFail, fields),
   };
 }
 
@@ -165,17 +189,21 @@ export function loadTutorial(repoRoot: string): {
 export function projectFields(
   projects: ReadonlyMap<string, PracticeProject>,
   projectId: string | null,
+  content: string | null = null,
 ): Readonly<Record<string, string>> {
+  const withContent = (fields: Readonly<Record<string, string>>): Record<string, string> =>
+    expandFieldValues({ ...fields, content: content ?? "" });
+
   if (projectId === null) {
     // Choose step has no project yet — use Signal placeholders for shared tokens that appear later.
     const signal = projects.get("signal");
-    return signal?.fields ?? {};
+    return withContent(signal?.fields ?? {});
   }
   const project = projects.get(projectId);
   if (project === undefined) {
     throw new Error(`tutorial project not found: ${projectId}`);
   }
-  return project.fields;
+  return withContent(project.fields);
 }
 
 export function wiredBeats(script: TutorialScript): readonly TutorialBeat[] {
@@ -202,27 +230,44 @@ export function renderBeat(
   beat: TutorialBeat,
   glossary: ReadonlyMap<string, GlossaryEntry>,
   fields: Readonly<Record<string, string>> = {},
-  options: { readonly planAccepted?: boolean; readonly checkVerdict?: boolean } = {},
+  options: {
+    readonly contentReady?: boolean;
+    /** @deprecated Use contentReady. Kept for older call sites. */
+    readonly planAccepted?: boolean;
+    readonly checkVerdict?: boolean;
+    readonly checkPassed?: boolean | null;
+  } = {},
 ): string {
   const filled = fillBeat(beat, fields);
-  const useAfterPlan =
-    options.planAccepted === true &&
+  // contentReady = toy content collected → show Plan/Done confirm.
+  // Legacy planAccepted meant the opposite phase; map only when contentReady unset.
+  const useAfterContent =
+    (options.contentReady === true ||
+      (options.contentReady === undefined && options.planAccepted === true)) &&
     (filled.aboutAfterPlan !== undefined || filled.nextAfterPlan !== undefined);
   const useAfterCheck =
-    options.checkVerdict === true && filled.nextAfterCheck !== undefined;
-  const about = useAfterPlan && filled.aboutAfterPlan !== undefined ? filled.aboutAfterPlan : filled.about;
+    options.checkVerdict === true &&
+    (filled.nextAfterCheckPass !== undefined ||
+      filled.nextAfterCheckFail !== undefined ||
+      filled.nextAfterCheck !== undefined);
+  const about =
+    useAfterContent && filled.aboutAfterPlan !== undefined ? filled.aboutAfterPlan : filled.about;
   let next = filled.next;
-  if (useAfterCheck && filled.nextAfterCheck !== undefined) {
-    next = filled.nextAfterCheck;
-  } else if (useAfterPlan && filled.nextAfterPlan !== undefined) {
+  if (useAfterCheck) {
+    if (options.checkPassed === true) {
+      next = filled.nextAfterCheckPass ?? filled.nextAfterCheck ?? "";
+    } else {
+      next = filled.nextAfterCheckFail ?? filled.nextAfterCheck ?? "";
+    }
+  } else if (useAfterContent && filled.nextAfterPlan !== undefined) {
     next = filled.nextAfterPlan;
   }
   const parts: string[] = useAfterCheck
     ? [filled.where, ""]
     : [filled.where, "", about, ""];
-  // After Plan/Done is accepted, skip glossary + caveat — the person already read them.
+  // After content is collected, skip glossary + caveat — the person already read them.
   // After the check runs, only show the verdict menu.
-  if (!useAfterPlan && !useAfterCheck) {
+  if (!useAfterContent && !useAfterCheck) {
     const words = filled.terms.map((term) => {
       const entry = glossary.get(term);
       if (entry === undefined) {
@@ -231,7 +276,9 @@ export function renderBeat(
       return termBlock(entry);
     });
     parts.push(...words.flatMap((word) => [word, ""]));
-    parts.push(`Something to keep in mind: ${filled.caveat}`, "");
+    if (filled.caveat.trim().length > 0) {
+      parts.push(`Something to keep in mind: ${filled.caveat}`, "");
+    }
   }
   if (!useAfterCheck && filled.output.trim().length > 0) {
     parts.push(filled.output, "");

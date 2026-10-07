@@ -4,7 +4,7 @@ The tutorial messages read this file. Each entry is the official term, a plain e
 
 ## Directive
 
-Plain: Directive is the step-by-step guide that runs this sitting.
+Plain: Directive is the shared path for building with AI — the step-by-step guide that runs this sitting.
 
 Why it matters: Without it, a later sitting would start with no shared path to follow.
 

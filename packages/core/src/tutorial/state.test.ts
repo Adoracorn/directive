@@ -78,16 +78,18 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(resumed.state.selectedProject).toBe("signal");
   });
 
-  it("keeps a failed check on prove-it and advances only after a pass", () => {
+  it("keeps a failed check on prove-it and advances only after continue on a pass", () => {
     let state = begin();
     state = advanceTutorial(state, beats, { project: "postcard" }).state;
-    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { content: "Wish you were here." }).state;
     expect(state.currentBeat).toBe("write");
-    expect(state.planAccepted).toBe(true);
+    expect(state.content).toBe("Wish you were here.");
+    expect(state.planAccepted).toBe(false);
     state = advanceTutorial(state, beats, {
-      content: "Wish you were here.",
+      confirm: true,
       workItemPath: "xbrief/proposed/postcard.xbrief.json",
     }).state;
+    expect(state.currentBeat).toBe("start");
     state = advanceTutorial(state, beats, { confirm: true }).state;
     state = advanceTutorial(state, beats, { contentSeen: true }).state;
     expect(state.currentBeat).toBe("result");
@@ -98,21 +100,25 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(failed.state.checkPassed).toBe(false);
 
     const passed = advanceTutorial(failed.state, beats, { check: "pass" });
-    expect(passed.state.currentBeat).toBe("close");
+    expect(passed.state.currentBeat).toBe("result");
     expect(passed.state.checkPassed).toBe(true);
+
+    const continued = advanceTutorial(passed.state, beats, { confirm: true });
+    expect(continued.state.currentBeat).toBe("close");
   });
 
   it("closes only after a passed check, then completes on leave", () => {
     let state = begin();
     state = advanceTutorial(state, beats, { project: "echo" }).state;
-    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { content: "Q: Hi? A: Hello." }).state;
     state = advanceTutorial(state, beats, {
-      content: "Q: Hi? A: Hello.",
+      confirm: true,
       workItemPath: "xbrief/proposed/echo.xbrief.json",
     }).state;
     state = advanceTutorial(state, beats, { confirm: true }).state;
     state = advanceTutorial(state, beats, { contentSeen: true }).state;
     state = advanceTutorial(state, beats, { check: "pass" }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
     expect(state.currentBeat).toBe("close");
 
     const closed = advanceTutorial(state, beats, { complete: true });
