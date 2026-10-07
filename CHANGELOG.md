@@ -13,6 +13,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.123.0] - 2026-10-07
+
+> Confidence 0.8 read-compat (#5385), stamp-evidence markdown kind coherence (#5382), pre-PR inert coverage skip (#5421), debug investigation templates (#5195), historical ship-closeout (#5403), write-fence recovery (#4880), intent-constraint engine TS load (#5194), pnpm upgrade empty-lockfile (#5384), stale active-scope pin recovery (#5386), plus Path B activations and leftover-complete.
+
 - **Worktrees probe fail-closed case-fold harden (#5460).** Cache false when the sensitivity probe cannot write, and refuse case-only admin-entry matches unless a fresh bypass-cache probe proves the parent folds. Tracking #5460.
 - **Mint approved-scope for #5460 (Path B membership).** Operator TTY stamp of merge-base `.deft/approved-scope/github.issue.5748573348.json` (+ intent preimage) so the product PR can resolve continuity-keyed membership. Mint-only — no product code. Tracking #5460.
 - **Leftover-complete #5460 after product #5462.** Retire the active Prefer-A Bound brief into `xbrief/completed/` with pathless not_applicable dispositions after Tracking product squash-merge. Tracking #5460.
@@ -7005,7 +7018,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.122.0...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.123.0...HEAD
+[0.123.0]: https://github.com/deftai/directive/compare/v0.122.0...v0.123.0
 [0.122.0]: https://github.com/deftai/directive/compare/v0.121.0...v0.122.0
 [0.121.0]: https://github.com/deftai/directive/compare/v0.120.0...v0.121.0
 [0.120.0]: https://github.com/deftai/directive/compare/v0.119.13...v0.120.0
