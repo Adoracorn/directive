@@ -28,10 +28,13 @@ import {
   fenceUntrustedAcceptanceText,
   formatAcceptanceCompletionListing,
   formatScopeStatus,
+  HISTORICAL_SHIP_CLAUSE_BEARING_REMEDIATION,
+  HISTORICAL_SHIP_CLOSEOUT_ADMIT_MESSAGE,
   inferRequiredStrictAxes,
   isEvidenceKindSuitable,
   itemDeclaresMergeRequirement,
   MERGE_POINTER_SHAPE_REMEDIATION,
+  migrateNoneStatedForHistoricalShip,
   persistClauseKeyedPendingItems,
   readNamespacedAcceptanceFields,
   SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION,
@@ -2538,6 +2541,7 @@ describe("stampDeclaredMergeEvidence (#5105)", () => {
         completionProvenance: {
           mergeCommit: "abcdef1",
           deliveryBranch: "master",
+          disposition: "delivered",
           verifier: "scope:complete",
         },
       },
@@ -2567,6 +2571,7 @@ describe("stampDeclaredMergeEvidence (#5105)", () => {
         completionProvenance: {
           mergeCommit: "abcdef1",
           deliveryBranch: "master",
+          disposition: "delivered",
           verifier: "scope:complete",
         },
       },
@@ -2594,6 +2599,7 @@ describe("stampDeclaredMergeEvidence (#5105)", () => {
         completionProvenance: {
           mergeCommit: "abcdef1",
           deliveryBranch: "master",
+          disposition: "delivered",
           verifier: "scope:complete",
         },
       },
@@ -2623,6 +2629,7 @@ describe("stampDeclaredMergeEvidence (#5105)", () => {
           mergeCommit: "abcdef1",
           deliveryBranch: "master",
           deliveryCommit: "tipsha",
+          disposition: "delivered",
           verifier: "scope:complete",
         },
       },
@@ -2691,6 +2698,7 @@ describe("stampDeclaredMergeEvidence (#5105)", () => {
         completionProvenance: {
           mergeCommit: "abcdef1",
           deliveryBranch: "master",
+          disposition: "delivered",
           verifier: "scope:complete",
         },
       },
@@ -2714,5 +2722,233 @@ describe("clauseKeyedItemId write-path mint (#5422)", () => {
     expect(
       persistClauseKeyedPendingItems({ acceptance: { clauses: [{ id: 3, text: "x" }] } }).addedIds,
     ).toEqual(["clause.3"]);
+  });
+});
+
+describe("historical ship-closeout (#5403)", () => {
+  const walkOptions = {
+    projectRoot: process.cwd(),
+    hasSuiteFloor: false,
+    captureFromNarratives: false,
+  } as const;
+
+  it("admits clause-less empty acceptance when delivered provenance is present", () => {
+    const walk = evaluateScopeCompleteAcceptanceWalk(
+      {
+        id: "5403-clause-less",
+        title: "historical empty",
+        acceptance: { commands: [], none_stated: true, source_rung: "project_floor" },
+        items: [],
+        metadata: {
+          completionProvenance: {
+            mergeCommit: "abcdef1",
+            deliveryBranch: "master",
+            disposition: "delivered",
+            prNumber: 99,
+          },
+        },
+      },
+      walkOptions,
+    );
+    expect(walk.ok).toBe(true);
+    expect(walk.predicate).toBe("empty-pass");
+    expect(walk.message).toContain(HISTORICAL_SHIP_CLOSEOUT_ADMIT_MESSAGE);
+  });
+
+  it("still refuses empty acceptance without merge provenance", () => {
+    const walk = evaluateScopeCompleteAcceptanceWalk(
+      {
+        id: "5403-no-prov",
+        title: "empty acceptance",
+        acceptance: { commands: [], none_stated: true, source_rung: "project_floor" },
+        items: [],
+      },
+      walkOptions,
+    );
+    expect(walk.ok).toBe(false);
+    expect(walk.predicate).toBe("empty-acceptance");
+  });
+
+  it("refuses non-delivery disposition even when merge pointers are present", () => {
+    const walk = evaluateScopeCompleteAcceptanceWalk(
+      {
+        id: "5403-non-delivery",
+        title: "unshipped with merge pointers",
+        acceptance: { commands: [], none_stated: true, source_rung: "project_floor" },
+        items: [],
+        metadata: {
+          completionProvenance: {
+            mergeCommit: "abcdef1",
+            deliveryBranch: "master",
+            disposition: "accepted_not_delivered",
+            prNumber: 99,
+          },
+        },
+      },
+      walkOptions,
+    );
+    expect(walk.ok).toBe(false);
+    expect(walk.predicate).toBe("empty-acceptance");
+    expect(walk.message).not.toContain(HISTORICAL_SHIP_CLOSEOUT_ADMIT_MESSAGE);
+  });
+
+  it("refuses merge pointers without delivered disposition", () => {
+    const walk = evaluateScopeCompleteAcceptanceWalk(
+      {
+        id: "5403-no-disposition",
+        title: "merge pointers only",
+        acceptance: { commands: [], none_stated: true, source_rung: "project_floor" },
+        items: [],
+        metadata: {
+          completionProvenance: {
+            mergeCommit: "abcdef1",
+            deliveryBranch: "master",
+            prNumber: 99,
+          },
+        },
+      },
+      walkOptions,
+    );
+    expect(walk.ok).toBe(false);
+    expect(walk.predicate).toBe("empty-acceptance");
+  });
+
+  it("refuses clause-bearing empty acceptance with honest historical remedy", () => {
+    const walk = evaluateScopeCompleteAcceptanceWalk(
+      {
+        id: "5403-clause-bearing",
+        title: "clause bearing historical",
+        acceptance: {
+          commands: [],
+          none_stated: true,
+          source_rung: "project_floor",
+          clauses: [
+            {
+              id: 1,
+              text: "packages/core/src/not-shipped-5403.ts exists",
+              artifact_path: "packages/core/src/not-shipped-5403.ts",
+              ambiguous: false,
+            },
+          ],
+        },
+        items: [],
+        metadata: {
+          completionProvenance: {
+            mergeCommit: "abcdef1",
+            deliveryBranch: "master",
+            disposition: "delivered",
+            prNumber: 99,
+          },
+        },
+      },
+      walkOptions,
+    );
+    expect(walk.ok).toBe(false);
+    expect(walk.message).toContain(HISTORICAL_SHIP_CLAUSE_BEARING_REMEDIATION);
+    expect(walk.message).not.toMatch(
+      /stamp an allowlisted executable on plan\.acceptance\.commands/,
+    );
+  });
+
+  it("migrates none_stated only when delivered provenance is present", () => {
+    const withProv: Record<string, unknown> = {
+      acceptance: { commands: [], none_stated: false },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          disposition: "delivered",
+        },
+      },
+    };
+    expect(migrateNoneStatedForHistoricalShip(withProv)).toBe(true);
+    expect((withProv.acceptance as { none_stated: boolean }).none_stated).toBe(true);
+
+    const nonDelivery: Record<string, unknown> = {
+      acceptance: { commands: [], none_stated: false },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          disposition: "accepted_not_delivered",
+        },
+      },
+    };
+    expect(migrateNoneStatedForHistoricalShip(nonDelivery)).toBe(false);
+    expect((nonDelivery.acceptance as { none_stated: boolean }).none_stated).toBe(false);
+
+    const without: Record<string, unknown> = {
+      acceptance: { commands: [], none_stated: false },
+    };
+    expect(migrateNoneStatedForHistoricalShip(without)).toBe(false);
+    expect((without.acceptance as { none_stated: boolean }).none_stated).toBe(false);
+  });
+
+  it("stampMergeFromCompletionProvenance admits undeclared non-strict items", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Historical undeclared",
+      status: "pending",
+    };
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Historical undeclared", artifact_path: null, ambiguous: false }],
+      },
+      metadata: {
+        completionProvenance: {
+          mergeCommit: "abcdef1",
+          deliveryBranch: "master",
+          deliveryCommit: "tipsha",
+          disposition: "delivered",
+          verifier: "scope:complete",
+        },
+      },
+    };
+    const result = stampMergeFromCompletionProvenance(plan, {
+      projectRoot: "/repo",
+      reuseValidatedAncestry: true,
+      recorded_at: "2026-10-06T12:00:00Z",
+    });
+    expect(result.stampedIds).toEqual([clauseKeyedItemId(1)]);
+    expect(item[ACCEPTANCE_REQUIRES_KEY]).toBe("merge");
+    expect(itemDeclaresMergeRequirement(item)).toBe(true);
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toMatchObject({
+      kind: "merge",
+      pointer: "abcdef1",
+    });
+    // Stamp + suitability must agree so complete does not leave a refused stamp.
+    expect(
+      isEvidenceKindSuitable("merge", inferRequiredStrictAxes(item), {
+        mergeDeclared: itemDeclaresMergeRequirement(item),
+      }),
+    ).toBe(true);
+    const gate = evaluateAcceptanceEvidenceGate(plan);
+    expect(gate.ok).toBe(true);
+    expect(gate.reports[0]?.outcome).toBe("evidence");
+  });
+
+  it("stampDeclaredMergeEvidence without admitUndeclaredMerge still skips undeclared", () => {
+    const item: Record<string, unknown> = {
+      id: clauseKeyedItemId(1),
+      title: "Still undeclared",
+      status: "pending",
+    };
+    const plan: Record<string, unknown> = {
+      items: [item],
+      acceptance: {
+        clauses: [{ id: 1, text: "Still undeclared", artifact_path: null, ambiguous: false }],
+      },
+    };
+    const result = stampDeclaredMergeEvidence(plan, {
+      recorded_by: "scope:complete",
+      recorded_at: "2026-10-06T12:00:00Z",
+      mergeCommit: "abcdef1",
+      projectRoot: "/repo",
+      deliveryBranch: "master",
+      verifyAncestry: () => ({ ok: true, error: null, remoteTip: "tipsha" }),
+    });
+    expect(result.skipped[0]?.reason).toBe("undeclared-merge");
+    expect(item[ACCEPTANCE_EVIDENCE_KEY]).toBeUndefined();
   });
 });
