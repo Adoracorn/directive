@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Confidence enum 0.8 compatibility can proceed for #5385.** Records the approved file list for the product fix so scope checks can pass on PR #5432. Tracking #5385. Refs #5441.
+- **Path B activation for #5403.** Land the Prefer-A Bound active brief so the stacked product PR can pass scope membership. Tracking #5403.
 - **Keep active #5195 Prefer-A Bound brief for Path B continuity.** Lands the continuity-resolved active xBRIEF with concrete file_scope on master so the stacked product PR can pass verify:scope-provenance membership (#5192 / #4774). Leaves metadata.productPullRequest unset on this activation land. Tracking #5195.
 - **Approved-scope mint for #5195 includes `docs/RULE-MAP.md`.** Operator TTY mint lands `.deft/approved-scope/github.issue.5652287218` so product PR #5436 can regenerate the rule map without membership failure. Tracking #5195.
 - **Expanded Path B activation for #5421.** Widens the active brief so product PR #5431 can pass scope membership checks. Tracking #5421.
@@ -119,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore(xbrief): widen #1164 file_scope to include docs/RULE-MAP.md (Path B precommitment for product land).
 
 ### Added
+
 - **Keep active #5353 brief for Path B membership.** Lands the continuity-resolved active xBRIEF with concrete `file_scope` on master so product PR #5357 can pass verify:scope-provenance membership (#5192 / #4774). Leaves `metadata.productPullRequest` unset on this activation land; product delivery #5357 binds it. Tracking #5353.
 - **Interview phase/approval durable carrier (#5352 Prefer-A Bound).** Names `plan["x-directive/interviewContinuation"]` on `./xbrief/plan.xbrief.json` as the sole durable continuation record (closed phase enum; confirmation scope tags with required revisionId for artifact/phase; operator-enumerated delta; handoff read-side refuse; first-delta initialize when carrier absent). Excludes ephemeral continue-here as carrier. Maps answer/artifact/phase approvals onto Rule 6 / Post-Interview / Full Path gates with planning-only precedence. Dual pack+rendered content-contract carrier-assert pins (no new CLI verify verb in this land). Tracking #5352.
 - **Doctor deposit advisory + chip docs (#5326 split).** Lands `checkDesignCritiqueDeposit` on the doctor path and the contract/skill ensure-or-doctor pointers for catalog chip recovery. Tracking #5326.
@@ -240,6 +242,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Residual re-ingest (#5177), first-ship PD/AGENTS gates (#5176/#4544), Windows Step 5 cheapen (#5140), and Fresh-clone completed-land (#4714).
 
 ### Added
+
 - **WSL root-runtime ownership guard (#1617).** session:start soft-warns with the resolved filesystem project-owner (uid:gid + account); mutating check/update/preflight fail closed on harm-capable WSL root mismatch unless DEFT_ALLOW_ROOT_WSL_RUNTIME=1. Mount-pinned DrvFs/9p without metadata and native Windows/macOS are exempt. Ships ownership:doctor / ownership:fix / verify:ownership (CLI + task / deft: aliases). Tracking #1617.
 - **Residual re-ingest for reopened shipped issues (#5177).** Reopened shipped issues can be ingested again as a residual brief with lineage to the prior ship; Stage A clears sticky `needs-re-scope` when that residual is live. Tracking #5177.
 
@@ -304,6 +307,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Batched finalize-owed tip inventory (#5171), named zero-reviewer terminal (#3630), sticky tip-rot greptile-sha-stall (#5162), finalize-owed FP refuse (#5143), and clearer check-gate remedies (#1883).
 
 ### Added
+
 - **Named zero-reviewer terminal for review-cycle / pr:watch (#3630).** Presence probe plus optional `plan.policy.review.reviewers` (`[]` = explicit none) exits `NO_REVIEWER_INSTALLED` (exit 2) before the poll loop; `pr:merge-ready` inherits it. Empty observation never CLEAN. Young/incomplete check-run inventory and green non-bot CI fail-close to poll (late bot). Soft GitHub CLEAN reconcile does not drop the no-reviewer failure. Slow reviewers still poll. Handback `review_cycle: skipped:no-reviewer-installed` routes to pre-pr self-review. Doctor reports local presence. #769 stays substitution. Closes #3630.
 
 - **README Getting Started links the Directive training course (#5154).** Points at [`deftai/directive-training`](https://github.com/deftai/directive-training). Tracking #5154.
@@ -354,6 +358,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **fix(class-checks): allow CI harness workflows (not release/npm-publish) to reference test/fixture roots (#5097).** Class 2 still fails closed for non-workflow deploy/pipeline paths.
 
 ### Added
+
 - **swarm:launch reachable for freshly-accepted N=1 stories via scaffold + solo-headless readiness (#3718).** `swarm:readiness --scaffold` writes `plan.metadata.swarm` from operator-named `--file-scope` / explicit draft fields only (refuses inventing fence authority from issue text; #4988). Documented N=1 / solo headless launch (`swarm:launch` cohort size 1, or `swarm:readiness --solo-headless`) relaxes ceremony fields `expected_outputs`, `conflict_group`, and `model_tier` while keeping load-bearing `file_scope` / `verify_commands` / `depends_on` / `size` / `file_scope_confidence`. Readiness and launch failures name the scaffold path and keep `xbrief:preflight` as lifecycle-ready only. Interactive solo discoverability stays on #3669. Tracking #3718.
 - **Merge-gate enforcement readiness at strategy start (#1517).** Named forge required-status-check axis distinct from local `allowDirectCommitsToMaster` / Phase 2 "branch-protection ON" (agent-commit only). Detect via existing `fetchRequiredStatusContexts` (protected/absent/unknown); durable `.deft/merge-gate-enforcement/` record (`configured`|`explicit-opt-out`|`cannot-configure`|`deferred-not-applicable`); optional configure refuses empty PUT and auto-promoted harvest; preserves human-review / `requireHumanMerge`. Tracking #1517.
 - **Under a recorded presentation ceiling, cannot-evaluate is refuse or escalate (#5079).** `verify:presentation-ceiling` arms from any add-only or tightening head restriction on the #5056 `.deft/presentation-ceilings/` artifact (this dest owns that compare until #5056 lands), covers each changed path, and fails closed on intent-constraint N/A and observable-scope warn-exit-0. Off-ceiling N/A stays 0. Do not add the artifact to class-checks `DEFAULT_PROTECTED_GLOBS`. Rapid/pressure still run the compositor. Refs #5056, #4541, #5078.
@@ -396,6 +401,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Dirty-deposit update partition (#5096), Step 5 hang detector 45 to 60 minutes (#5091), win32 gh.cmd SCM spawn (#5081), finalize-owed backstop (#4919), Tracking origin-close after leftover (#4864), coverage-of-record Step 5 (#5026), Target-digest ingest-ready (#4995), operator scope-limit (#4545), and suite-load testTimeout (#5107). Step 5 skipped with --allow-skip-ci=5107 after nearly-green 44m suite (1 timeout flake) per operator approval.
 
 ### Added
+
 - **In-class durable-effect acquisition gate under a presentation ceiling (#5080).** `verify:durable-effect-acquisition` consumes the #5056 ceiling artifact and refuses storage, cookies, non-GET or non-sentinel network, and markup submission in changed `.tsx` / `.jsx` / `.html`. Submitter `formmethod`, non-sentinel `<base href>`, and any-namespace `on*` handlers refuse. skipped/N/A is not an exit under an armed ceiling. Composed on consumer and framework `task check`. Closes #5080.
 - **Operator scope-limit ceiling + warn-first untraceable-surface check (#4545).** Closed-lexicon phrases (`do not add`, `nothing beyond`, `initial version only`, …) seed a hard ceiling on the proposed brief (or durable artifact) even when rapid/greenfield has no `xbrief/active/` brief; `deft verify:operator-scope-limit` lists exported actions/routes/pages not traceable to a requirement line (warn-first; remediation: remove, or add to the brief and get operator approval). Distinct from slash-verb intent-ceiling (#1193). Refs #4545.
 - **perf(vitest): committed durations + DurationSequencer arm slowest-first on cold release worktrees (Tracking #5028).** Fresh trees no longer depend on host-global vitest cache.dir. Fixture packages/core/fixtures/vitest-file-durations.json (interim until #5027). Refs #5028, #5027, #5024.
@@ -1189,6 +1195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Stable ingest plan.id, spawned worktrees, design-critique front door, spec/PRD freshness, and session/authz/lifecycle fixes.
 
 ### Added
+
 - **Fail-closed SPECIFICATION.md / PRD.md render freshness (`task verify:spec-prd-fresh`) (#4086).** Re-renders to a buffer and fails on banner or projection diff, wired into `check:framework-source`. Banner canon and full projection freshness are separate assertions. Closes #4086.
 - **Design-critique front door is a run-posture field, not a second ingest switch (#4072).** Stop 1 records `arc-mode: direct` or `arc-mode: checkout`. Direct is `session:start --read-only` (or release), GitHub comments via `gh issue comment --body-file -`, SHA-pinned reads, and family CLIs without worktrees. Missing token, including yolo, asks. Ingest stays a later verb after the completed-arc record. Closes #4072. Refs #4020, #4066, #4067.
 
@@ -1247,6 +1254,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > Withdraws classify-mirror, adds the Grok Build subscription playbook, and fail-closes occupancy, write-fence, coverage, and design-critique gates.
 
 ### Added
+
 - **Grok Build subscription-only setup playbook for maintainer agents (#4035).** `content/docs/grok-build-subscription-setup.md` is the in-repo host-auth playbook: SuperGrok parent (`grok login` / grok.com), Claude Code via `claude.ai` team CLI, Codex via ChatGPT CLI. User-scope console keys may remain; Grok must not inherit them (`[shell_environment_policy]` exclude). No BYOK `[model.*]` Console blocks. Five verification probes and hard stops (do not unset User/Machine keys, do not logout, do not print secrets). Pointer from `CONTRIBUTING.md`. Closes #4035.
 
 ### Changed
@@ -1306,6 +1314,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > On Grok, the worktree lease no longer denies the session holding it, and two write-gate bypasses close: patch-declared paths and a fenced release census.
 
 ### Added
+
 - **Recorded a routing decision against `gpt-5.3-codex` for subagent dispatch (#3979).** Two dispatches reported success while naming GitHub comment ids that did not exist, one of them after making zero tool calls, while sibling agents given the identical instructions did the work and posted real results. A decision record now captures the evidence, the alternatives weighed, and the conditions under which the choice should be reopened. Refs #3961, #3974.
 - **Pack-versus-guidance checks are fail-closed verifiers, not a skill (#3900).** Check 1 (`task verify:deposit-closure`) resolves the C1 declared required-path set against a staged pack root and reuses `evaluateDepositClosure`; a mutated staged tree fails. Check 3 is C2 `task verify:semantic-single-source` (already on master). Check 2 is C3 live-procedure targets (PR #3957 / #3602) -- composed, not rebuilt. Check 4 (`task verify:consumer-hard-stops`) enumerates open consumer hard-stops by BLOCKER title classification and the adoption-blocker label only and never reads issue bodies (#3713). Checks 5 and 6 print new-refusal and net-posture disclosure at the release decision point and do not auto-block a tag. Wired into `task check` (check 1 + C2) and release pre-flight. Closes #3900. Refs #3899, #3601, #3713, #3156.
 - **C2 semantic single-source conformance for the xBRIEF write version (#3600 / #3899).** Shipped authoring surfaces must name exactly one current write version, and it must be the version setup writes. Pointer resolution cannot see this class: the 0.6-versus-0.8 defect lived in files that already resolved. `task verify:semantic-single-source` evaluates a staged pack root (or the source tree), and a mutation fixture reverts a shipped file to stale 0.6 to prove the gate is not vacuous. Mixed MUST lines still fail when the envelope or a bare quoted write mandate is mutated to 0.6 beside a legacy qualifier, and an unreadable resolved surface is config-fail rather than a silent pass. The consumer agents-entry template names 0.8 as the new-write default. Does not close #3899.
@@ -1360,6 +1369,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed: local Cursor sessions no longer misread as cloud, so SCM-dependent gates stop silently skipping when a healthy gh login is available. Cursor-managed VMs are now denied host credentials by a positive agent/runtime=managed metadata read that still lands if an earlier probe failed, an ambiguous Cursor runtime requires an explicit DEFT_GITHUB_AUTH_MODE=host-gh opt-in, and skipped gates now report why (#3859).
 
 ### Added
+
 - **Legible recovery when the hook runtime is missing (#3785).** A fresh clone, CI runner, or cloud-agent image that receives `.cursor/hooks.json` without a Node install of the CLI fail-closes every mutation on an opaque exit 127, because the registration travels via git and the runtime it names does not. `deft init` / `deft update` now warn when a hook registration travels with the repository -- already committed, or untracked and not ignored so the next `git add` carries it -- while no `package.json` dependency on `@deftai/directive` travels with it to let a clone obtain `deft-hook`. New `docs/hook-runtime-unavailable.md` and an always-on AGENTS.md card name the durable workaround for an already-locked-out environment: `deft policy:disable-host-hooks --host cursor --confirm`. Do NOT hand-edit `failClosed` in the deposited hook file -- the next `deft update` rewrites it and silently re-arms the lockout. This does not clear an existing lockout: an environment whose runtime is still missing keeps exiting 127 on every mutation until that opt-out is applied, and #3785 stays open. Fail-closed itself is unchanged: absent, crashed, and timed-out stay one non-decision class. Refs #3736, #3571, #3156.
 - **A dispatched child can be admitted to a worktree lease by name, instead of by holding the owner's session string (#3755).** The occupant runs `deft occupancy:grant --child-session-id=<child> --role <worker-role>` (`--revoke` withdraws it), which records owner id, child id, worktree, role and expiry on the lease, so a write resolves to a session rather than to whoever had the string. Writes are admitted for the owner or a valid unexpired member; release, steal, heartbeat and cohort close-out stay owner-only, so a grant never escalates into the lease itself. An expired grant is refused on read, expiry can never outlast the lease's 12-hour age cap, and a steal or fresh claim starts with no members. A member's write renews the lease on the same floor as the owner's, so a quiet owner does not cost an actively-writing child its worktree, and the composite write gate now measures the verified ritual owner against the occupant that issued the grant instead of the writer. The docs now name the boundary honestly: cooperative bearer-id, not lineage. Closes #3755. Refs #3613, #3599, #3872.
 - **The design-critique contract now defines its own unit of work.** `## Framing` defines an arc as one recorded motion over one target revision — the Stop 1 write-back through accepted synthesis or the halt line — holding one or more rounds. Its boundaries are read off the ceiling and auto-stamp machinery that already exists rather than asserted. Stop 2 adds `### Target shape`: set-level and against-implementation are what is being critiqued, an axis independent of charter, so neither becomes a variant-table row. Bind path 2 now refuses stubs and footnote-only censuses just as path 1 does, so a hollow arc can no longer reach `design-critique:triage-ready` through the operator verb. Closes #3797. Refs #3434, #3610, #3781, #3796, #3798, #3799, #3803, #3850.
@@ -1426,6 +1436,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.107.0] - 2026-08-26
 ### Added
+
 - **Ordinary occupancy release (#3604).** A holder can drop a live lease with `occupancy:release` or `session:end`. A non-owner cannot clear a live lease. Expired leftover files are residue, not a blocked entry path; the same release path clears them. Steal stays confirm-gated for live occupants and prints existing `claimed_at` / `heartbeat_at`. Swarm close-out stays `releaseSwarmOccupancy` on complete-cohort. No `reap` verb. Closes #3604.
 - **Land leftover completed-tracked artifact for #3604 (#3264 / #1358).** The #3604 xBRIEF stayed untracked after squash of PR 3748. Moved to xbrief/completed/ via scope:complete. Does not reopen or recut that issue. Refs #2321, #3476.
 
