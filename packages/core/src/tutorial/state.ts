@@ -280,6 +280,19 @@ function previousWired(beats: readonly TutorialBeatRef[], current: string): stri
   return ids[index - 1] ?? null;
 }
 
+/** Clear plan / work-file / prove-it fields when the person rewinds or changes project. */
+function clearPlanAndLater(state: TutorialState): TutorialState {
+  return {
+    ...state,
+    content: null,
+    workItemPath: null,
+    planAccepted: false,
+    planConfirmed: false,
+    contentSeen: false,
+    checkPassed: null,
+  };
+}
+
 /** Step back one wired beat (Discuss/Back contract). */
 export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]): TutorialStep {
   if (state.currentBeat === null) {
@@ -294,7 +307,15 @@ export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
       state.currentBeat,
     );
   }
-  return step(true, "Moved back one step. Read it aloud.", { ...state, currentBeat: prior }, prior);
+  let next: TutorialState = { ...state, currentBeat: prior };
+  // Rewinding into choose or write must not keep a stale plan / work file.
+  if (prior === "choose" || prior === "write") {
+    next = clearPlanAndLater(next);
+  }
+  if (prior === "choose") {
+    next = { ...next, selectedProject: null };
+  }
+  return step(true, "Moved back one step. Read it aloud.", next, prior);
 }
 
 function withCompleted(state: TutorialState, beatId: string): TutorialState {
@@ -413,10 +434,8 @@ export function skipBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
       state.currentBeat,
     );
   }
-  const next = withCompleted(
-    { ...state, currentBeat: following, status: "in_progress" },
-    state.currentBeat,
-  );
+  // Skip moves forward without recording completion — final leave still needs a real close.
+  const next: TutorialState = { ...state, currentBeat: following, status: "in_progress" };
   return step(true, "Skipped to the next step. The work is not finished.", next, following);
 }
 
@@ -479,10 +498,11 @@ function gateAdvance(
           message: "Pick 1, 2, 3, or 4 (Leave) before this step can move on.",
         };
       }
+      // Changing (or re-picking) a project must not keep a prior plan / work file.
       return {
         ok: true,
         message: "Practice project recorded.",
-        state: { ...state, selectedProject: resolved },
+        state: { ...clearPlanAndLater(state), selectedProject: resolved },
       };
     }
     case "write": {

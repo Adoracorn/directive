@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   advanceTutorial,
+  backBeat,
   emptyTutorialState,
   leaveTutorial,
   loadTutorialState,
@@ -199,8 +200,29 @@ describe("Directive Tutorial state (#4981)", () => {
     state = skipBeat(state, beats).state; // result -> close
     state = skipBeat(state, beats).state; // close -> leave
     expect(state.currentBeat).toBe("leave");
+    expect(state.completedBeats).not.toContain("close");
     const finished = advanceTutorial(state, beats, {});
     expect(finished.ok).toBe(false);
     expect(finished.state.status).not.toBe("completed");
+  });
+
+  it("clears plan and work file when Back returns to write", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "signal" }).state;
+    state = advanceTutorial(state, beats, { content: "Alex — on the bridge." }).state;
+    state = advanceTutorial(state, beats, {
+      confirm: true,
+      workItemPath: "xbrief/proposed/signal.xbrief.json",
+    }).state;
+    expect(state.currentBeat).toBe("start");
+    expect(state.planAccepted).toBe(true);
+    expect(state.workItemPath).not.toBeNull();
+
+    const backed = backBeat(state, beats);
+    expect(backed.ok).toBe(true);
+    expect(backed.state.currentBeat).toBe("write");
+    expect(backed.state.planAccepted).toBe(false);
+    expect(backed.state.workItemPath).toBeNull();
+    expect(backed.state.content).toBeNull();
   });
 });

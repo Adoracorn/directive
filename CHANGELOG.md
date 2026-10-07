@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## [Unreleased]
+- **fix(tutorial): clear stale plan on Back, non-delivery close, and census/budget (#4981).** Rewind or project change clears plan/work-file; practice `scope:complete` uses `--non-delivery experiment_archived`; Skills Index triggers, FILES census, RULE-MAP grouping, OpenPackage 7/27 counts, and skillFrontmatterMaxBytes 2337. Tracking #4981.
 - **fix(tutorial): review-cycle harden for install path, menus, and lifecycle (#4981).** Load deposited `tutorial/` via `contentRoot`; fill promote/activate and active work-file commands; require Discuss/Back; refuse completed restart / skip-graduate / in-tree sandboxes; renew evaluator-surface disclosure for `Taskfile.yml`. Tracking #4981.
 - **Worktrees probe fail-closed case-fold harden (#5460).** Cache false when the sensitivity probe cannot write, and refuse case-only admin-entry matches unless a fresh bypass-cache probe proves the parent folds. Tracking #5460.
 - **Mint approved-scope for #5460 (Path B membership).** Operator TTY stamp of merge-base `.deft/approved-scope/github.issue.5748573348.json` (+ intent preimage) so the product PR can resolve continuity-keyed membership. Mint-only — no product code. Tracking #5460.
