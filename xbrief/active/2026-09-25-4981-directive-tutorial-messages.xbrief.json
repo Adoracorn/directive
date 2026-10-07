@@ -46,6 +46,7 @@
     ],
     "metadata": {
       "kind": "story",
+      "productPullRequest": 5464,
       "swarm": {
         "file_scope": [
           "content/tutorial/",
@@ -58,10 +59,12 @@
           "packages/core/src/user-config/",
           "packages/cli/src/dispatch.ts",
           "packages/core/src/init-deposit/skill-discovery-deposit.ts",
+          "packaging/openpackage/deft-tiers.json",
           "tasks/tutorial.yml",
           "Taskfile.yml",
           "CHANGELOG.md",
-          "xbrief/active/2026-09-25-4981-directive-tutorial-messages.xbrief.json"
+          "xbrief/active/2026-09-25-4981-directive-tutorial-messages.xbrief.json",
+          "xbrief/evaluator-surface-disposition.json"
         ]
       }
     },
