@@ -9,6 +9,10 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import {
+  type CoverageApplicabilityDeps,
+  evaluateCoverageApplicability,
+} from "../coverage-applicability/index.js";
+import {
   isAllowedSkip,
   PRE_PR_CONTROLLER_VERSION,
   PRE_PR_PHASES,
@@ -186,8 +190,11 @@ export function observeCommandPhase(
         "command observation input hash does not match the run binding",
       );
     }
-    const failed =
-      observation.exitCode !== 0 && !isAllowedSkip(observation.phaseId, observation.skipReason);
+    const skipOk =
+      observation.phaseId === "coverage_headroom"
+        ? observation.exitCode === 3 && isAllowedSkip(observation.phaseId, observation.skipReason)
+        : isAllowedSkip(observation.phaseId, observation.skipReason);
+    const failed = observation.exitCode !== 0 && !skipOk;
     const row: CommandObservation = {
       phaseId: observation.phaseId,
       command: observation.command,
@@ -294,10 +301,79 @@ export function noteSkillFileOpen(): PrePrDecision {
   return deny("deny-skill-file-open", SKILL_FILE_OPEN_NOT_COMPLETION);
 }
 
-function commandSatisfied(record: PrePrExecutionRecord, phaseId: PrePrPhaseId): boolean {
+/**
+ * Safe observation-only flags for measured coverage_headroom commands.
+ * Reject `--project-root` / `--base-ref` redirects — they can measure another tree
+ * while the observation stays labeled with this run's inputHash (#5421).
+ */
+function isSafeCoverageHotspotsFlag(token: string): boolean {
+  return token === "--json" || token === "--quiet" || token === "-q";
+}
+
+/**
+ * Accept the phase-spec hotspots command, plus documented wrappers / safe flags
+ * (`--json`, `task coverage:hotspots`, `directive coverage:hotspots`).
+ */
+function coverageHotspotsCommandMatches(observed: string, specCommand: string): boolean {
+  const normalized = observed.trim().replace(/\s+/g, " ");
+  if (normalized.length === 0) return false;
+  if (normalized === specCommand) return true;
+  const tokens = normalized.split(" ");
+  const head = tokens[0]?.toLowerCase() ?? "";
+  const verb = tokens[1] ?? "";
+  if ((head === "deft" || head === "directive") && verb === "coverage:hotspots") {
+    return tokens.slice(2).every(isSafeCoverageHotspotsFlag);
+  }
+  if (head === "task" && (verb === "coverage:hotspots" || verb === "deft:coverage:hotspots")) {
+    const rest = tokens.slice(2);
+    if (rest[0] === "--") return rest.slice(1).every(isSafeCoverageHotspotsFlag);
+    return rest.every(isSafeCoverageHotspotsFlag);
+  }
+  return false;
+}
+
+/**
+ * Coverage-scoped satisfaction (#5421 Prefer-A Bound):
+ * - measured pass: exit 0 only when command matches the phase spec (hotspots)
+ * - authorized N/A: non-zero + closed skip reason + controller re-derives inert
+ * Arbitrary exit-0 audits and forged skip tokens without re-derivation fail.
+ */
+function commandSatisfied(
+  record: PrePrExecutionRecord,
+  phaseId: PrePrPhaseId,
+  options?: {
+    readonly projectRoot?: string;
+    readonly applicabilityDeps?: CoverageApplicabilityDeps;
+  },
+): boolean {
   const row = record.phaseEvidence.commands.find((c) => c.phaseId === phaseId);
   if (row === undefined) return false;
   if (row.inputHash !== record.inputHash) return false;
+
+  if (phaseId === "coverage_headroom") {
+    const spec = phaseSpec(phaseId);
+    if (row.exitCode === 0) {
+      return spec.command !== null && coverageHotspotsCommandMatches(row.command, spec.command);
+    }
+    // Authorized N/A is exit 3 only (hotspots emits 3 when inert + no report).
+    // Exit 1 measured floor fails must not launder into skip via inert re-derivation.
+    // When coverage-final.json exists, Prefer-A keeps the Istanbul floor — refuse skip.
+    if (row.exitCode !== 3) return false;
+    if (!isAllowedSkip(phaseId, row.skipReason)) return false;
+    const projectRoot = options?.projectRoot ?? process.cwd();
+    if (existsSync(join(projectRoot, "coverage", "coverage-final.json"))) return false;
+    const derived = evaluateCoverageApplicability(
+      {
+        projectRoot,
+        baseSha: record.baseSha,
+        headSha: record.headSha,
+        treeHash: record.treeHash,
+      },
+      options?.applicabilityDeps,
+    );
+    return derived.outcome === "not-applicable";
+  }
+
   if (row.exitCode === 0) return true;
   return isAllowedSkip(phaseId, row.skipReason);
 }
@@ -321,7 +397,13 @@ function phaseObservedAt(record: PrePrExecutionRecord, spec: PrePrPhaseSpec): st
   return record.phaseEvidence.semantic.find((s) => s.phaseId === spec.id)?.recordedAt ?? null;
 }
 
-export function runObservablesComplete(record: PrePrExecutionRecord): PrePrDecision {
+export function runObservablesComplete(
+  record: PrePrExecutionRecord,
+  options?: {
+    readonly projectRoot?: string;
+    readonly applicabilityDeps?: CoverageApplicabilityDeps;
+  },
+): PrePrDecision {
   if (record.state === "failed" || record.failedAt !== null) {
     return deny("deny-failed", "failed pre-PR run mints no pass");
   }
@@ -334,7 +416,7 @@ export function runObservablesComplete(record: PrePrExecutionRecord): PrePrDecis
     if (!spec.required) continue;
     const ok =
       spec.kind === "command-observable"
-        ? commandSatisfied(record, spec.id)
+        ? commandSatisfied(record, spec.id, options)
         : semanticSatisfied(record, spec.id);
     if (!ok) {
       return deny(
@@ -373,6 +455,10 @@ export function completeRun(
   publisher: unknown,
   runId: string,
   now?: Date,
+  options?: {
+    readonly projectRoot?: string;
+    readonly applicabilityDeps?: CoverageApplicabilityDeps;
+  },
 ): PrePrDecision {
   const creds = requirePublisher(publisher);
   if (!creds.ok) {
@@ -382,7 +468,7 @@ export function completeRun(
   if (current === null) {
     return deny("deny-missing-record", `pre-PR run ${runId} is not in the private store`);
   }
-  const observables = runObservablesComplete(current);
+  const observables = runObservablesComplete(current, options);
   if (!observables.ok) return observables;
   const published: PrePrExecutionRecord = {
     ...current,
