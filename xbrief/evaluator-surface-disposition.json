@@ -1,11 +1,11 @@
 {
   "schema": "deft.evaluator-surface-disposition.v1",
   "kind": "disclosure",
-  "issue": 1589,
+  "issue": 5194,
   "surfaces": [
-    "tasks/verify.yml",
-    "vitest.config.ts",
+    "packages/core/src/intent-constraint/extract.ts",
+    "packages/core/src/intent-constraint/extract.test.ts",
     "xbrief/evaluator-surface-disposition.json"
   ],
-  "note": "Renewed disclosure for #1589 / PR #5315: tasks/verify.yml registers verify:spec-drift; vitest.config.ts adds @deftai/directive-core/spec-reconstruct alias. Disclosure only; not #3164 authorization. Floor-exception merge cites C3 enforce leftover #5350."
+  "note": "Renewed disclosure for #5194 / PR #5447: engine-relative TypeScript loader + cold parser-cache test helper. Disclosure only; not #3164 authorization."
 }

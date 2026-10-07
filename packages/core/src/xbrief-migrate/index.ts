@@ -11,6 +11,11 @@ export {
   type StaleHeaderDetection,
 } from "./agents-header.js";
 export {
+  CONFIDENCE_MIGRATE_COMMAND,
+  mainEntry as migrateConfidenceMainEntry,
+  migrateConfidenceCorpus,
+} from "./confidence.js";
+export {
   OBSOLETE_FRAMEWORK_NARRATIVE_FILENAME,
   VBRIEF_DEPRECATION_MARKER_BODY,
   VBRIEF_DEPRECATION_MARKER_FILENAME,

@@ -292,6 +292,7 @@ export const CORE_MODULE_VERBS = [
   "docs-impact",
   "tutorial",
   "migrate-clause-ids",
+  "migrate-confidence",
 ] as const;
 
 /** Colon aliases for triage-actions (mirrors cli-router SUBCOMMAND_ROUTES). */
@@ -319,6 +320,7 @@ export const POLICY_ACTION_ALIAS_SUBCOMMANDS: Readonly<Record<string, string>> =
   "policy:enforce-destructive-gh-verbs": "enforce-destructive-gh-verbs",
   "policy:allow-bot-merge": "allow-bot-merge",
   "policy:enable-value-feedback": "enable-value-feedback",
+  "policy:set-spec-guard-enforcement": "set-spec-guard-enforcement",
   "policy:disable-host-hooks": "disable-host-hooks",
   "policy:set-ceremony-dial": "set-ceremony-dial",
   "policy:clear-value-feedback": "clear-value-feedback",
@@ -527,6 +529,7 @@ export const VERB_ALIASES: Readonly<Record<string, string>> = {
   "migrate:xbrief": "migrate-xbrief",
   "migrate:category-b": "migrate-category-b",
   "migrate:clause-ids": "migrate-clause-ids",
+  "migrate:confidence": "migrate-confidence",
   "framework:check-updates": "framework-check-updates",
   "umbrella:current-shape": "umbrella-current-shape",
   "issue:sync-from-xbrief": "issue-sync-from-xbrief",
@@ -3076,6 +3079,12 @@ async function loadCoreModuleHandler(verb: string, io: DispatchIo): Promise<Comm
     case "migrate-clause-ids": {
       const { mainEntry } = await import(
         "@deftai/directive-core/dist/xbrief-migrate/clause-ids.js"
+      );
+      return (argv) => mainEntry(argv);
+    }
+    case "migrate-confidence": {
+      const { mainEntry } = await import(
+        "@deftai/directive-core/dist/xbrief-migrate/confidence.js"
       );
       return (argv) => mainEntry(argv);
     }

@@ -33,8 +33,20 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 
 ## Completed
 
-_Showing 25 of 1752 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1764 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- **#5415** -- fix(design-critique): presence-only ## In plain English gate before ingest-ready (#5415) -- `[completed]`
+- **#5422** -- [framework-gap] BLOCKER 0.121.0 still fail-closes Visage historical x-xbrief/* types and clause:N ids; consumer pinned at 0.119.2 since 0.119.3 -- `[completed]`
+- **#5412** -- bug(scope): live discovery must not bind pending planning transitions as active (#5412) -- `[completed]`
+- **#5413** -- feat(occupancy): 24h max lease + same-session primary residue reclaim (#5413) -- `[completed]`
+- **#5373** -- bug(deterministic-questions): multi-choice must always show hard-stop 'I have questions' escape (Other is not enough) -- `[completed]`
+- **#5350** -- feat(spec): C3 enforce specGuard / verify:spec-drift (proof-of-rewrite + per-item impact) — leftover of #1589 / #5315 -- `[completed]`
+- **#5393** -- bug(verify-ac): bug-report briefs derive defect-description clauses that cannot verify after the fix, so scope:complete has no exit for shipped work -- `[completed]`
+- **#5391** -- dx(cli): scope:promote effort error, triage:accept empty-items guidance, verify:docs-impact '--' handling -- `[completed]`
+- **#5390** -- bug(worktree): payload reconstitution omits .deft/core/VERSION; doctor fails manifest-agreement and gates writes, remediation is deft update -- `[completed]`
+- **#5375** -- session:start cold: duration_ms ≫ sum(steps[]) — multi-minute unlabeled gap on Windows -- `[completed]`
+- **#5387** -- bug(closing-keywords): Path B activation vs productPullRequest delivery bind catch-22 -- `[completed]`
+- **#5372** -- bug(design-critique): bare-arc spend recommend-first is prose-only; agents hit ask MUST instead -- `[completed]`
 - **#5355** -- [framework-gap] Interview regression coverage does not exercise phase drift and proposal growth across turns -- `[completed]`
 - **#5354** -- [framework-gap] Canonical interview strategy contradicts setup on PRD authority and scope promotion -- `[completed]`
 - **#5353** -- [framework-gap] Interview progress rules hide remaining scope while enforcing one-question-at-a-time interaction -- `[completed]`
@@ -48,16 +60,4 @@ _Showing 25 of 1752 completed scopes (newest first). Full history: lifecycle `co
 - **#5321** -- bug(harness): host agent memory must not override Directive process SoT without USER.md consent -- `[completed]`
 - **#1164** -- feat(coding): two testing rules missing from coding/testing.md — test integrity + mock boundary -- `[completed]`
 - **#1511** -- Flip #1419 agentic-prioritization gates from advisory to enforce mode (advise -> observe -> block) -- `[completed]`
-- **#1492** -- RFC: promote the system-of-record gate from advisory to wired (schema home, gate tier, sentinel integration) -- `[completed]`
-- **#3675** -- fix(scope): delivery gate accepts any delivery-branch ancestor as merge evidence -- `[completed]`
-- **#1613** -- feat(vbrief,build): STOP conditions on vBRIEF task items — halt and report when preconditions fail -- `[completed]`
-- **#5278** -- bug(swarm,grok-build): parent-steer inbox exists but cancel/kill has no query-first preflight (#4286 leftover) -- `[completed]`
-- **#5281** -- policy(swarm,grok-build): gate host kill_command_or_subagent behind pre-cancel attestation (#5278 leftover) -- `[completed]`
-- **#3703** -- bug(swarm): verify:routing is a fail-closed pre-dispatch gate that nothing invokes -- `[completed]`
-- **#5284** -- bug(design-critique): SUPERSEDES_RE misses bold Recut-supersedes; bindLeanPredecessorValid blocks legitimate harvest Recuts (#5278 leftover) -- `[completed]`
-- **#3729** -- bug(session): the occupancy lease is exclusion-only -- an agent that never claims is never gated -- `[completed]`
-- **#5285** -- bug(release): v0.120.0 Windows Step 5 fail — presentation-coverage snapshot symlink EPERM -- `[completed]`
-- **#3715** -- leftover-complete: Prefer-A Bound #3715 after #5289 -- `[completed]`
-- **#4912** -- leftover(#633): pre-PR skill skip and omitted checklist stay undetectable -- `[completed]`
-- **#479** -- feat(vbrief,resilience): prevent false memory propagation and context rot in agent sessions -- `[completed]`
 

@@ -8,8 +8,8 @@ Maintainer-facing map of how Directive's rules are layered and grouped. This is 
 
 ## Overview
 
-- **Rules:** 24 groupings, 283 documents
-- **Tasks:** 64 namespaces, 275 Taskfile declarations (includes + unlisted tasks/*.yml, not `task --list`)
+- **Rules:** 24 groupings, 284 documents
+- **Tasks:** 64 namespaces, 276 Taskfile declarations (includes + unlisted tasks/*.yml, not `task --list`)
 - **Packs:** 6 source-of-truth packs (717 entries from rules|lessons|patterns|skills|strategies|entries)
 
 Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the Taskfile gates that enforce them), and the **Lifecycle** that ties them together.
@@ -21,7 +21,7 @@ Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the 
 | ci-cd | CI runner and pipeline guidance, loaded when migrating or configuring CI. | 6 | 5 | 4 | 6 | 0 | 0 |
 | coding | Core software-development rules for agents: hygiene, testing, debugging, security, build output. | 10 | 201 | 59 | 147 | 2 | 5 |
 | context | How to feed agents context well: examples, deterministic splits, spec deltas. | 8 | 42 | 67 | 30 | 16 | 13 |
-| contracts | Interface/behavioral contracts the framework enforces. | 16 | 200 | 16 | 140 | 0 | 5 |
+| contracts | Interface/behavioral contracts the framework enforces. | 16 | 204 | 16 | 142 | 0 | 5 |
 | conventions | Cross-cutting naming, formatting, and repo conventions. | 4 | 16 | 2 | 16 | 0 | 3 |
 | deployments | Provider-specific deployment playbooks (AWS, Azure, GCP, Cloudflare, Vercel, fly.io…). | 52 | 107 | 74 | 24 | 13 | 6 |
 | docs | Explanatory docs and the framework glossary. | 43 | 21 | 12 | 62 | 1 | 2 |
@@ -35,12 +35,12 @@ Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the 
 | references | External references and citations backing the guidance. | 4 | 19 | 1 | 19 | 0 | 0 |
 | resilience | Failure handling, recovery, and robustness rules. | 2 | 16 | 14 | 15 | 1 | 2 |
 | scm | Source-control conventions and Git/GitHub workflow rules. | 3 | 108 | 34 | 34 | 1 | 3 |
-| skills | Packaged multi-step agent workflows (build, release, interview, triage, review…). | 40 | 589 | 120 | 702 | 0 | 18 |
+| skills | Packaged multi-step agent workflows (build, release, interview, triage, review…). | 41 | 597 | 120 | 707 | 0 | 18 |
 | strategies | Higher-order approaches: interviewing, decomposition, planning, research, refactoring. | 16 | 318 | 88 | 138 | 0 | 11 |
 | swarm | Multi-agent (swarm) coordination guidance. | 1 | 75 | 15 | 22 | 0 | 0 |
-| templates | Reusable document/scaffold templates. | 11 | 101 | 10 | 54 | 1 | 5 |
+| templates | Reusable document/scaffold templates. | 11 | 104 | 10 | 55 | 1 | 5 |
 | tools | Tooling standards (telemetry, search, formatters, the Taskfile contract). | 7 | 91 | 73 | 33 | 1 | 15 |
-| vbrief | The durable state format: project definition, specification, scopes, plans. | 1 | 81 | 28 | 30 | 0 | 9 |
+| vbrief | The durable state format: project definition, specification, scopes, plans. | 1 | 82 | 29 | 30 | 0 | 9 |
 | verification | How agents prove work is done: gates, validators, coverage, review. | 4 | 39 | 22 | 26 | 0 | 4 |
 
 ### ci-cd
@@ -293,7 +293,7 @@ _Packaged multi-step agent workflows (build, release, interview, triage, review�
 - **deft-directive-article-review/** (1 files)
 - **deft-directive-build/** (1 files)
 - **deft-directive-cost/** (1 files)
-- **deft-directive-debug/** (1 files)
+- **deft-directive-debug/** (2 files)
 - **deft-directive-decompose/** (1 files)
 - **deft-directive-design-critique/** (2 files)
 - **deft-directive-feedback/** (1 files)
@@ -419,7 +419,7 @@ _How agents prove work is done: gates, validators, coverage, review._
 | ownership | WSL root-runtime ownership doctor/fix (#1617). | 2 |
 | packs | Pack-slicing surface (#1283 design, #1294 lessons pilot, #1295 skills pack, | 8 |
 | plan-sequence | Set the active ordered-plan sequence from --file JSON (#2402) | 4 |
-| policy | Inspect every registered typed-policy field on vbrief/PROJECT-DEFINITION.vbrief.json (#1148 / N8). -- task policy:show [--… | 11 |
+| policy | Inspect every registered typed-policy field on vbrief/PROJECT-DEFINITION.vbrief.json (#1148 / N8). -- task policy:show [--… | 12 |
 | pr | PR-level merge-discipline checks. | 6 |
 | prd | Export resolved project narratives to a read-only PRD.md | 1 |
 | product-signal | Show product-signal enable/consent/sink status (#2693). -- task product-signal:status | 5 |

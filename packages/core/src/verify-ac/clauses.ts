@@ -12,6 +12,7 @@ import {
   stripFencedCodeBlocks,
 } from "../intake/markdown-scanners.js";
 import { hasGlobMagic, matchAny } from "../orchestration/pathspec.js";
+import { isClauseKeyedTitleFollowsIdPlaceholder } from "../scope/acceptance-evidence.js";
 
 export type ClauseOutcome = "verified" | "unverifiable" | "failed";
 
@@ -20,6 +21,13 @@ export interface AcceptanceClauseReading {
   readonly artifact_path: string | null;
 }
 
+/**
+ * Origin of a derived clause (#5393). Distinct from statement|implementation
+ * provenance on intake stamps. `defect-description` is problem text (Failures /
+ * error codes), not an acceptance oracle.
+ */
+export type ClauseSourceKind = "acceptance" | "defect-description";
+
 export interface AcceptanceClause {
   readonly id: number;
   readonly text: string;
@@ -27,6 +35,8 @@ export interface AcceptanceClause {
   readonly ambiguous: boolean;
   readonly readings?: readonly AcceptanceClauseReading[];
   readonly chosen_reading?: number;
+  /** Persisted classification; omit on legacy rows (#5393). */
+  readonly source_kind?: ClauseSourceKind;
 }
 
 export interface ClauseWalkResult {
@@ -66,9 +76,17 @@ export interface ClauseWalkReport {
   readonly message: string;
 }
 
-const SECTION_HEADING = /^(#{1,6})\s+(acceptance(?:\s+criteria|\s+sketch)?|fix)\s*$/i;
+const SECTION_HEADING =
+  /^(#{1,6})\s+(acceptance(?:\s+criteria|\s+sketch)?|done(?:\s+when)?|test)\s*$/i;
+const DONE_WHEN_HEADING = /^(#{1,6})\s+done(?:\s+when)?\s*$/i;
+const DONE_WHEN_INLINE = /^done\s+when\b/i;
 const LABELED_AC_PREFIXES = ["test:", "acceptance:", "acceptancecriteria:"] as const;
 const META_CLAUSE = /^(relates?\s+#|refs?\s+#)/i;
+/** Error / Failures-shaped defect text (#5393 text-local fallback). */
+const DEFECT_ERROR_CODE = /\b(?:TS|ES)\d{3,5}\b|\berror\s+TS\d+/i;
+const DEFECT_FILE_COUNT_FAIL = /\b\d+\s+files?\s+fail\b/i;
+const DEFECT_DIAGNOSTIC =
+  /\bpossibly undefined\b|\bcannot find (?:name|module)\b|\bis not assignable\b/i;
 const FILE_EXT = /\.(?:ts|tsx|js|mjs|cjs|json|md|go|py|yml|yaml|txt)$/i;
 const SCRATCH_SEGMENTS = new Set([
   "tmp",
@@ -256,6 +274,109 @@ function collectPathBearingLines(text: string): string[] {
   return items;
 }
 
+/** True when clause text is Failures / error-code / diagnostic shaped (#5393). */
+export function looksLikeDefectDescription(text: string): boolean {
+  const normalized = normalizeClauseText(text);
+  if (normalized.length === 0 || DONE_WHEN_INLINE.test(normalized)) {
+    return false;
+  }
+  // Mixed acceptance obligation (must contain/include) wins over incidental
+  // diagnostic mention so token checks still run (#5393 Greptile P1).
+  if (
+    /\bmust\b/i.test(normalized) &&
+    /\bcontain(?:s|ing)?\b|\binclude(?:s|ing)?\b/i.test(normalized)
+  ) {
+    return false;
+  }
+  // Keep analysis prose with file:line + "failure" out of this set (#3826 fixtures).
+  if (DEFECT_ERROR_CODE.test(normalized) || DEFECT_DIAGNOSTIC.test(normalized)) {
+    return true;
+  }
+  if (DEFECT_FILE_COUNT_FAIL.test(normalized)) {
+    return true;
+  }
+  if (/^failures?\b/i.test(normalized) || /\bfails?\s+with\b/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+/** Acceptance-shaped sentence detectors for statement scrape (#5393). */
+export function looksLikeAcceptanceShaped(text: string): boolean {
+  const normalized = normalizeClauseText(text);
+  if (normalized.length === 0 || looksLikeDefectDescription(normalized)) {
+    return false;
+  }
+  if (DONE_WHEN_INLINE.test(normalized)) {
+    return true;
+  }
+  // Checklist / must claims that are not defect paste.
+  if (/\bmust\b/i.test(normalized)) {
+    return true;
+  }
+  return false;
+}
+
+function stripListMarker(line: string): string {
+  return line.replace(/^(?:[-*+]|\d{1,3}[.)])\s+/, "").trim();
+}
+
+/** Inline and heading Done-when lines (#5393). */
+export function collectDoneWhenLines(text: string): string[] {
+  const items: string[] = [];
+  const seen = new Set<string>();
+  const push = (raw: string): void => {
+    const line = normalizeClauseText(stripInlineMarkdownBold(raw));
+    const key = line.toLowerCase();
+    if (line.length === 0 || isMetaClause(line) || seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    items.push(line);
+  };
+  for (const line of collectSectionItems(text, DONE_WHEN_HEADING)) {
+    push(line);
+  }
+  for (const raw of text.split("\n")) {
+    const body = stripListMarker(stripInlineMarkdownBold(raw).trim());
+    if (DONE_WHEN_INLINE.test(body)) {
+      push(body);
+    }
+  }
+  return items;
+}
+
+function collectMustAcceptanceLines(text: string): string[] {
+  const items: string[] = [];
+  const seen = new Set<string>();
+  for (const item of parseListItems(text)) {
+    const title = normalizeClauseText(stripInlineMarkdownBold(item.title));
+    if (title.length === 0 || isMetaClause(title) || !looksLikeAcceptanceShaped(title)) {
+      continue;
+    }
+    if (!/\bmust\b/i.test(title) || DONE_WHEN_INLINE.test(title)) {
+      continue;
+    }
+    const key = title.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    items.push(title);
+  }
+  return items;
+}
+
+/**
+ * Resolve source_kind from stamp or text-local fallback for legacy rows (#5393).
+ */
+export function resolveClauseSourceKind(clause: AcceptanceClause): ClauseSourceKind {
+  if (clause.source_kind === "defect-description" || clause.source_kind === "acceptance") {
+    return clause.source_kind;
+  }
+  return looksLikeDefectDescription(clause.text) ? "defect-description" : "acceptance";
+}
+
 /**
  * Acceptance lines declared on `plan.items` (#3826).
  *
@@ -272,6 +393,10 @@ export function collectPlanItemAcceptanceSurface(plan: Record<string, unknown>):
   for (const entry of plan.items) {
     const item = asRecord(entry);
     if (item === null) {
+      continue;
+    }
+    // Skip title-follows-id clause.N / clause:N placeholders (#5193).
+    if (isClauseKeyedTitleFollowsIdPlaceholder(item)) {
       continue;
     }
     const narrative = asRecord(item.narrative);
@@ -400,8 +525,26 @@ export interface ClauseDerivationSources {
   readonly declaredNarrative?: DeclaredAcceptanceNarrativeSurface;
 }
 
+/** Dedupe acceptance lines while preserving first-seen order. */
+function uniqueAcceptanceLines(lines: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of lines) {
+    const key = line.toLowerCase();
+    if (line.length === 0 || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
 /** Acceptance lines the statement itself declares, in extractor precedence order. */
 function collectStatementSurface(text: string): string[] {
+  // #5393: prefer Done-when / AC / must / checklist over path-bearing Failures paste.
+  // Keep explicit AC/Test/checklist alongside Done-when (do not drop criteria).
+  const doneWhen = collectDoneWhenLines(text);
   const raw: string[] = [];
   const acHeading = findAcHeading(text);
   if (acHeading !== null) {
@@ -413,10 +556,23 @@ function collectStatementSurface(text: string): string[] {
   }
   raw.push(...collectSectionItems(text, SECTION_HEADING));
   raw.push(...collectLabeledLines(text));
-  if (raw.length === 0) {
-    raw.push(...collectPathBearingLines(text));
+  if (doneWhen.length > 0) {
+    return uniqueAcceptanceLines([...doneWhen, ...raw]);
   }
-  return raw;
+  if (raw.length === 0) {
+    const mustShaped = collectMustAcceptanceLines(text);
+    // Skip Failures / error-code path-bearing paste — yields 0 clauses when the
+    // bug report has no Done-when / must / checklist (Claude N2 / #5393).
+    // Keep non-defect path-bearing checklist items with must (do not drop Add …).
+    const pathBearing = collectPathBearingLines(text).filter(
+      (line) => !looksLikeDefectDescription(line),
+    );
+    const merged = uniqueAcceptanceLines([...mustShaped, ...pathBearing]);
+    if (merged.length > 0) {
+      return merged;
+    }
+  }
+  return uniqueAcceptanceLines(raw);
 }
 
 /** Numbered independently testable clauses from the task statement (#3323). */
@@ -461,6 +617,11 @@ export function deriveAcceptanceClauses(
   return clauses;
 }
 
+/** Stamp source_kind for defect-shaped lines that still enter the set (#5393). */
+function classifyDerivedSourceKind(text: string): ClauseSourceKind | undefined {
+  return looksLikeDefectDescription(text) ? "defect-description" : undefined;
+}
+
 /**
  * Clause text is untrusted: the statement is the issue body plus its whole
  * comment thread, and anyone can comment on a public issue. Lifting a path out
@@ -474,7 +635,14 @@ export function deriveAcceptanceClauses(
  * so this costs no verification capability.
  */
 function buildClause(id: number, text: string): AcceptanceClause {
-  return { id, text, artifact_path: null, ambiguous: false };
+  const source_kind = classifyDerivedSourceKind(text);
+  return {
+    id,
+    text,
+    artifact_path: null,
+    ambiguous: false,
+    ...(source_kind !== undefined ? { source_kind } : {}),
+  };
 }
 
 export function readAcceptanceClauses(acceptance: unknown): AcceptanceClause[] {
@@ -522,12 +690,19 @@ export function readAcceptanceClauses(acceptance: unknown): AcceptanceClause[] {
           : 0;
     const chosenPath =
       ambiguous && readings[chosen] !== undefined ? readings[chosen].artifact_path : artifact;
+    const sourceKind =
+      row.source_kind === "defect-description" || row.source_kind === "acceptance"
+        ? row.source_kind
+        : row.sourceKind === "defect-description" || row.sourceKind === "acceptance"
+          ? row.sourceKind
+          : undefined;
     out.push({
       id: typeof row.id === "number" && row.id > 0 ? row.id : index + 1,
       text,
       artifact_path: chosenPath,
       ambiguous,
       ...(readings.length > 0 ? { readings, chosen_reading: chosen } : {}),
+      ...(sourceKind !== undefined ? { source_kind: sourceKind } : {}),
     });
   }
   return out;
@@ -549,6 +724,9 @@ export function serializeAcceptanceClauses(
         artifact_path: reading.artifact_path,
       }));
       row.chosen_reading = clause.chosen_reading ?? 0;
+    }
+    if (clause.source_kind !== undefined) {
+      row.source_kind = clause.source_kind;
     }
     return row;
   });
@@ -1099,6 +1277,20 @@ function walkOne(
     return bound("failed", "artifact path escaped the project root");
   }
   if (!existsSync(abs)) {
+    // #5393: defect-description rows are not an existence oracle either — missing
+    // and present both stay non-adjudicable unverifiable (Greptile P1 parity).
+    if (resolveClauseSourceKind(clause) === "defect-description") {
+      return {
+        id: clause.id,
+        text: clause.text,
+        artifact_path: artifactPath,
+        outcome: "unverifiable",
+        detail:
+          `defect-description missing-artifact check is not an acceptance oracle for ` +
+          `${artifactPath} (#5393)`,
+        adjudicable: false,
+      };
+    }
     if (NEGATED_EXISTENCE.test(clause.text)) {
       // #3826: absence is not evidence. The negation phrase is matched against the
       // whole clause text, so on a derived clause it routinely refers to something
@@ -1124,6 +1316,21 @@ function walkOne(
   }
   const expected = extractExpectedTokens(clause);
   if (expected.length > 0) {
+    // #5393: defect-description quoted tokens are not an acceptance oracle.
+    // Missing or present → unverifiable + adjudicable:false (sibling of #3826 /
+    // #4240). Token-present must not credit verified for retaining the error string.
+    if (resolveClauseSourceKind(clause) === "defect-description") {
+      return {
+        id: clause.id,
+        text: clause.text,
+        artifact_path: artifactPath,
+        outcome: "unverifiable",
+        detail:
+          `defect-description quoted-token check is not an acceptance oracle for ` +
+          `${artifactPath} (#5393)`,
+        adjudicable: false,
+      };
+    }
     let body = "";
     try {
       body = readFileSync(abs, "utf8");

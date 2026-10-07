@@ -149,6 +149,32 @@ export const CLAUSE_KEYED_ITEM_ID_PREFIX = "clause." as const;
 const LEGACY_CLAUSE_KEYED_ITEM_ID_PREFIX = "clause:" as const;
 const LEGACY_CLAUSE_KEYED_ITEM_ID_RE = /^clause:(\d+)$/;
 
+/** `clause.N` or leftover `clause:N` ids (#5193 title-follows-id placeholders). */
+const CLAUSE_KEYED_PLACEHOLDER_ID_RE = /^clause[.:](\d+)$/;
+
+/**
+ * True when a plan item is a clause-keyed title-follows-id placeholder (#5193).
+ * Id is `clause.N` or leftover `clause:N`, title is empty or equal to that id,
+ * and `narrative.Acceptance` is absent/empty. Do not treat every `clause.`-prefixed
+ * id as a placeholder — authored titles and Acceptance narrative stay visible.
+ */
+export function isClauseKeyedTitleFollowsIdPlaceholder(item: Record<string, unknown>): boolean {
+  const id = typeof item.id === "string" ? item.id.trim() : "";
+  if (!CLAUSE_KEYED_PLACEHOLDER_ID_RE.test(id)) {
+    return false;
+  }
+  const narrative =
+    typeof item.narrative === "object" && item.narrative !== null && !Array.isArray(item.narrative)
+      ? (item.narrative as Record<string, unknown>)
+      : null;
+  const acceptance = narrative?.Acceptance;
+  if (typeof acceptance === "string" && acceptance.trim().length > 0) {
+    return false;
+  }
+  const title = typeof item.title === "string" ? item.title.trim() : "";
+  return title.length === 0 || title === id;
+}
+
 /**
  * Leftover of #4385 defect 2: pending change-task ledger
  * (history/changes/.../tasks.xbrief.json) is not closed by this P1.
@@ -418,9 +444,11 @@ export function isEvidenceKindSuitable(
 }
 
 /**
- * Structural x-directive/evidence parse. Landing-set may pass
- * requirePointerShape:false only for historical kind:uat (#4563); other kinds keep
- * the default pointer-shape check. Empty {} / missing fields still refuse
+ * Structural x-directive/evidence parse.
+ * requirePointerShape:false has two sanctioned uses:
+ * (a) landing-set structural probe that re-tightens for non-uat (#4563 / #4879);
+ * (b) stampMatchAnyFileEvidence repair reader that keeps the loose parse for
+ *     kind:test shape-bad rows (#5382). Empty {} / missing fields still refuse
  * (Greptile P1 / #4879).
  */
 function parseEvidence(
@@ -759,6 +787,7 @@ export interface StampDeclaredTestEvidenceSkip {
 
 export interface StampDeclaredTestEvidenceResult {
   readonly stampedIds: readonly string[];
+  readonly repairedIds: readonly string[];
   readonly skipped: readonly StampDeclaredTestEvidenceSkip[];
 }
 
@@ -768,10 +797,10 @@ export interface StampDeclaredTestEvidenceResult {
  * member (or that member copied onto artifact_path by #4008). Does not read PR
  * paths, verify_commands, or issue/comment prose (#3835).
  *
- * Inventory (#5105 / #4840): live production kind:test writer is
- * stampMatchAnyFileEvidence via scope:stamp-evidence. This helper stays exported
- * for exact-member callers and tests; it has no production CLI caller (documented
- * #4732 orphan — not wired here).
+ * Inventory (#5105 / #4840 / #5382): live production matchAny writer is
+ * stampMatchAnyFileEvidence via scope:stamp-evidence (kind test|review coherence).
+ * This helper stays exported for exact-member callers and tests; it has no
+ * production CLI caller (documented #4732 orphan — not wired here).
  */
 export function stampDeclaredTestEvidence(
   plan: Record<string, unknown>,
@@ -785,12 +814,13 @@ export function stampDeclaredTestEvidence(
   const declared = readDeclaredArtifactScope(plan);
   const clauses = readAcceptanceClauses(plan.acceptance);
   const stampedIds: string[] = [];
+  const repairedIds: string[] = [];
   const skipped: StampDeclaredTestEvidenceSkip[] = [];
   if (recordedBy.length === 0) {
     for (const clause of clauses) {
       skipped.push({ clauseId: clause.id, reason: "recorded_by-required" });
     }
-    return { stampedIds, skipped };
+    return { stampedIds, repairedIds, skipped };
   }
   for (const clause of clauses) {
     const item = findClauseKeyedItem(plan.items, clause.id);
@@ -820,7 +850,7 @@ export function stampDeclaredTestEvidence(
     });
     stampedIds.push(itemIdKey(item) ?? clauseKeyedItemId(clause.id));
   }
-  return { stampedIds, skipped };
+  return { stampedIds, repairedIds, skipped };
 }
 
 export interface StampMatchAnyFileEvidenceOptions {
@@ -830,10 +860,17 @@ export interface StampMatchAnyFileEvidenceOptions {
 }
 
 /**
- * Evidence-only skip-row writer (#4840). Calls stampNamespacedEvidence for a
- * non-glob file that matchAny(file_scope) accepts. Does not take disposition,
- * --pr, or --merge-commit. Does not copy file_scope[0] or classifyGlob.prefix.
- * Null-path persist-default rows stay unstamped.
+ * MatchAny evidence coherence writer (#4840 / #5382).
+ * After resolveMatchAnyFilePointer, chooses kind via evidencePointerShapeError("test"):
+ * null → kind test; non-null (md/CHANGELOG/PR prose) → kind review with the same
+ * pointer so stamp→complete stays coherent under #5105. Does not weaken the hand-path
+ * kind:test ban. Repairs already-stamped incoherent kind:test markdown via
+ * parseEvidence(..., { requirePointerShape: false }); no uat/merge repair.
+ * Strict-axis uses inferRequiredStrictAxes(item) (auto title:id → []). Surviving
+ * skips: no-allowed-pointer, unbound, strict-axis when the aligned probe is
+ * non-empty. Precedent: stampDeclaredMergeEvidence stamp-time coherence (#5105).
+ * Does not take disposition, --pr, or --merge-commit. Does not copy file_scope[0]
+ * or classifyGlob.prefix. Null-path persist-default rows stay unstamped.
  */
 export function stampMatchAnyFileEvidence(
   plan: Record<string, unknown>,
@@ -848,12 +885,13 @@ export function stampMatchAnyFileEvidence(
   const declared = readDeclaredArtifactScope(plan);
   const clauses = readAcceptanceClauses(plan.acceptance);
   const stampedIds: string[] = [];
+  const repairedIds: string[] = [];
   const skipped: StampDeclaredTestEvidenceSkip[] = [];
   if (recordedBy.length === 0) {
     for (const clause of clauses) {
       skipped.push({ clauseId: clause.id, reason: "recorded_by-required" });
     }
-    return { stampedIds, skipped };
+    return { stampedIds, repairedIds, skipped };
   }
   for (const clause of clauses) {
     const item = findClauseKeyedItem(plan.items, clause.id);
@@ -862,12 +900,44 @@ export function stampMatchAnyFileEvidence(
       continue;
     }
     const fields = readNamespacedAcceptanceFields(item);
-    if (fields.hasEvidence || fields.hasDisposition) {
+    // Disposition guard: repair only when hasEvidence && !hasDisposition (#5382).
+    if (fields.hasDisposition) {
       skipped.push({ clauseId: clause.id, reason: "already-stamped" });
       continue;
     }
-    const axisItem = { ...item, title: clause.text };
-    if (inferRequiredStrictAxes(axisItem).length > 0) {
+    if (fields.hasEvidence) {
+      const parsed = parseEvidence(fields.evidence, { requirePointerShape: false });
+      if (!parsed.ok) {
+        // Malformed → no throw; leave for the gate (#5382).
+        skipped.push({ clauseId: clause.id, reason: "already-stamped" });
+        continue;
+      }
+      const existing = parsed.record;
+      if (existing.kind !== "test" || testPointerShapeError(existing.pointer) === null) {
+        skipped.push({ clauseId: clause.id, reason: "already-stamped" });
+        continue;
+      }
+      const pointer = resolveMatchAnyFilePointer(clause.artifact_path, declared, projectRoot);
+      if (pointer === null || posixPointer(pointer) !== posixPointer(existing.pointer)) {
+        skipped.push({ clauseId: clause.id, reason: "already-stamped" });
+        continue;
+      }
+      if (inferRequiredStrictAxes(item).length > 0) {
+        skipped.push({ clauseId: clause.id, reason: "strict-axis" });
+        continue;
+      }
+      stampNamespacedEvidence(item, {
+        kind: "review",
+        pointer: existing.pointer,
+        recorded_at: recordedAt,
+        recorded_by: recordedBy,
+      });
+      const id = itemIdKey(item) ?? clauseKeyedItemId(clause.id);
+      repairedIds.push(id);
+      continue;
+    }
+    // Fresh stamp: align strict-axis with the gate (auto title:id → []).
+    if (inferRequiredStrictAxes(item).length > 0) {
       skipped.push({ clauseId: clause.id, reason: "strict-axis" });
       continue;
     }
@@ -876,15 +946,17 @@ export function stampMatchAnyFileEvidence(
       skipped.push({ clauseId: clause.id, reason: "no-allowed-pointer" });
       continue;
     }
+    const shapeErr = evidencePointerShapeError("test", pointer);
+    const kind = shapeErr === null ? "test" : "review";
     stampNamespacedEvidence(item, {
-      kind: "test",
+      kind,
       pointer,
       recorded_at: recordedAt,
       recorded_by: recordedBy,
     });
     stampedIds.push(itemIdKey(item) ?? clauseKeyedItemId(clause.id));
   }
-  return { stampedIds, skipped };
+  return { stampedIds, repairedIds, skipped };
 }
 
 export type MergeAncestryVerifier = (
@@ -902,18 +974,28 @@ export interface StampDeclaredMergeEvidenceOptions {
   readonly deliveryBranch: string;
   readonly verifyAncestry?: MergeAncestryVerifier;
   readonly runGit?: GitRunner;
+  /**
+   * When true, stamp merge on items that omit x-directive/requires:merge
+   * (declaration-side admit for historical ship-closeout / #5403).
+   * Strict-axis items (smoke/uat/deploy/observed_behavior) still skip.
+   */
+  readonly admitUndeclaredMerge?: boolean;
 }
 
 /**
- * Merge-kind stamp sibling (#5105). Stamps only criteria that explicitly declare
- * merge. Pointer is the merge commit after verifyDeliveryAncestry-shaped check
- * against the refreshed delivery tip. Never auto-stamps from keywords or
- * empty-axis alone.
+ * Merge-kind stamp sibling (#5105). By default stamps only criteria that
+ * explicitly declare merge. With admitUndeclaredMerge (historical ship-closeout
+ * / #5403), undeclared non-strict items may also receive kind:merge when
+ * completion provenance already proved delivery. Pointer is the merge commit
+ * after verifyDeliveryAncestry-shaped check against the refreshed delivery tip.
+ * Never auto-stamps from keywords or empty-axis alone.
  *
  * Production caller: stampMergeFromCompletionProvenance on the scope:complete
  * persist path after delivery provenance is on the plan and before the shared
- * read-only gate (#5120). Live kind:test writer remains stampMatchAnyFileEvidence /
- * scope:stamp-evidence (#4840); stampDeclaredTestEvidence stays the #4732 orphan.
+ * read-only gate (#5120). Live matchAny coherence writer remains
+ * stampMatchAnyFileEvidence / scope:stamp-evidence (kind test|review, #4840 /
+ * #5382); stampDeclaredTestEvidence stays the #4732 orphan. Stamp-time
+ * coherence precedent for the matchAny kind choice.
  */
 export function stampDeclaredMergeEvidence(
   plan: Record<string, unknown>,
@@ -930,25 +1012,26 @@ export function stampDeclaredMergeEvidence(
   const projectRoot = typeof options.projectRoot === "string" ? options.projectRoot.trim() : "";
   const clauses = readAcceptanceClauses(plan.acceptance);
   const stampedIds: string[] = [];
+  const repairedIds: string[] = [];
   const skipped: StampDeclaredTestEvidenceSkip[] = [];
   if (recordedBy.length === 0) {
     for (const clause of clauses) {
       skipped.push({ clauseId: clause.id, reason: "recorded_by-required" });
     }
-    return { stampedIds, skipped };
+    return { stampedIds, repairedIds, skipped };
   }
   if (mergeCommit.length === 0 || deliveryBranch.length === 0 || projectRoot.length === 0) {
     for (const clause of clauses) {
       skipped.push({ clauseId: clause.id, reason: "merge-pointer-required" });
     }
-    return { stampedIds, skipped };
+    return { stampedIds, repairedIds, skipped };
   }
   const shape = mergePointerShapeError(mergeCommit);
   if (shape !== null) {
     for (const clause of clauses) {
       skipped.push({ clauseId: clause.id, reason: "merge-pointer-shape" });
     }
-    return { stampedIds, skipped };
+    return { stampedIds, repairedIds, skipped };
   }
   const verify = options.verifyAncestry ?? verifyDeliveryAncestry;
   const ancestry = verify(projectRoot, mergeCommit, deliveryBranch, options.runGit);
@@ -956,7 +1039,7 @@ export function stampDeclaredMergeEvidence(
     for (const clause of clauses) {
       skipped.push({ clauseId: clause.id, reason: "ancestry-failed" });
     }
-    return { stampedIds, skipped };
+    return { stampedIds, repairedIds, skipped };
   }
   for (const clause of clauses) {
     const item = findClauseKeyedItem(plan.items, clause.id);
@@ -969,13 +1052,20 @@ export function stampDeclaredMergeEvidence(
       skipped.push({ clauseId: clause.id, reason: "already-stamped" });
       continue;
     }
-    if (!itemDeclaresMergeRequirement(item)) {
+    const undeclared = !itemDeclaresMergeRequirement(item);
+    if (undeclared && options.admitUndeclaredMerge !== true) {
       skipped.push({ clauseId: clause.id, reason: "undeclared-merge" });
       continue;
     }
     if (inferRequiredStrictAxes(item).length > 0) {
       skipped.push({ clauseId: clause.id, reason: "strict-axis" });
       continue;
+    }
+    // #5403 declaration-side admit: write requires=merge so the later
+    // evaluateAcceptanceEvidenceGate / isEvidenceKindSuitable path agrees
+    // with this stamp (Greptile P1 on #5430). Strict axes already skipped.
+    if (undeclared && options.admitUndeclaredMerge === true) {
+      item[ACCEPTANCE_REQUIRES_KEY] = MERGE_ACCEPTANCE_REQUIREMENT;
     }
     stampNamespacedEvidence(item, {
       kind: "merge",
@@ -985,7 +1075,7 @@ export function stampDeclaredMergeEvidence(
     });
     stampedIds.push(itemIdKey(item) ?? clauseKeyedItemId(clause.id));
   }
-  return { stampedIds, skipped };
+  return { stampedIds, repairedIds, skipped };
 }
 
 function readCompletionProvenance(plan: Record<string, unknown>): Record<string, unknown> | null {
@@ -1033,24 +1123,26 @@ function passThroughProvenanceAncestry(
 
 /**
  * Complete-path persist writer for stampDeclaredMergeEvidence (#5105 / #5120).
- * Runs only when delivery completionProvenance already carries mergeCommit +
- * deliveryBranch. Does not run inside evaluateAcceptanceEvidenceGate.
+ * Runs only when delivery completionProvenance already carries verified
+ * delivered ship provenance (mergeCommit + deliveryBranch + disposition
+ * "delivered"). Does not run inside evaluateAcceptanceEvidenceGate.
  * Never falls back to process.cwd() (#5105 Greptile P1).
  */
 export function stampMergeFromCompletionProvenance(
   plan: Record<string, unknown>,
   options: StampMergeFromCompletionProvenanceOptions = {},
 ): StampDeclaredTestEvidenceResult {
-  const empty: StampDeclaredTestEvidenceResult = { stampedIds: [], skipped: [] };
+  const empty: StampDeclaredTestEvidenceResult = { stampedIds: [], repairedIds: [], skipped: [] };
+  if (!isHistoricalShipCloseout(plan)) {
+    return empty;
+  }
   const prov = readCompletionProvenance(plan);
   if (prov === null) {
     return empty;
   }
-  const mergeCommit = typeof prov.mergeCommit === "string" ? prov.mergeCommit.trim() : "";
-  const deliveryBranch = typeof prov.deliveryBranch === "string" ? prov.deliveryBranch.trim() : "";
-  if (mergeCommit.length === 0 || deliveryBranch.length === 0) {
-    return empty;
-  }
+  // isHistoricalShipCloseout already required non-empty delivered pointers.
+  const mergeCommit = (prov.mergeCommit as string).trim();
+  const deliveryBranch = (prov.deliveryBranch as string).trim();
   const projectRoot =
     typeof options.projectRoot === "string" && options.projectRoot.trim().length > 0
       ? options.projectRoot.trim()
@@ -1077,6 +1169,8 @@ export function stampMergeFromCompletionProvenance(
     deliveryBranch,
     verifyAncestry,
     runGit: options.runGit,
+    // #5403: completion provenance is the declaration-side admit for historical class.
+    admitUndeclaredMerge: true,
   });
 }
 
@@ -1379,9 +1473,10 @@ function evaluateOneItem(
   // even when already terminal; persist skips creating a second pending row (#4385).
   if (!NON_TERMINAL_ITEM_STATUSES.has(status) && !isClauseBindingItem(item, clauseKeys)) {
     // #4879 Prefer-A: landing-set statuses cannot enter completed/ without typed
-    // evidence. Only historical kind:uat may skip pointer-shape (#4563); other
-    // kinds keep requirePointerShape. Empty {} / malformed do not count
-    // (Greptile P1).
+    // evidence. requirePointerShape:false here is the landing-set structural
+    // probe (#4563) — re-tighten for non-uat. Distinct from the #5382
+    // stampMatchAnyFileEvidence repair reader, which keeps the loose parse for
+    // kind:test shape-bad rows. Empty {} / malformed do not count (Greptile P1).
     if (COMPLETED_LANDING_WITHOUT_EVIDENCE_STATUSES.has(status)) {
       const landingFields = readNamespacedAcceptanceFields(item);
       let landingEvidence: ReturnType<typeof parseEvidence> | null = null;
@@ -1532,6 +1627,60 @@ function walkItems(
  * (a verifier that authors the acceptance it then checks is not a gate). Stamping
  * happens at intake / promote via clause derivation (#3323).
  */
+
+/**
+ * True when plan.metadata.completionProvenance is verified delivered ship
+ * provenance (#5403): mergeCommit + deliveryBranch + disposition "delivered".
+ * Non-delivery dispositions (even with merge pointers) must not admit.
+ */
+export function isHistoricalShipCloseout(plan: Record<string, unknown>): boolean {
+  const prov = readCompletionProvenance(plan);
+  if (prov === null) {
+    return false;
+  }
+  const mergeCommit = typeof prov.mergeCommit === "string" ? prov.mergeCommit.trim() : "";
+  const deliveryBranch = typeof prov.deliveryBranch === "string" ? prov.deliveryBranch.trim() : "";
+  const disposition = typeof prov.disposition === "string" ? prov.disposition.trim() : "";
+  return mergeCommit.length > 0 && deliveryBranch.length > 0 && disposition === "delivered";
+}
+
+/** True when acceptance.clauses is absent or empty (Stage-2 clause-less hatch, #5403). */
+export function isClauseLessAcceptance(plan: Record<string, unknown>): boolean {
+  return readAcceptanceClauses(plan.acceptance).length === 0;
+}
+
+/**
+ * Stage-1 (#3284): migrate empty commands → none_stated:true only when merge
+ * provenance is already on the plan (historical ship-closeout). Returns true
+ * when the plan was mutated.
+ */
+export function migrateNoneStatedForHistoricalShip(plan: Record<string, unknown>): boolean {
+  if (!isHistoricalShipCloseout(plan)) {
+    return false;
+  }
+  const acc = asRecord(plan.acceptance);
+  if (acc === null) {
+    return false;
+  }
+  const commands = Array.isArray(acc.commands) ? acc.commands : [];
+  if (commands.length > 0) {
+    return false;
+  }
+  if (acc.none_stated === true) {
+    return false;
+  }
+  acc.none_stated = true;
+  return true;
+}
+
+export const HISTORICAL_SHIP_CLOSEOUT_ADMIT_MESSAGE =
+  "Historical ship-closeout admitted clause-less empty acceptance with merge provenance (#5403)";
+
+export const HISTORICAL_SHIP_CLAUSE_BEARING_REMEDIATION =
+  "Historical ship-closeout (#5403) covers clause-less pre-schema briefs only. " +
+  "For clause-bearing actives, stamp dispositions/evidence on clause-keyed items " +
+  "or add allowlisted executables — do not invent commands solely to clear the fence.";
+
 export const SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION =
   "scope:complete requires executable plan.acceptance that runs green; stamp commands on " +
   "plan.acceptance.commands (or plan.metadata.swarm.verify_commands) — task verify:ac verifies, " +
@@ -1571,7 +1720,26 @@ export function evaluateScopeCompleteAcceptanceWalk(
       servedFrom: "executed",
     };
   }
-  const verdict = resolveAcceptanceVerdict(walk);
+  // #5393: thread merge+pr into clause-walk-failed remedy selection.
+  const prov = readCompletionProvenance(plan);
+  const mergeCommit =
+    prov !== null && typeof prov.mergeCommit === "string" ? prov.mergeCommit.trim() : "";
+  const prNumber =
+    prov !== null &&
+    typeof prov.prNumber === "number" &&
+    Number.isFinite(prov.prNumber) &&
+    prov.prNumber > 0
+      ? prov.prNumber
+      : null;
+  const verdict = resolveAcceptanceVerdict({
+    ...walk,
+    completionContext:
+      mergeCommit.length > 0 || prNumber !== null
+        ? { mergeCommit: mergeCommit.length > 0 ? mergeCommit : null, prNumber }
+        : undefined,
+  });
+  const historical = isHistoricalShipCloseout(plan);
+  const clauseLess = isClauseLessAcceptance(plan);
   if (walk.ok) {
     // #4870: refuse the #4866 zero-verified print on complete unless a green
     // executable oracle ran. verify:ac / #3826 stay unreverted.
@@ -1581,11 +1749,23 @@ export function evaluateScopeCompleteAcceptanceWalk(
         predicate: verdict.predicate,
       })
     ) {
+      // #5403 Stage-2 (a): clause-less + merge provenance admits without inventing commands.
+      if (historical && clauseLess) {
+        return {
+          ok: true,
+          message: HISTORICAL_SHIP_CLOSEOUT_ADMIT_MESSAGE,
+          reports: [],
+          servedFrom,
+          predicate: "empty-pass",
+        };
+      }
+      const remediation =
+        historical && !clauseLess
+          ? HISTORICAL_SHIP_CLAUSE_BEARING_REMEDIATION
+          : SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION;
       return {
         ok: false,
-        message:
-          `${SCOPE_COMPLETE_ZERO_VERIFIED_NOTICE}` +
-          `${SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION}\n${walk.message}`,
+        message: `${SCOPE_COMPLETE_ZERO_VERIFIED_NOTICE}` + `${remediation}\n${walk.message}`,
         reports: [],
         servedFrom,
         predicate: verdict.predicate,
@@ -1599,13 +1779,31 @@ export function evaluateScopeCompleteAcceptanceWalk(
       predicate: verdict.predicate,
     };
   }
+  // #5403 Stage-2 (a): empty-acceptance / soft_empty on clause-less historical ship.
+  if (
+    historical &&
+    clauseLess &&
+    (verdict.predicate === "empty-acceptance" || verdict.predicate === "empty-pass")
+  ) {
+    return {
+      ok: true,
+      message: HISTORICAL_SHIP_CLOSEOUT_ADMIT_MESSAGE,
+      reports: [],
+      servedFrom,
+      predicate: "empty-pass",
+    };
+  }
+  const remediation =
+    historical && !clauseLess
+      ? HISTORICAL_SHIP_CLAUSE_BEARING_REMEDIATION
+      : SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION;
   return {
     ok: false,
     // Name the check that refused and the value it read BEFORE the standing
     // contract, so the first line the operator sees is the actual cause (#3497).
     message:
       `scope:complete refused acceptance — ${formatAcceptanceVerdict(verdict)}\n` +
-      `${SCOPE_COMPLETE_ACCEPTANCE_REMEDIATION}\n${walk.message}`,
+      `${remediation}\n${walk.message}`,
     reports: [],
     servedFrom,
     predicate: verdict.predicate,

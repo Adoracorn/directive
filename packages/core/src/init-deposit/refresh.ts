@@ -87,6 +87,11 @@ import { depositOpenClawSoftRebindSkill } from "../session/openclaw-soft-rebind-
 import { depositOpenClawL2ProductCommands } from "../slash/openclaw-deposit.js";
 import { gitPorcelain } from "../story-ready/git.js";
 import {
+  CONFIDENCE_SCHEMA_COMPAT_TIP,
+  confidenceSchemaShapeChanged,
+  readConfidenceSchemaShape,
+} from "../vbrief-validate/confidence-schema-tip.js";
+import {
   type AgentHookReadinessResult,
   agentHookReadinessJson,
   evaluateAgentHookReadiness,
@@ -1330,9 +1335,14 @@ export async function runRefreshDeposit(
   } catch {
     // legacy-only / cache-only — do not mkdir xbrief/schemas.
   }
+  let confidenceSchemaTip = false;
   if (canonicalLifecycleRoot !== undefined) {
+    const consumerSchemaPath = join(projectDir, "xbrief", "schemas", "xbrief-core-0.8.schema.json");
+    const confidenceBefore = readConfidenceSchemaShape(consumerSchemaPath);
     const wroteBeforeSchemas = snapshotMutationSummary().wrote;
     const schemasChanged = syncConsumerXbriefSchemas(projectDir, payloadReadRoot);
+    const confidenceAfter = readConfidenceSchemaShape(consumerSchemaPath);
+    confidenceSchemaTip = confidenceSchemaShapeChanged(confidenceBefore, confidenceAfter);
     for (const path of wroteSince(wroteBeforeSchemas, snapshotMutationSummary().wrote)) {
       if (path === "xbrief/schemas" || path.startsWith("xbrief/schemas/")) {
         consumerProjections.push({
@@ -1358,6 +1368,9 @@ export async function runRefreshDeposit(
       }
     }
     removeStaleMigratedFrameworkNarrative(projectDir);
+  }
+  if (confidenceSchemaTip) {
+    io.printf(`\n[deft update] ${CONFIDENCE_SCHEMA_COMPAT_TIP}\n`);
   }
 
   // #5096: update must skip+preserve consumer-owned PROJECT-DEFINITION.

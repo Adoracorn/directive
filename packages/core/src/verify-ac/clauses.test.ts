@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   bindClausesToDeclaredScope,
   collectDeclaredAcceptanceNarrativeSurface,
+  collectDoneWhenLines,
   collectPlanItemAcceptanceSurface,
   countAdjudicableClauses,
   countUnverifiedAdjudicableClauses,
@@ -16,7 +17,9 @@ import {
   isDeclaredArtifactPath,
   isFileShapedPointer,
   isScratchArtifactPath,
+  looksLikeDefectDescription,
   readAcceptanceClauses,
+  resolveClauseSourceKind,
   serializeAcceptanceClauses,
   stampDerivedClausesOnAcceptance,
   stripInlineMarkdownBold,
@@ -1661,5 +1664,195 @@ describe("bound behavioral clauses have no static oracle (#4240)", () => {
     );
     expect(report.clauses[0]?.outcome).not.toBe("failed");
     expect(report.ok).toBe(true);
+  });
+});
+
+describe("bug-report defect-description polarity (#5393)", () => {
+  it("prefers Done-when over Failures paste in statement scrape", () => {
+    const clauses = deriveAcceptanceClauses(`
+## Failures
+- error TS2532: Object is possibly 'undefined' in packages/core/src/verify-ac/clauses.ts
+- 3 files fail format check in packages/core/src/foo.ts
+
+Done when npm run check exits 0 on main.
+`);
+    expect(clauses).toHaveLength(1);
+    expect(clauses[0]?.text).toMatch(/done when/i);
+    expect(clauses[0]?.source_kind).toBeUndefined();
+  });
+
+  it("keeps Acceptance Criteria alongside Done-when (does not drop explicit criteria)", () => {
+    const clauses = deriveAcceptanceClauses(`
+## Acceptance Criteria
+- packages/core/src/verify-ac/clauses.ts must export looksLikeDefectDescription
+
+Done when npm run check exits 0 on main.
+`);
+    expect(clauses.map((c) => c.text)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/done when/i),
+        expect.stringMatching(/looksLikeDefectDescription/),
+      ]),
+    );
+    expect(clauses.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("keeps imperative checklist items with must items (does not drop Add …)", () => {
+    const clauses = deriveAcceptanceClauses(`
+- packages/core/src/verify-ac/clauses.ts must export resolveClauseSourceKind
+- Add packages/core/src/verify-ac/clauses.test.ts coverage for defect polarity
+`);
+    expect(clauses.map((c) => c.text)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/must export resolveClauseSourceKind/),
+        expect.stringMatching(/^Add packages\/core\/src\/verify-ac\/clauses\.test\.ts/),
+      ]),
+    );
+  });
+
+  it("does not classify mixed diagnostic + must-contain as defect-description", () => {
+    const text = "After fixing TS2304, `src/output.ts` must contain 'resolved'";
+    expect(looksLikeDefectDescription(text)).toBe(false);
+    expect(
+      resolveClauseSourceKind({
+        id: 1,
+        text,
+        artifact_path: "src/output.ts",
+        ambiguous: false,
+      }),
+    ).toBe("acceptance");
+  });
+
+  it("yields 0 clauses for Failures-only bug report without Done-when", () => {
+    const clauses = deriveAcceptanceClauses(`
+## Failures
+- error TS2532: Object is possibly 'undefined' in packages/core/src/verify-ac/clauses.ts
+- 3 files fail format check in packages/core/src/foo.ts
+`);
+    expect(clauses).toEqual([]);
+  });
+
+  it("round-trips source_kind defect-description through read/serialize", () => {
+    const stamped = serializeAcceptanceClauses([
+      {
+        id: 1,
+        text: 'error TS2532: Object is possibly "undefined"',
+        artifact_path: "packages/core/src/verify-ac/clauses.ts",
+        ambiguous: false,
+        source_kind: "defect-description",
+      },
+    ]);
+    expect(stamped[0]?.source_kind).toBe("defect-description");
+    const read = readAcceptanceClauses({ clauses: stamped });
+    expect(read[0]?.source_kind).toBe("defect-description");
+    expect(
+      resolveClauseSourceKind(
+        read[0] ?? { id: 0, text: "", artifact_path: null, ambiguous: false },
+      ),
+    ).toBe("defect-description");
+  });
+
+  it("classifies legacy Failures text as defect-description without the field", () => {
+    expect(looksLikeDefectDescription('Object is possibly "undefined" (TS2532)')).toBe(true);
+    expect(
+      resolveClauseSourceKind({
+        id: 1,
+        text: 'Object is possibly "undefined" (TS2532)',
+        artifact_path: "src/a.ts",
+        ambiguous: false,
+      }),
+    ).toBe("defect-description");
+  });
+
+  it("collects inline and heading Done-when lines", () => {
+    expect(collectDoneWhenLines("Done when task check exits 0\n")).toEqual([
+      "Done when task check exits 0",
+    ]);
+    expect(
+      collectDoneWhenLines(`## Done when
+- npm run check exits 0
+`),
+    ).toEqual(["npm run check exits 0"]);
+  });
+
+  it("marks missing defect tokens unverifiable and non-adjudicable", () => {
+    const root = mkdtempSync(join(tmpdir(), "clause-5393-absent-"));
+    writeFileSync(join(root, "fixed.ts"), "export const ok = true;\n", "utf8");
+    const report = walkAcceptanceClauses(
+      [
+        {
+          id: 1,
+          text: 'fails with "possibly undefined"',
+          artifact_path: "fixed.ts",
+          ambiguous: false,
+          source_kind: "defect-description",
+        },
+      ],
+      root,
+      { declaredScope: ["fixed.ts"] },
+    );
+    expect(report.clauses[0]?.outcome).toBe("unverifiable");
+    expect(report.clauses[0]?.adjudicable).toBe(false);
+    expect(countUnverifiedAdjudicableClauses(report.clauses)).toBe(0);
+  });
+
+  it("does not credit verified when defect tokens remain present", () => {
+    const root = mkdtempSync(join(tmpdir(), "clause-5393-present-"));
+    writeFileSync(join(root, "still.ts"), "possibly undefined\n", "utf8");
+    const report = walkAcceptanceClauses(
+      [
+        {
+          id: 1,
+          text: 'error quotes "possibly undefined"',
+          artifact_path: "still.ts",
+          ambiguous: false,
+          source_kind: "defect-description",
+        },
+      ],
+      root,
+      { declaredScope: ["still.ts"] },
+    );
+    expect(report.clauses[0]?.outcome).toBe("unverifiable");
+    expect(report.clauses[0]?.adjudicable).toBe(false);
+    expect(report.clauses[0]?.outcome).not.toBe("verified");
+  });
+
+  it("uses text-local fallback when source_kind is absent on a stamped defect row", () => {
+    const root = mkdtempSync(join(tmpdir(), "clause-5393-legacy-"));
+    writeFileSync(join(root, "fixed.ts"), "export const ok = true;\n", "utf8");
+    const report = walkAcceptanceClauses(
+      [
+        {
+          id: 1,
+          text: 'TS2532 Object is possibly "undefined"',
+          artifact_path: "fixed.ts",
+          ambiguous: false,
+        },
+      ],
+      root,
+      { declaredScope: ["fixed.ts"] },
+    );
+    expect(report.clauses[0]?.outcome).toBe("unverifiable");
+    expect(report.clauses[0]?.adjudicable).toBe(false);
+  });
+
+  it("marks missing defect-description artifacts unverifiable and non-adjudicable", () => {
+    const root = mkdtempSync(join(tmpdir(), "clause-5393-missing-"));
+    const report = walkAcceptanceClauses(
+      [
+        {
+          id: 1,
+          text: 'fails with "possibly undefined"',
+          artifact_path: "missing.ts",
+          ambiguous: false,
+          source_kind: "defect-description",
+        },
+      ],
+      root,
+      { declaredScope: ["missing.ts"] },
+    );
+    expect(report.clauses[0]?.outcome).toBe("unverifiable");
+    expect(report.clauses[0]?.adjudicable).toBe(false);
+    expect(report.clauses[0]?.outcome).not.toBe("failed");
   });
 });

@@ -137,7 +137,6 @@ import {
 } from "./classify/index.js";
 import {
   type CursorPlanChoiceDeps,
-  decideCursorPlanChoice,
   defaultCursorPlanChoiceDeps,
   isCursorPlanChoiceManagedPath,
   storeDenyMessage,
@@ -148,6 +147,11 @@ import {
   type GitDestructiveForm,
   payloadWithInjectedWriteTarget,
 } from "./dest-form.js";
+import {
+  decidePlanChoiceWithHatch,
+  decideQuestionHatchGate,
+  decideQuestionHatchPauseGate,
+} from "./dispatcher-plan-choice.js";
 import { appendGitDestructiveRecord, GIT_DESTRUCTIVE_LOG_ENV } from "./git-destructive-log.js";
 import { classifyLauncherFamilyArgv, type LauncherArgvClass } from "./launcher-argv.js";
 import { isLexicalOutsideProjectRoot, isOutsideProjectRootWrite } from "./outside-project-root.js";
@@ -171,7 +175,6 @@ import {
   type ActiveScopeInspection,
   type InspectActiveScopeOptions,
   inspectActiveScope,
-  STAMP_EVIDENCE_VERB,
 } from "./scope.js";
 import { classifyShellWriteTargets, isInRepoShellWritePath } from "./shell-write-targets.js";
 import {
@@ -333,6 +336,17 @@ export type HookDecisionCode =
   | "plan-choice-ack-ignored"
   | "plan-choice-opt-out"
   | "plan-choice-store-deny"
+  /** Structured-question hatch present (#5373). */
+  | "question-hatch-ready"
+  /** Structured-question missing Discuss then Back (#5373). */
+  | "question-hatch-missing"
+  /** Structured-question hatch present but wrong order/label (#5373). */
+  | "question-hatch-order"
+  /** Discuss-pause latch blocking tools until explicit resume (#5373). */
+  | "question-hatch-pause-active"
+  | "question-hatch-pause-storage-failure"
+  | "question-hatch-pause-lock-busy"
+  | "question-hatch-pause-resumed"
   /** Still-running / status-unknown host kill without green attestation (#5281). */
   | "kill-attestation-deny"
   /** Green pre-cancel or equivalent kill attestation allowed host kill (#5281). */
@@ -2091,7 +2105,11 @@ function inspectMutationGates(
       mutationTargets.every((target) => isOutsideProjectRootWrite(projectRoot, target));
     if (!outsideRoot || isSpawnTool(toolName)) {
       let proposedPathHint: string;
-      if (isSpawnTool(toolName)) {
+      if (isSpawnTool(toolName) && scope.denyKind === "multiple-eligible") {
+        // #4880 Prefer-A B': do not emit promote-then-activate on multiple-eligible.
+        // Audience-labeled recovery is already in scope.message (A); suppress duplicate.
+        proposedPathHint = "";
+      } else if (isSpawnTool(toolName)) {
         // Multi-path recovery for implement-class spawns (#3080 AC4 / #3259 honesty).
         // Structural markers only — free-text prompt brackets are not sufficient.
         proposedPathHint =
@@ -2118,10 +2136,12 @@ function inspectMutationGates(
       } else if (scope.denyKind === "zero-eligible-blocked") {
         proposedPathHint = " Recovery: run `deft scope:unblock -- <blocked-brief>`.";
       } else if (scope.denyKind === "multiple-eligible") {
-        proposedPathHint =
-          ` Recovery: record acceptance with \`deft ${STAMP_EVIDENCE_VERB} -- <brief>\` ` +
-          "(evidence-only; no Edit of the brief), or set DEFT_ACTIVE_SCOPE to the " +
-          "dispatched story path.";
+        // #4880 Prefer-A A: labeled recovery is in scope.message; do not re-print pin advice.
+        proposedPathHint = "";
+      } else if (scope.denyKind === "pin-miss") {
+        // #5386: recovery copy is composed in inspectActiveScope (source-aware;
+        // S1 — do not string-sniff evaluator prose here). Suppress promote/activate.
+        proposedPathHint = "";
       } else {
         proposedPathHint = options.proposedLifecycleExempt
           ? " Recovery: no approved xBRIEF is available to activate " +
@@ -2188,8 +2208,13 @@ function inspectMutationGates(
     const occupancyDeny = recheckOccupancyBeforeWriteAllow(true);
     if (occupancyDeny !== null) return occupancyDeny;
   }
+  // #5386 limb 4: scope.warning is independent of occupancyWarning so spawn
+  // allows (which skip recheckOccupancyBeforeWriteAllow) still surface it.
+  const scopeWarning = scope.warning?.trim() ?? "";
   const allowMessage = withOccupancyWarning(
-    `Directive ${isSpawnTool(toolName) ? "spawn" : "write"} gate passed for ${toolName}.`,
+    scopeWarning.length > 0
+      ? `Directive ${isSpawnTool(toolName) ? "spawn" : "write"} gate passed for ${toolName}. ${scopeWarning}`
+      : `Directive ${isSpawnTool(toolName) ? "spawn" : "write"} gate passed for ${toolName}.`,
   );
   if (isSpawnTool(toolName)) {
     const consult = spawnConsult;
@@ -3306,7 +3331,7 @@ function routeHookDecision(
   }
 
   if (input.event === "prompt.submit" || input.event === "agent.response") {
-    return decideCursorPlanChoice(
+    return decidePlanChoiceWithHatch(
       input,
       seams.cursorPlanChoice ?? defaultCursorPlanChoiceDeps(input.environ ?? process.env),
     );
@@ -3446,6 +3471,15 @@ function routeHookDecision(
       }),
     );
   }
+
+  // Discuss-pause latch (Cursor plan-choice selection ingress only) (#5373).
+  const pauseDeny = decideQuestionHatchPauseGate(input, toolName);
+  if (pauseDeny !== null) return pauseDeny;
+
+  // Refuse-missing-hatch when PreToolUse admits a structured-question tool (#5373).
+  const hatchGate = decideQuestionHatchGate(input, toolName);
+  if (hatchGate !== null) return hatchGate;
+
   const environ = input.environ ?? process.env;
   const readOnly = isReadOnlyHookContext(input.payload, environ);
   if (readOnly && isDirectWriteTool(toolName)) {
@@ -3741,15 +3775,26 @@ function composeCursorSessionStartAdditionalContext(
  * `{"permission":"allow"}` within the deposit timeout. Other hosts keep empty
  * allow so the host permission flow is unchanged — except session.start /
  * session.compact soft re-bind injection (#3171), which surfaces checklist
- * text without a write tool.
+ * text without a write tool, and tool.before allow advisories (#5281 kill-force,
+ * #5386 stale-pin Warning:) which must not be dropped by empty allow.
  *
  * Cursor stdout always includes `code` (stable machine-readable decision code)
  * so agents can distinguish policy denials from host-integration failures
  * without parsing English (#2864). Exit status still does not encode the
  * verdict — see hook-dispatch `run()` exit-code contract.
  */
+/** Host-visible allow text: kill-force reason (#5281) or Warning: advisories (#5386). */
+function allowAdvisoryText(decision: HookDecision): string | null {
+  const msg = decision.message.trim();
+  if (msg.length === 0) return null;
+  if (decision.code === "kill-force-ready") return msg;
+  if (/\bWarning:/.test(msg)) return msg;
+  return null;
+}
+
 export function renderHostDecision(host: HookHost, decision: HookDecision): string {
   if (decision.verdict === "allow") {
+    const advisory = decision.event === "tool.before" ? allowAdvisoryText(decision) : null;
     if (
       decision.event === "tool.before" &&
       decision.updatedInput !== undefined &&
@@ -3760,6 +3805,7 @@ export function renderHostDecision(host: HookHost, decision: HookDecision): stri
           permission: "allow",
           code: decision.code,
           updated_input: decision.updatedInput,
+          ...(advisory !== null ? { agent_message: advisory } : {}),
         });
       }
       return JSON.stringify({
@@ -3767,6 +3813,7 @@ export function renderHostDecision(host: HookHost, decision: HookDecision): stri
           hookEventName: "PreToolUse",
           permissionDecision: "allow",
           updatedInput: decision.updatedInput,
+          ...(advisory !== null ? { permissionDecisionReason: advisory } : {}),
         },
       });
     }
@@ -3804,6 +3851,13 @@ export function renderHostDecision(host: HookHost, decision: HookDecision): stri
       if (decision.event === "prompt.submit" || decision.event === "agent.response") {
         return JSON.stringify({ continue: true, code: decision.code });
       }
+      if (advisory !== null) {
+        return JSON.stringify({
+          permission: "allow",
+          code: decision.code,
+          agent_message: advisory,
+        });
+      }
       return JSON.stringify({ permission: "allow", code: decision.code });
     }
     if (
@@ -3827,17 +3881,24 @@ export function renderHostDecision(host: HookHost, decision: HookDecision): stri
         });
       }
     }
-    // Grok force-kill allow must print the reason (#5281 DCR iii) — empty allow hides it.
-    if (
-      host === "grok" &&
-      decision.event === "tool.before" &&
-      decision.code === "kill-force-ready" &&
-      decision.message.trim().length > 0
-    ) {
-      return JSON.stringify({
-        decision: "allow",
-        reason: decision.message,
-      });
+    // tool.before allow advisories must print (#5281 kill-force; #5386 Warning:).
+    // Claude/Codex: additionalContext only — do not set permissionDecision (that
+    // would auto-approve and skip the host permission prompt; Greptile #5433).
+    if (advisory !== null) {
+      if (host === "grok") {
+        return JSON.stringify({
+          decision: "allow",
+          reason: advisory,
+        });
+      }
+      if (host === "claude" || host === "codex") {
+        return JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            additionalContext: advisory,
+          },
+        });
+      }
     }
     return "";
   }

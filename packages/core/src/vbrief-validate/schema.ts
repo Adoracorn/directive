@@ -139,7 +139,27 @@ function validateStopConditions(value: unknown, itemPath: string, errors: string
   }
 }
 
-function validatePlanItem(item: JsonObject, path: string, errors: string[]): void {
+/** Terminal plan statuses that demote historical corpus warnings (#5422 Prefer-A). */
+const TERMINAL_PLAN_STATUSES: ReadonlySet<string> = new Set(["completed", "cancelled", "failed"]);
+
+/** Closed leftover clause-colon id predicate — read-accept on terminal only (#5422). */
+const LEGACY_CLAUSE_COLON_ID_RE = /^clause:[0-9]+$/;
+
+export function isTerminalPlanStatus(status: unknown): boolean {
+  return typeof status === "string" && TERMINAL_PLAN_STATUSES.has(status);
+}
+
+interface ValidatePlanItemOptions {
+  readonly terminalPlan?: boolean;
+  readonly warnings?: string[];
+}
+
+function validatePlanItem(
+  item: JsonObject,
+  path: string,
+  errors: string[],
+  options: ValidatePlanItemOptions = {},
+): void {
   const itemId = typeof item.id === "string" ? item.id : "<no-id>";
   const itemPath = `${path}[${itemId}]`;
 
@@ -157,7 +177,14 @@ function validatePlanItem(item: JsonObject, path: string, errors: string[]): voi
   }
 
   if ("effort" in item && !VALID_PLAN_ITEM_EFFORTS.has(String(item.effort))) {
-    errors.push(`${itemPath} invalid effort: ${pyStrRepr(String(item.effort))}`);
+    const sorted = [...VALID_PLAN_ITEM_EFFORTS]
+      .sort()
+      .map((s) => `'${s}'`)
+      .join(", ");
+    errors.push(
+      `${itemPath} invalid effort: ${pyStrRepr(String(item.effort))} ` +
+        `(expected one of [${sorted}])`,
+    );
   }
 
   if ("stopConditions" in item) {
@@ -165,7 +192,14 @@ function validatePlanItem(item: JsonObject, path: string, errors: string[]): voi
   }
 
   if (typeof item.id === "string" && !PLAN_ITEM_ID_PATTERN.test(item.id)) {
-    errors.push(`${itemPath} invalid id: ${pyStrRepr(item.id)}`);
+    if (options.terminalPlan === true && LEGACY_CLAUSE_COLON_ID_RE.test(item.id)) {
+      options.warnings?.push(
+        `${itemPath} legacy clause-colon id ${pyStrRepr(item.id)} ` +
+          `(accepted on terminal plan; writers mint clause.N)`,
+      );
+    } else {
+      errors.push(`${itemPath} invalid id: ${pyStrRepr(item.id)}`);
+    }
   }
 
   if ("summary" in item && typeof item.summary !== "string") {
@@ -190,7 +224,7 @@ function validatePlanItem(item: JsonObject, path: string, errors: string[]): voi
           errors.push(`${itemPath}.items[${j}] must be an object`);
           continue;
         }
-        validatePlanItem(sub as JsonObject, `${itemPath}.items`, errors);
+        validatePlanItem(sub as JsonObject, `${itemPath}.items`, errors, options);
       }
     }
   }
@@ -205,7 +239,7 @@ function validatePlanItem(item: JsonObject, path: string, errors: string[]): voi
           errors.push(`${itemPath}.subItems[${j}] must be an object`);
           continue;
         }
-        validatePlanItem(sub as JsonObject, `${itemPath}.subItems`, errors);
+        validatePlanItem(sub as JsonObject, `${itemPath}.subItems`, errors, options);
       }
     }
   }
@@ -250,7 +284,15 @@ export interface PlanReferenceTypeIssues {
   readonly warnings: string[];
 }
 
-function severityForUnknownReserved(unknown: UnknownReservedReferenceType): "error" | "warning" {
+function severityForUnknownReserved(
+  unknown: UnknownReservedReferenceType,
+  planStatus?: string | null,
+): "error" | "warning" {
+  // Terminal plans: demote all unknown reserved-prefix subtypes to warnings (#5422 Prefer-A).
+  // When status is omitted, keep CLASS_B-only severity so existing unit tests stay honest.
+  if (isTerminalPlanStatus(planStatus)) {
+    return "warning";
+  }
   return CLASS_B_COMPATIBILITY_BARES.has(unknown.subtype) ? "warning" : "error";
 }
 
@@ -266,10 +308,11 @@ function formatUnknownReserved(
   return `${filepath}: plan.references[${index}].type ${pyStrRepr(unknown.type)} is an unknown reserved-prefix subtype${nearest}`;
 }
 
-/** Report reserved-prefix reference types no existing list consumes (#4698 / #4746). */
+/** Report reserved-prefix reference types no existing list consumes (#4698 / #4746 / #5422). */
 export function validatePlanReferenceTypes(
   references: unknown,
   filepath: string,
+  planStatus?: string | null,
 ): PlanReferenceTypeIssues {
   const errors: string[] = [];
   const warnings: string[] = [];
@@ -296,7 +339,7 @@ export function validatePlanReferenceTypes(
     if (unknown === null) {
       continue;
     }
-    const severity = severityForUnknownReserved(unknown);
+    const severity = severityForUnknownReserved(unknown, planStatus);
     const message = formatUnknownReserved(filepath, i, unknown);
     if (severity === "warning") {
       warnings.push(message);
@@ -380,9 +423,19 @@ export function validateVbriefSchema(
           planObj.narratives,
           `${filepath}: plan.narratives`,
           errors,
-          { grandfatherUnkeyed: planObj.status === "completed" },
+          {
+            // Terminal set for Source grandfather (#5385); Confidence WARN still fires.
+            grandfatherUnkeyed: isTerminalPlanStatus(planObj.status),
+            warnings,
+          },
         );
       }
+
+      const terminalPlan = isTerminalPlanStatus(planObj.status);
+      const itemOptions: ValidatePlanItemOptions = {
+        terminalPlan,
+        warnings,
+      };
 
       if ("items" in planObj) {
         if (!Array.isArray(planObj.items)) {
@@ -394,12 +447,16 @@ export function validateVbriefSchema(
               errors.push(`${filepath}: plan.items[${i}] must be an object`);
               continue;
             }
-            validatePlanItem(item as JsonObject, `${filepath}: plan.items`, errors);
+            validatePlanItem(item as JsonObject, `${filepath}: plan.items`, errors, itemOptions);
           }
         }
       }
 
-      const refIssues = validatePlanReferenceTypes(planObj.references, filepath);
+      const refIssues = validatePlanReferenceTypes(
+        planObj.references,
+        filepath,
+        typeof planObj.status === "string" ? planObj.status : null,
+      );
       errors.push(...refIssues.errors);
       if (warnings !== undefined) {
         warnings.push(...refIssues.warnings);

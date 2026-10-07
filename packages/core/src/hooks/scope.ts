@@ -1,6 +1,11 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { hasArtifactSuffix } from "../layout/resolve.js";
+import {
+  isStoryWriteFenceUnreadable,
+  loadStoryWriteFenceFromMergeBase,
+  type StoryWriteFenceView,
+} from "../policy/write-fence.js";
 import { evaluate } from "../preflight/evaluate.js";
 import { fenceUntrustedAcceptanceText } from "../scope/acceptance-evidence.js";
 
@@ -19,6 +24,11 @@ export interface ActiveScopeInspection {
   readonly path: string | null;
   readonly message: string;
   readonly denyKind?: ActiveScopeDenyKind;
+  /**
+   * Allow-path advisory (#5386). Dispatcher merges this into allowMessage when
+   * ready:true (inspector-only message fields are discarded on allow).
+   */
+  readonly warning?: string;
 }
 
 /**
@@ -35,8 +45,17 @@ export type SoftMissingAcTargetResolution =
       readonly scannedCount: number;
     };
 
-/** Evidence-only lifecycle verb named on the multiple-eligible deny (#4840). */
+/** Evidence-only lifecycle verb (kept for stamp-evidence callers; not an eligibility fix) (#4840 / #5403). */
 export const STAMP_EVIDENCE_VERB = "scope:stamp-evidence";
+
+/** Local fence-unblock verb that clears eligibility without network (#5403). */
+export const BLOCK_SCOPE_VERB = "scope:block";
+
+/** Explicit-target historical ship-closeout named on multi-eligible deny (#5403). */
+export const HISTORICAL_SHIP_CLOSEOUT_HINT =
+  "If an eligible brief is already shipped on the delivery tip, close it out with " +
+  "`deft scope:complete -- <brief> --merge-commit <sha> --pr <n>` " +
+  "(delivery ancestry required; completed-tracked is post-land proof only).";
 
 export interface InspectActiveScopeOptions {
   /** Explicit dispatched story path; wins over {@link ACTIVE_SCOPE_PIN_ENV}. */
@@ -46,6 +65,12 @@ export interface InspectActiveScopeOptions {
    * only. When omitted, `process.env` is consulted so CLI callers stay pinned.
    */
   readonly env?: NodeJS.ProcessEnv;
+  /**
+   * Story fence loader for the unpinned non-fencing partition (#4880 / #4956).
+   * Defaults to merge-base authority (same SoT as the write gate). Tests may
+   * inject a working-tree or fixture loader.
+   */
+  readonly loadStoryWriteFence?: (projectRoot: string, scopePath: string) => StoryWriteFenceView;
 }
 
 interface EligibleScope {
@@ -118,24 +143,90 @@ export function matchPinnedActiveScope(
 }
 
 /**
- * Assumptions: deny copy is operator-visible hook text; basenames come from the filesystem.
- * Guarantees: names are fenced and CR/LF-collapsed so they cannot break markdown or inject copy.
- * Non-goals: pin env values, preflight evaluator copy, origin-freshness messages.
+ * Assumptions: deny/allow copy is operator-visible hook text; basenames and pin
+ * env / boundPath values are untrusted (#5386 S2).
+ * Guarantees: names are fenced and CR/LF-collapsed so they cannot break markdown
+ * or inject copy onto deny or allow paths.
+ * Non-goals: preflight evaluator copy, origin-freshness messages.
  */
 function fenceActiveScopeName(path: string): string {
   return fenceUntrustedAcceptanceText(toPosix(basename(path)));
 }
 
+function fencePinValue(pin: string): string {
+  return fenceUntrustedAcceptanceText(toPosix(pin.trim()));
+}
+
+/**
+ * Audience-labeled multiple-eligible recovery (#4880 Prefer-A A).
+ * Parent/operator vs Dispatched worker; stamp-evidence is evidence-only.
+ */
 function formatMultipleActiveMessage(eligible: readonly EligibleScope[]): string {
   const names = eligible.map((item) => fenceActiveScopeName(item.path)).join(", ");
+  const localShipHint = eligible.some((item) => briefHasLocalMergeProvenance(item.path))
+    ? " Local completionProvenance.mergeCommit is already present on at least one eligible brief."
+    : "";
   return (
     `Multiple active xBRIEF artifacts are eligible (${names}). ` +
     "The write fence cannot bind the first-sorted story: a cohort would share that " +
     "story's file_scope and over-permit every other worker (#4007). " +
-    `Set ${ACTIVE_SCOPE_PIN_ENV} to the dispatched story path, or record acceptance ` +
-    `with \`deft ${STAMP_EVIDENCE_VERB} -- <brief>\`. ` +
-    "Or keep one running brief in xbrief/active/."
+    `Parent/operator: pin ${ACTIVE_SCOPE_PIN_ENV} to the dispatched story before spawn ` +
+    `(or demote/complete competitors / run \`deft ${BLOCK_SCOPE_VERB} -- <brief>\`), ` +
+    "and ensure the pin is visible to the hook environ that measured the deny " +
+    "(process.env / spawn stdin env bag); restart the host when only User/system env was updated." +
+    localShipHint +
+    ` ${HISTORICAL_SHIP_CLOSEOUT_HINT} ` +
+    "Dispatched worker: report the eligible brief names upward; do not set host process env. " +
+    `If your intended operation is acceptance recording: \`deft ${STAMP_EVIDENCE_VERB} -- <brief>\` ` +
+    "(evidence-only; may Edit the brief via stampEvidenceOnBrief; does not change plan.status " +
+    "or leave active/; does not clear this Write/spawn deny)."
   );
+}
+
+/**
+ * Write-fence storyActive predicate for eligibility partition (#4880 Prefer-A C').
+ * Non-fencing = absent/empty allow + empty deny. Unreadable authority fails closed
+ * (treated as fencing so it stays in unpinned competition). Uses the same fence
+ * source as the write gate (merge-base by default), not working-tree head.
+ */
+function isFencingEligibleBrief(
+  projectRoot: string,
+  briefPath: string,
+  loadFence: (projectRoot: string, scopePath: string) => StoryWriteFenceView,
+): boolean {
+  const fence = loadFence(projectRoot, briefPath);
+  if (isStoryWriteFenceUnreadable(fence)) return true;
+  return fence.fileScope.length > 0 || fence.denyPaths.length > 0;
+}
+
+/**
+ * When ≥1 fencing eligible exists, drop non-fencing briefs from the unpinned
+ * competition set. Zero fencing preserves today's sole/multi pathless behavior.
+ */
+function partitionUnpinnedEligible(
+  projectRoot: string,
+  eligible: readonly EligibleScope[],
+  loadFence: (projectRoot: string, scopePath: string) => StoryWriteFenceView,
+): readonly EligibleScope[] {
+  const fencing = eligible.filter((item) =>
+    isFencingEligibleBrief(projectRoot, item.path, loadFence),
+  );
+  if (fencing.length >= 1) return fencing;
+  return eligible;
+}
+
+/** Local-only hint: completionProvenance already on disk (no gh) (#5403). */
+function briefHasLocalMergeProvenance(briefPath: string): boolean {
+  try {
+    const raw = readFileSync(briefPath, "utf8");
+    const data = JSON.parse(raw) as {
+      plan?: { metadata?: { completionProvenance?: { mergeCommit?: unknown } } };
+    };
+    const merge = data.plan?.metadata?.completionProvenance?.mergeCommit;
+    return typeof merge === "string" && merge.trim().length > 0;
+  } catch {
+    return false;
+  }
 }
 
 function formatZeroEligibleBlockedMessage(blocked: readonly string[]): string {
@@ -146,20 +237,71 @@ function formatZeroEligibleBlockedMessage(blocked: readonly string[]): string {
   );
 }
 
-function formatMissingPinMessage(pin: string): string {
+/** Env pin with no scanned match (#5386): absent from active/; clear/repoint + restart. */
+function formatMissingEnvPinMessage(pin: string, eligibleCount: number): string {
+  const fenced = fencePinValue(pin);
+  const base =
+    `${ACTIVE_SCOPE_PIN_ENV} names a path absent from xbrief/active/ ` + `(got ${fenced}).`;
+  if (eligibleCount === 0) {
+    return (
+      `${base} Clear or repoint ${ACTIVE_SCOPE_PIN_ENV} to an eligible running brief, ` +
+      "then restart the host so the hook process sees the change. " +
+      "Clearing the pin alone cannot make the fence ready while no eligible brief exists."
+    );
+  }
   return (
-    `${ACTIVE_SCOPE_PIN_ENV} does not name an eligible running xBRIEF under ` +
-    `xbrief/active/ (got ${pin}).`
+    `${base} Clear or repoint ${ACTIVE_SCOPE_PIN_ENV} to an eligible running brief, ` +
+    "then restart the host so the hook process sees the change."
+  );
+}
+
+/** Explicit boundPath with no scanned match (#5386): do not imply env repair. */
+function formatMissingBoundPathMessage(pin: string): string {
+  return (
+    `boundPath names a path absent from xbrief/active/ (got ${fencePinValue(pin)}). ` +
+    "Repair the dispatch binding / dest basename; changing " +
+    `${ACTIVE_SCOPE_PIN_ENV} does not override a nonempty boundPath.`
+  );
+}
+
+/** Pin matched a scanned artifact but preflight rejected it (#5386). */
+function formatMatchedRejectedPinMessage(
+  pin: string,
+  source: "env" | "boundPath",
+  rejected: string,
+  matchedPath: string,
+  isBlocked: boolean,
+): string {
+  const label = source === "boundPath" ? "boundPath" : ACTIVE_SCOPE_PIN_ENV;
+  const base =
+    `${label} ${fencePinValue(pin)} names a present brief that is not ` +
+    `implementation-eligible (${fenceActiveScopeName(matchedPath)}): ${rejected}`;
+  if (isBlocked) {
+    // Fenced name stays in `base`; command arg is a path placeholder (#5386 P2).
+    return `${base} Recovery: run \`deft scope:unblock -- <blocked-brief>\`.`;
+  }
+  return base;
+}
+
+/** Allow-path warn after env-pin miss + sole-eligible fallback (#5386). */
+function formatStaleEnvPinFallbackWarning(pin: string, selectedPath: string): string {
+  return (
+    `Warning: ${ACTIVE_SCOPE_PIN_ENV} named absent path ${fencePinValue(pin)}; ` +
+    `falling back to sole eligible ${fenceActiveScopeName(selectedPath)}. ` +
+    `Clear or repoint ${ACTIVE_SCOPE_PIN_ENV} and restart the host.`
   );
 }
 
 /**
  * Find an implementation-eligible scope by delegating every candidate to the
- * existing xBRIEF preflight evaluator. This intentionally creates no second
- * lifecycle/status policy stack.
+ * existing xBRIEF preflight evaluator for lifecycle/status. A second, narrower
+ * predicate applies only on the unpinned multi-eligible path (#4880 Prefer-A C'):
+ * when ≥1 fencing eligible exists (nonempty story allow or deny per write-fence
+ * storyActive), non-fencing briefs are excluded from that competition set.
+ * Explicit pin / boundPath still matches the full preflight-eligible set.
  *
- * When more than one candidate is eligible, first-wins is not used (#4007):
- * bind {@link ACTIVE_SCOPE_PIN_ENV} / `boundPath`, or fail closed.
+ * When more than one candidate remains eligible after that partition, first-wins
+ * is not used (#4007): bind {@link ACTIVE_SCOPE_PIN_ENV} / `boundPath`, or fail closed.
  */
 export function inspectActiveScope(
   projectRoot: string,
@@ -200,8 +342,13 @@ export function inspectActiveScope(
     }
   }
 
+  const explicitBound = options?.boundPath?.trim() ?? "";
+  const hasExplicitBound = explicitBound.length > 0;
+  const envBag = options?.env ?? process.env;
+  const envPin = envBag[ACTIVE_SCOPE_PIN_ENV]?.trim() ?? "";
   const pin = pinFrom(options);
   if (pin.length > 0) {
+    const pinSource: "env" | "boundPath" = hasExplicitBound ? "boundPath" : "env";
     const matched = matchPinnedActiveScope(
       projectRoot,
       pin,
@@ -215,26 +362,55 @@ export function inspectActiveScope(
       }
       const rejected = rejections.get(matched);
       if (rejected !== undefined) {
-        return { ready: false, path: null, message: rejected, denyKind: "pin-miss" };
+        const isBlocked =
+          blocked.includes(matched) || rejected.includes("plan.status is 'blocked'");
+        return {
+          ready: false,
+          path: null,
+          message: formatMatchedRejectedPinMessage(pin, pinSource, rejected, matched, isBlocked),
+          denyKind: "pin-miss",
+        };
       }
+    }
+    // Limb 3 (#5386): env pin, no scanned match, no boundPath, exactly one eligible.
+    const onlyEligible = eligible[0];
+    if (
+      !hasExplicitBound &&
+      envPin.length > 0 &&
+      matched === null &&
+      eligible.length === 1 &&
+      onlyEligible !== undefined
+    ) {
+      return {
+        ready: true,
+        path: onlyEligible.path,
+        message: onlyEligible.message,
+        warning: formatStaleEnvPinFallbackWarning(envPin, onlyEligible.path),
+      };
     }
     return {
       ready: false,
       path: null,
-      message: formatMissingPinMessage(pin),
+      message: hasExplicitBound
+        ? formatMissingBoundPathMessage(pin)
+        : formatMissingEnvPinMessage(pin, eligible.length),
       denyKind: "pin-miss",
     };
   }
 
-  const only = eligible[0];
-  if (eligible.length === 1 && only !== undefined) {
+  // Unpinned path only (#4880 C'): partition non-fencing out when fencing exists.
+  // Same fence SoT as the write gate (merge-base unless a test seam overrides).
+  const loadFence = options?.loadStoryWriteFence ?? loadStoryWriteFenceFromMergeBase;
+  const competition = partitionUnpinnedEligible(projectRoot, eligible, loadFence);
+  const only = competition[0];
+  if (competition.length === 1 && only !== undefined) {
     return { ready: true, path: only.path, message: only.message };
   }
-  if (eligible.length > 1) {
+  if (competition.length > 1) {
     return {
       ready: false,
       path: null,
-      message: formatMultipleActiveMessage(eligible),
+      message: formatMultipleActiveMessage(competition),
       denyKind: "multiple-eligible",
     };
   }

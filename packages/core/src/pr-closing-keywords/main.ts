@@ -11,6 +11,7 @@ import {
 import { MISSING_ONE_PR_UNIT_CONSENT } from "../one-pr-unit/types.js";
 import { collectGithubRefs } from "../orphan-active/refs.js";
 import {
+  isProductPullRequestUnset,
   listActiveRunningBriefs,
   productPullRequestFromPlan,
 } from "../orphan-active/running-briefs.js";
@@ -31,6 +32,53 @@ import type {
 export interface PrDiffPath {
   readonly status: string;
   readonly path: string;
+  /** GitHub rename source (`previous_filename`); used for brief-land identity (#5387 S3). */
+  readonly previousFilename?: string;
+}
+
+function normalizeDiffPath(path: string): string {
+  return path.replace(/\\/g, "/");
+}
+
+function isBriefLandAllowlistedPath(path: string): boolean {
+  const p = normalizeDiffPath(path);
+  if (p === "CHANGELOG.md") {
+    return true;
+  }
+  return /^(xbrief|vbrief)\/(proposed|pending|active)\//.test(p);
+}
+
+/**
+ * Path B activation / membership-land shape (#5387): allowlist only.
+ * Every path (and rename source) is nonterminal brief under proposed|pending|active
+ * or exact root CHANGELOG.md. Requires at least one non-removed nonterminal brief.
+ * Denies completed/, packages/**, and all other product surfaces.
+ */
+export function isBriefLandShapedDiff(files: readonly PrDiffPath[]): boolean {
+  if (files.length === 0) {
+    return false;
+  }
+  let hasNonRemovedNonterminal = false;
+  for (const file of files) {
+    const dest = normalizeDiffPath(file.path);
+    if (!isBriefLandAllowlistedPath(dest)) {
+      return false;
+    }
+    if (
+      typeof file.previousFilename === "string" &&
+      file.previousFilename.length > 0 &&
+      !isBriefLandAllowlistedPath(file.previousFilename)
+    ) {
+      return false;
+    }
+    if (/^(xbrief|vbrief)\/(proposed|pending|active)\//.test(dest)) {
+      const status = file.status.toLowerCase();
+      if (status !== "removed") {
+        hasNonRemovedNonterminal = true;
+      }
+    }
+  }
+  return hasNonRemovedNonterminal;
 }
 
 /** Leftover-shaped: every path under xbrief|vbrief, active removed, completed added (#4919). */
@@ -131,8 +179,14 @@ function fetchPrFiles(pr: number, repo: string, runGh: RunGhFn): PrDiffPath[] | 
         const rec = item as Record<string, unknown>;
         const path = typeof rec.filename === "string" ? rec.filename : "";
         const status = typeof rec.status === "string" ? rec.status : "";
+        const previousFilename =
+          typeof rec.previous_filename === "string" && rec.previous_filename.length > 0
+            ? rec.previous_filename
+            : undefined;
         if (path.length > 0) {
-          out.push({ path, status });
+          out.push(
+            previousFilename === undefined ? { path, status } : { path, status, previousFilename },
+          );
         }
       }
       if (payload.length < 100) {
@@ -147,7 +201,8 @@ function fetchPrFiles(pr: number, repo: string, runGh: RunGhFn): PrDiffPath[] | 
   return out;
 }
 
-function briefHasMatchingProductPr(
+/** Exported for #5387 finalize-honesty regressions (activation PR never positive-matches). */
+export function briefHasMatchingProductPr(
   projectRoot: string,
   issue: number,
   prNumber: number,
@@ -273,9 +328,117 @@ function bindChangedBriefPath(args: {
   }
 }
 
+/** Nonterminal brief paths with status=removed (activation must not skip these). */
+function removedNonterminalBriefPaths(files: readonly PrDiffPath[]): string[] {
+  const out: string[] = [];
+  for (const file of files) {
+    const p = normalizeDiffPath(file.path);
+    if (!/^(xbrief|vbrief)\/(proposed|pending|active)\//.test(p)) {
+      continue;
+    }
+    if (file.status.toLowerCase() === "removed") {
+      out.push(p);
+    }
+  }
+  return out;
+}
+
 /**
- * Pre-merge full-story mark producer/admission (#4919 / #4864).
- * Leftover-shaped diffs pass. Skip-active proposed|pending→completed refuses.
+ * Path B activation admit witness (#5387): brief-land shape + deft-story covers
+ * each changed nonterminal + productPullRequest key absent on every changed brief.
+ * Short-circuits both stamp gates when true. Malformed stamps are not unset.
+ * Refuses when the diff also deletes a nonterminal brief, and when a deft-story
+ * mark has no matching changed brief (Greptile P1 on #5388).
+ */
+function evaluatePathBActivationAdmit(args: {
+  readonly bodyText: string | null;
+  readonly prNumber: number | null;
+  readonly projectRoot: string;
+  readonly repo: string;
+  readonly files: readonly PrDiffPath[];
+}): { ok: boolean; detail: string } {
+  if (!isBriefLandShapedDiff(args.files) || args.prNumber === null) {
+    return { ok: false, detail: "not brief-land shaped" };
+  }
+  const removedNonterminal = removedNonterminalBriefPaths(args.files);
+  if (removedNonterminal.length > 0) {
+    return {
+      ok: false,
+      detail:
+        `Path B activation refuses deleted nonterminal brief(s): ${removedNonterminal.join(", ")} ` +
+        "(use leftover-shaped land or keep the brief)",
+    };
+  }
+  const changedNonterminal = changedNonterminalBriefPaths(args.files);
+  if (changedNonterminal.length === 0) {
+    return { ok: false, detail: "no nonterminal brief land" };
+  }
+  const marks = parseAllDeftStoryMarks(args.bodyText ?? "");
+  if (marks.length === 0) {
+    return { ok: false, detail: "missing deft-story marks" };
+  }
+  const coveredIssues = new Set<number>();
+  for (const relPath of changedNonterminal) {
+    const full = join(args.projectRoot, relPath);
+    if (!existsSync(full)) {
+      return { ok: false, detail: `changed nonterminal brief ${relPath} missing on checkout` };
+    }
+    try {
+      const raw: unknown = JSON.parse(readFileSync(full, "utf8"));
+      if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+        return { ok: false, detail: `changed brief ${relPath} is not a JSON object` };
+      }
+      const plan = (raw as Record<string, unknown>).plan;
+      if (typeof plan !== "object" || plan === null || Array.isArray(plan)) {
+        return { ok: false, detail: `changed brief ${relPath} lacks plan` };
+      }
+      const planObj = plan as Record<string, unknown>;
+      if (!isProductPullRequestUnset(planObj)) {
+        return {
+          ok: false,
+          detail: `changed brief ${relPath} has metadata.productPullRequest (activation requires unset)`,
+        };
+      }
+      const { issues } = collectGithubRefs(planObj, args.repo);
+      const matchedIssues = issues
+        .filter((ref) => ref.repo.toLowerCase() === args.repo.toLowerCase())
+        .map((ref) => ref.number);
+      if (matchedIssues.length === 0) {
+        return {
+          ok: false,
+          detail: `changed brief ${relPath} has no issue ref for ${args.repo}`,
+        };
+      }
+      for (const n of matchedIssues) {
+        coveredIssues.add(n);
+      }
+      if (!matchedIssues.some((n) => marks.includes(n))) {
+        return {
+          ok: false,
+          detail: `changed brief ${relPath} issue #${String(matchedIssues[0])} is not covered by deft-story marks`,
+        };
+      }
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        detail: `changed brief ${relPath}: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+  for (const issue of marks) {
+    if (!coveredIssues.has(issue)) {
+      return {
+        ok: false,
+        detail: `deft-story: ${String(issue)} has no matching changed nonterminal brief on Path B activation`,
+      };
+    }
+  }
+  return { ok: true, detail: "Path B brief-land activation admitted (#5387)" };
+}
+
+/**
+ * Pre-merge full-story mark producer/admission (#4919 / #4864 / #5387).
+ * Order: leftover-admit → skip-active-refuse → Path B activation early-return → stamp gates.
  * Product PRs that touch nonterminal briefs require deft-story + matching metadata.
  */
 export function evaluateFullStoryMarkAdmission(args: {
@@ -297,6 +460,18 @@ export function evaluateFullStoryMarkAdmission(args: {
           "Route the brief through active/ or use a leftover-shaped rename from active/.",
       ],
     };
+  }
+  const activation = evaluatePathBActivationAdmit(args);
+  if (activation.ok) {
+    return { ok: true, messages: [activation.detail] };
+  }
+  // Hard-fail unbound deft-story on an otherwise activation-shaped unset land.
+  // Deletion refusal stays inside evaluatePathBActivationAdmit only — stamped
+  // product PRs that also delete a brief must reach product stamp gates (#5388).
+  if (
+    activation.detail.includes("has no matching changed nonterminal brief on Path B activation")
+  ) {
+    return { ok: false, messages: [`FAIL: ${activation.detail}`] };
   }
   const changedNonterminal = changedNonterminalBriefPaths(args.files);
   if (changedNonterminal.length === 0 || args.prNumber === null) {
