@@ -18,8 +18,10 @@ describe("Directive Tutorial session messages (#4981)", () => {
   const fields = projectFields(projects, "signal", "Alex — on the bridge.");
   const mustBeat = (id: string) => {
     const beat = beatById(script, id);
-    expect(beat).toBeDefined();
-    return beat!;
+    if (beat === undefined) {
+      throw new Error(`missing beat: ${id}`);
+    }
+    return beat;
   };
 
   it("reads the version-1 glossary terms", () => {
@@ -97,9 +99,7 @@ describe("Directive Tutorial session messages (#4981)", () => {
     const start = renderBeat(mustBeat("start"), glossary, fields);
     expect(start).toContain("**branch** —");
     expect(start).not.toContain("Command:");
-    expect(fillBeat(mustBeat("start"), fields).command).toContain(
-      "feat/signal-prints-this-line",
-    );
+    expect(fillBeat(mustBeat("start"), fields).command).toContain("feat/signal-prints-this-line");
   });
 
   it("shows verify/continue menus after the check instead of asking the person to rubber-stamp", () => {
