@@ -11,8 +11,8 @@
       "Overview": "## Bound remedy\n\n1. **Fail-closed probe cache.** When `directoryIgnoresCase` cannot write its probe file, cache `false` for that directory (do not leave the cache unset so a stale `true` can win later).\n\n2. **Case-only match safety on prune.** In `pruneEvaluatorWorktreeAdmin`, after canonical path equality, if the basenames differ only by case, require a fresh cache-bypassing case-insensitive probe on the target parent before deleting the admin entry. Refuse the match when the probe fails or proves case-sensitive.\n\n3. **Tests.** Keep `worktrees-probe.test.ts` covering denied `containedWrite`; assert sibling `aaa` remains and target `zzz` is removed. Extend `worktrees.test.ts` if needed for the safety limb.\n\n4. **CHANGELOG.** Unreleased Fixed bullet for #5460.",
       "Origin": "https://github.com/deftai/directive/issues/5460"
     },
-    "updated": "2026-10-07T17:02:29Z",
-    "status": "running",
+    "updated": "2026-10-07T17:36:53.468Z",
+    "status": "completed",
     "references": [
       "#5460"
     ],
@@ -29,8 +29,20 @@
         "narrative": {
           "Acceptance": "When containedWrite throws in directoryIgnoresCase, the cache stores false for that directory and canonicalize does not lowercase the leaf in packages/core/src/triage/evaluate/worktrees.ts."
         },
-        "status": "pending",
-        "x-directive/artifact_path": "packages/core/src/triage/evaluate/worktrees.ts"
+        "status": "completed",
+        "x-directive/artifact_path": "packages/core/src/triage/evaluate/worktrees.ts",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5462 squash-merge (Tracking #5460). Bound limbs shipped on tip; scope:complete refused Delivery identity join (no x-xbrief/github-issue; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5462",
+            "mintedAt": "2026-10-07T17:36:53.468Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T17:36:53.468Z"
+        }
       },
       {
         "id": "clause.2",
@@ -38,8 +50,20 @@
         "narrative": {
           "Acceptance": "pruneEvaluatorWorktreeAdmin in packages/core/src/triage/evaluate/worktrees.ts does not delete a case-distinct sibling admin entry unless a bypass-cache probe proves the parent is case-insensitive."
         },
-        "status": "pending",
-        "x-directive/artifact_path": "packages/core/src/triage/evaluate/worktrees.ts"
+        "status": "completed",
+        "x-directive/artifact_path": "packages/core/src/triage/evaluate/worktrees.ts",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5462 squash-merge (Tracking #5460). Bound limbs shipped on tip; scope:complete refused Delivery identity join (no x-xbrief/github-issue; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5462",
+            "mintedAt": "2026-10-07T17:36:53.468Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T17:36:53.468Z"
+        }
       },
       {
         "id": "clause.3",
@@ -47,8 +71,20 @@
         "narrative": {
           "Acceptance": "pnpm exec vitest run packages/core/src/triage/evaluate/worktrees-probe.test.ts exits 0."
         },
-        "status": "pending",
-        "x-directive/artifact_path": "packages/core/src/triage/evaluate/worktrees-probe.test.ts"
+        "status": "completed",
+        "x-directive/artifact_path": "packages/core/src/triage/evaluate/worktrees-probe.test.ts",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5462 squash-merge (Tracking #5460). Bound limbs shipped on tip; scope:complete refused Delivery identity join (no x-xbrief/github-issue; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5462",
+            "mintedAt": "2026-10-07T17:36:53.468Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T17:36:53.468Z"
+        }
       }
     ],
     "title": "fix(triage): worktrees probe fail-closed must not case-fold sibling admin entries",
@@ -84,7 +120,16 @@
           "provenance": "statement"
         }
       ],
-      "ambiguity_attestation": "none_found"
+      "ambiguity_attestation": "none_found",
+      "sentences": [
+        "When containedWrite throws in directoryIgnoresCase, the cache stores false for that directory and canonicalize does not lowercase the leaf in packages/core/src/triage/evaluate/worktrees.ts.",
+        "pruneEvaluatorWorktreeAdmin in packages/core/src/triage/evaluate/worktrees.ts does not delete a case-distinct sibling admin entry unless a bypass-cache probe proves the parent is case-insensitive.",
+        "pnpm exec vitest run packages/core/src/triage/evaluate/worktrees-probe.test.ts exits 0."
+      ],
+      "confessions": [
+        "Bound remedy framing and CHANGELOG/test prose in Overview are covered by clauses 1–3 and the landed product PR.",
+        "Title and Description narrative are process framing, not additional acceptance oracles."
+      ]
     },
     "id": "github.issue.5748573348",
     "metadata": {
@@ -111,7 +156,13 @@
           "#5460"
         ],
         "parallel_safe": true
-      }
+      },
+      "productPullRequest": 5462,
+      "lifecycleWrite": {
+        "action": "complete",
+        "writtenAt": "2026-10-07T17:36:53.468Z"
+      },
+      "completedAt": "2026-10-07T17:36:53.468Z"
     }
   }
 }
