@@ -6,7 +6,7 @@
   },
   "plan": {
     "title": "0.121.0 schema makes narratives.Confidence an enum under the same 0.8 version, invalidating existing briefs with no migration",
-    "status": "running",
+    "status": "completed",
     "narratives": {
       "Description": "0.121.0 schema makes narratives.Confidence an enum under the same 0.8 version, invalidating existing briefs with no migration",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/5385",
@@ -17,47 +17,155 @@
       {
         "id": "1",
         "title": "Keep envelope version 0.8",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "2",
         "title": "Lenient read in validatePlanNarrativesProvenance for legacy Confidence strings with WARN",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "3",
         "title": "Published 0.8 schema Confidence type string (both schema paths byte-equal); writers MUST emit enum",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "4",
         "title": "New write paths emit only high|medium|low",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "5",
         "title": "Optional migrate verb for unambiguous leading-token prose → enum + ConfidenceNote",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "6",
         "title": "xbrief:validate prints Confidence-compat WARN; update tip on schema-shape change",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "7",
         "title": "SoT vbrief.md reader vs writer Confidence split",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "8",
         "title": "contract-drift binds CONFIDENCE_VALUES to schema vocabulary",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       },
       {
         "id": "9",
         "title": "Acceptance fixtures for prose/enum/noncanonical Confidence across lifecycle folders",
-        "status": "pending"
+        "status": "completed",
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5432 squash-merge (Tracking #5385). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5432",
+            "mintedAt": "2026-10-07T13:01:13.447Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-07T13:01:13.447Z"
+        }
       }
     ],
     "tags": [
@@ -454,7 +562,12 @@
         "schema": "deft.scope.admitted-target-digest.v1",
         "algorithm": "sha256",
         "sha256": "3333bbfaa3234832863c8231352c0d3f4c28f93031c89f57efbd0c003e875e4d"
-      }
+      },
+      "lifecycleWrite": {
+        "action": "complete",
+        "writtenAt": "2026-10-07T13:01:13.447Z"
+      },
+      "productPullRequest": 5432
     },
     "acceptance": {
       "ambiguity_attestation": "none_found",
@@ -501,9 +614,12 @@
         "Both 0.8 schema paths restore Confidence type string recommending enum; hard enum enforcement moves to writer boundaries.",
         "Amend content/vbrief/vbrief.md Source/Confidence: writers MUST emit enum; readers of 0.8 MAY see legacy strings and MUST warn.",
         "contract-drift assertion binds CONFIDENCE_VALUES to schema Confidence vocabulary shape."
-      ]
+      ],
+      "none_stated": true,
+      "commands": [],
+      "source_rung": "derived"
     },
     "id": "github.issue.5716187765",
-    "updated": "2026-10-06T20:39:37Z"
+    "updated": "2026-10-07T13:01:13.447Z"
   }
 }
