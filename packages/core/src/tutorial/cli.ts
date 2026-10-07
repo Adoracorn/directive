@@ -109,40 +109,48 @@ function gitRoot(cwd: string): string | null {
   }
 }
 
-function assertDisposableRepo(repo: string, projectRoot: string): void {
+const DISPOSABLE_REPO_MSG =
+  "The practice project must run in a disposable repository, not the person's project.";
+
+function disposableRepoError(repo: string, projectRoot: string): string | null {
   if (samePath(repo, projectRoot) || pathIsInside(repo, projectRoot)) {
-    throw new Error(
-      "The practice project must run in a disposable repository, not the person's project.",
-    );
+    return DISPOSABLE_REPO_MSG;
   }
   const projectGit = gitRoot(projectRoot);
   const repoGit = gitRoot(repo);
   if (projectGit !== null && repoGit !== null && samePath(projectGit, repoGit)) {
-    throw new Error(
-      "The practice project must run in a disposable repository, not the person's project.",
-    );
+    return DISPOSABLE_REPO_MSG;
   }
+  return null;
 }
 
 function ensureRepo(
   projectRoot: string,
   requested: string | undefined,
   projectId: string | null,
-): string {
+): { ok: true; repo: string } | { ok: false; message: string } {
   if (requested !== undefined && requested.trim().length > 0) {
     const repo = resolve(requested);
-    assertDisposableRepo(repo, projectRoot);
-    return repo;
+    const err = disposableRepoError(repo, projectRoot);
+    if (err !== null) return { ok: false, message: err };
+    return { ok: true, repo };
   }
   const prefix = projectId ? `${projectId}-` : "tutorial-";
   const repo = mkdtempSync(join(tmpdir(), prefix));
-  try {
-    assertDisposableRepo(repo, projectRoot);
-    execFileSync("git", ["init", "-q"], { cwd: repo });
-    return repo;
-  } catch (err) {
+  const err = disposableRepoError(repo, projectRoot);
+  if (err !== null) {
     rmSync(repo, { recursive: true, force: true });
-    throw err;
+    return { ok: false, message: err };
+  }
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    return { ok: true, repo };
+  } catch (initErr: unknown) {
+    rmSync(repo, { recursive: true, force: true });
+    return {
+      ok: false,
+      message: initErr instanceof Error ? initErr.message : String(initErr),
+    };
   }
 }
 
@@ -226,18 +234,26 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         break;
       case "start": {
         const projectFlag = flagValue(rest, "--project");
-        step = startTutorial(
-          state,
-          state.currentBeat === null || state.status !== "in_progress"
-            ? ensureRepo(
-                projectRoot,
-                flagValue(rest, "--repo"),
-                projectFlag ?? state.selectedProject,
-              )
-            : (state.repoPath ?? ""),
-          beats,
-          projectFlag,
-        );
+        let repoPath = state.repoPath ?? "";
+        if (state.currentBeat === null || state.status !== "in_progress") {
+          const ensured = ensureRepo(
+            projectRoot,
+            flagValue(rest, "--repo"),
+            projectFlag ?? state.selectedProject,
+          );
+          if (!ensured.ok) {
+            step = {
+              ok: false,
+              message: ensured.message,
+              state,
+              beatId: state.currentBeat,
+              offerNow: false,
+            };
+            break;
+          }
+          repoPath = ensured.repo;
+        }
+        step = startTutorial(state, repoPath, beats, projectFlag);
         break;
       }
       case "inspect":

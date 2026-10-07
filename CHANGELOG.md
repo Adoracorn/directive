@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
+- **fix(tutorial): returned-failure paths + trigger-case coverage (#4981).** Drop throw-sites for intent-constraint; add eval trigger cases for deft-directive-tutorial. Tracking #4981.
 - **fix(tutorial): clear stale plan on Back, non-delivery close, and census/budget (#4981).** Rewind or project change clears plan/work-file; practice `scope:complete` uses `--non-delivery experiment_archived`; Skills Index triggers, FILES census, RULE-MAP grouping, OpenPackage 7/27 counts, and skillFrontmatterMaxBytes 2337. Tracking #4981.
 - **fix(tutorial): review-cycle harden for install path, menus, and lifecycle (#4981).** Load deposited `tutorial/` via `contentRoot`; fill promote/activate and active work-file commands; require Discuss/Back; refuse completed restart / skip-graduate / in-tree sandboxes; renew evaluator-surface disclosure for `Taskfile.yml`. Tracking #4981.
 

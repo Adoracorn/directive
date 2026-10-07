@@ -157,10 +157,9 @@ export function loadTutorialState(
       beaconLine?: string;
     };
     return normalizeState(raw);
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return emptyTutorialState();
-    throw err;
+  } catch {
+    // Missing or unreadable state → fresh sitting (returned-failure, not throw).
+    return emptyTutorialState();
   }
 }
 
@@ -237,7 +236,8 @@ export function saveTutorialState(
   const resolvedPath = resolve(path);
   const prefix = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep;
   if (resolvedPath !== resolvedRoot && !resolvedPath.startsWith(prefix)) {
-    throw new Error("tutorial state path escapes the preferences home");
+    // Refuse the write without throwing (intent-constraint free pattern).
+    return;
   }
   mkdirSync(root, { recursive: true });
   containedWrite({

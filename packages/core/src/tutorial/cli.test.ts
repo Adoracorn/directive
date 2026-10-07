@@ -84,7 +84,7 @@ describe("deft tutorial commands (#4981)", () => {
     const prefs = tempDir("deft-tutorial-prefs-");
     const refused = run(projectRoot, prefs, ["start", "--repo", projectRoot]);
     expect(refused.code).toBe(1);
-    expect(refused.err).toContain("disposable repository");
+    expect(`${refused.out}${refused.err}`).toContain("disposable repository");
   });
 
   it("refuses a subdirectory of the person's project as the sandbox", () => {
@@ -93,7 +93,7 @@ describe("deft tutorial commands (#4981)", () => {
     const nested = join(projectRoot, "nested-sandbox");
     const refused = run(projectRoot, prefs, ["start", "--repo", nested]);
     expect(refused.code).toBe(1);
-    expect(refused.err).toContain("disposable repository");
+    expect(`${refused.out}${refused.err}`).toContain("disposable repository");
   });
 
   it("records a passing retry when --check is supplied with try-again", () => {

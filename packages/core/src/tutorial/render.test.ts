@@ -16,6 +16,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..")
 describe("Directive Tutorial session messages (#4981)", () => {
   const { glossary, script, projects } = loadTutorial(repoRoot);
   const fields = projectFields(projects, "signal", "Alex — on the bridge.");
+  const mustBeat = (id: string) => {
+    const beat = beatById(script, id);
+    expect(beat).toBeDefined();
+    return beat!;
+  };
 
   it("reads the version-1 glossary terms", () => {
     expect([...glossary.keys()]).toEqual([
@@ -51,7 +56,7 @@ describe("Directive Tutorial session messages (#4981)", () => {
   });
 
   it("welcomes on step 1 and names the menu", () => {
-    const message = renderBeat(beatById(script, "choose"), glossary, fields);
+    const message = renderBeat(mustBeat("choose"), glossary, fields);
     expect(message).toContain("Welcome to the Directive Tutorial!");
     expect(message).toContain("Step 1 of 7.");
     expect(message).toContain("about 10 minutes");
@@ -67,7 +72,7 @@ describe("Directive Tutorial session messages (#4981)", () => {
 
   it("asks for content first, then confirms Plan/Done with the filled line", () => {
     const empty = projectFields(projects, "signal", null);
-    const write = renderBeat(beatById(script, "write"), glossary, empty);
+    const write = renderBeat(mustBeat("write"), glossary, empty);
     expect(write).toContain("Signal");
     expect(write).toContain("Alex — on the bridge.");
     expect(write).toContain("1. Use the example");
@@ -77,7 +82,7 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(write).not.toContain("{name}");
     expect(write).not.toContain("Command:");
 
-    const afterContent = renderBeat(beatById(script, "write"), glossary, fields, {
+    const afterContent = renderBeat(mustBeat("write"), glossary, fields, {
       contentReady: true,
     });
     expect(afterContent).toContain("Alex — on the bridge.");
@@ -89,20 +94,20 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(afterContent).not.toContain("Something to keep in mind:");
     expect(afterContent).not.toContain("Use the example");
 
-    const start = renderBeat(beatById(script, "start"), glossary, fields);
+    const start = renderBeat(mustBeat("start"), glossary, fields);
     expect(start).toContain("**branch** —");
     expect(start).not.toContain("Command:");
-    expect(fillBeat(beatById(script, "start"), fields).command).toContain(
+    expect(fillBeat(mustBeat("start"), fields).command).toContain(
       "feat/signal-prints-this-line",
     );
   });
 
   it("shows verify/continue menus after the check instead of asking the person to rubber-stamp", () => {
-    const change = renderBeat(beatById(script, "change"), glossary, fields);
+    const change = renderBeat(mustBeat("change"), glossary, fields);
     expect(change).toContain("I will change only what this work owns");
     expect(change).toContain("Ready for me to write the files");
 
-    const pass = renderBeat(beatById(script, "result"), glossary, fields, {
+    const pass = renderBeat(mustBeat("result"), glossary, fields, {
       checkVerdict: true,
       checkPassed: true,
     });
@@ -110,14 +115,14 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(pass).toContain("1. Continue");
     expect(pass).not.toContain("Did the acceptance check verify?");
 
-    const fail = renderBeat(beatById(script, "result"), glossary, fields, {
+    const fail = renderBeat(mustBeat("result"), glossary, fields, {
       checkVerdict: true,
       checkPassed: false,
     });
     expect(fail).toContain("did not verify");
     expect(fail).toContain("1. Try again");
 
-    const leave = renderBeat(beatById(script, "leave"), glossary, fields);
+    const leave = renderBeat(mustBeat("leave"), glossary, fields);
     expect(leave).toContain("Next up: set up your real project.");
   });
 

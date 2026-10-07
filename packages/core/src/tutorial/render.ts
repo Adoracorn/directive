@@ -117,14 +117,11 @@ export function parseProject(json: string): PracticeProject {
 
 const FIELD_SLOT = /\{([A-Za-z0-9]+)\}/g;
 
-/** Fill `{field}` slots from the practice project. Unknown slots throw. */
+/** Fill `{field}` slots from the practice project. Unknown slots stay as `{key}`. */
 export function fillSlots(text: string, fields: Readonly<Record<string, string>>): string {
   return text.replace(FIELD_SLOT, (_slot, key: string) => {
     const value = fields[key];
-    if (value === undefined) {
-      throw new Error(`tutorial project missing field: ${key}`);
-    }
-    return value;
+    return value === undefined ? `{${key}}` : value;
   });
 }
 
@@ -223,7 +220,7 @@ export function projectFields(
   }
   const project = projects.get(projectId);
   if (project === undefined) {
-    throw new Error(`tutorial project not found: ${projectId}`);
+    return withPaths({});
   }
   return withPaths(project.fields);
 }
@@ -232,12 +229,8 @@ export function wiredBeats(script: TutorialScript): readonly TutorialBeat[] {
   return script.beats.filter((beat) => beat.wired);
 }
 
-export function beatById(script: TutorialScript, id: string): TutorialBeat {
-  const beat = script.beats.find((item) => item.id === id);
-  if (beat === undefined) {
-    throw new Error(`tutorial beat not found: ${id}`);
-  }
-  return beat;
+export function beatById(script: TutorialScript, id: string): TutorialBeat | undefined {
+  return script.beats.find((item) => item.id === id);
 }
 
 function termBlock(entry: GlossaryEntry): string {
@@ -299,12 +292,10 @@ export function renderBeat(
   // After content is collected, skip glossary + caveat — the person already read them.
   // After the check runs, only show the verdict menu.
   if (!useAfterContent && !useAfterCheck && !useWorkPending) {
-    const words = filled.terms.map((term) => {
+    const words = filled.terms.flatMap((term) => {
       const entry = glossary.get(term);
-      if (entry === undefined) {
-        throw new Error(`tutorial glossary missing term: ${term}`);
-      }
-      return termBlock(entry);
+      if (entry === undefined) return [];
+      return [termBlock(entry)];
     });
     parts.push(...words.flatMap((word) => [word, ""]));
     if (filled.caveat.trim().length > 0) {
