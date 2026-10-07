@@ -33,8 +33,19 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 
 ## Completed
 
-_Showing 25 of 1764 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1775 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- fix(triage): worktrees probe fail-closed must not case-fold sibling admin entries -- `[completed]`
+- **#5385** -- 0.121.0 schema makes narratives.Confidence an enum under the same 0.8 version, invalidating existing briefs with no migration -- `[completed]`
+- **#5382** -- scope:stamp-evidence writes kind:test evidence on markdown pointers that scope:complete then rejects (#5105) -- `[completed]`
+- **#5194** -- [framework-gap] bug(verify): global CLI cannot resolve its bundled TypeScript parser in a .NET consumer -- `[completed]`
+- **#5193** -- [framework-gap] bug(scope): completion prep creates clause ID titles that fail its own sentence coverage gate -- `[completed]`
+- **#4880** -- Path-write fence tells a dispatched worker to set host-only DEFT_ACTIVE_SCOPE -- `[completed]`
+- **#5421** -- bug(pre-pr): coverage applicability is undefined for non-executable consumer refinements -- `[completed]`
+- **#5403** -- Multi-active write fence poisoned by already-merged actives that cannot scope:complete under #3284 acceptance.commands -- `[completed]`
+- **#5195** -- [framework-gap] bug(content): consumer debug skill names an absent investigation template -- `[completed]`
+- **#5386** -- Write fence: stale DEFT_ACTIVE_SCOPE naming an absent brief denies every write, with misleading recovery -- `[completed]`
+- **#5384** -- deft-core-guard: pnpm snapshot parser folds inline '{}' entries into the previous key, false-rejecting pin-only Directive upgrades -- `[completed]`
 - **#5415** -- fix(design-critique): presence-only ## In plain English gate before ingest-ready (#5415) -- `[completed]`
 - **#5422** -- [framework-gap] BLOCKER 0.121.0 still fail-closes Visage historical x-xbrief/* types and clause:N ids; consumer pinned at 0.119.2 since 0.119.3 -- `[completed]`
 - **#5412** -- bug(scope): live discovery must not bind pending planning transitions as active (#5412) -- `[completed]`
@@ -49,15 +60,4 @@ _Showing 25 of 1764 completed scopes (newest first). Full history: lifecycle `co
 - **#5372** -- bug(design-critique): bare-arc spend recommend-first is prose-only; agents hit ask MUST instead -- `[completed]`
 - **#5355** -- [framework-gap] Interview regression coverage does not exercise phase drift and proposal growth across turns -- `[completed]`
 - **#5354** -- [framework-gap] Canonical interview strategy contradicts setup on PRD authority and scope promotion -- `[completed]`
-- **#5353** -- [framework-gap] Interview progress rules hide remaining scope while enforcing one-question-at-a-time interaction -- `[completed]`
-- **#5352** -- [framework-gap] Design interview revisions and handoffs do not preserve a bounded phase and approval scope -- `[completed]`
-- **#5351** -- [framework-gap] Full interview completion has no bounded material-decision contract -- `[completed]`
-- **#1589** -- epic: spec reconstruction + drift guard - Prefer-A Bound leftover after #5315 -- `[completed]`
-- **#5318** -- fix(swarm): fail closed when cohort PRs lack live Approach 1 babysitters -- `[completed]`
-- **#3739** -- bug(hooks): nested hosts get a 5s budget the framework itself calls too small, and a killed hook renders identically to an allow -- `[completed]`
-- **#5233** -- ARC ingest-ready can pass adverse pain audits without required follow-through -- `[completed]`
-- **#5326** -- feat(design-critique): ensure consumer catalog chip labels and judgmentGates (skill soft-misses today) -- `[completed]`
-- **#5321** -- bug(harness): host agent memory must not override Directive process SoT without USER.md consent -- `[completed]`
-- **#1164** -- feat(coding): two testing rules missing from coding/testing.md — test integrity + mock boundary -- `[completed]`
-- **#1511** -- Flip #1419 agentic-prioritization gates from advisory to enforce mode (advise -> observe -> block) -- `[completed]`
 
