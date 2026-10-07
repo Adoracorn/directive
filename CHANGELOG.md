@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 
+- Recorded completion of #5193 after PR #5449 fixed generated clause IDs blocking scope completion.
 - Recorded the completed work for intent-constraint engine-relative TypeScript load (#5194) delivered in PR #5447.
 - Recorded the completed work for multiple-eligible write-fence parent/worker recovery (#4880) delivered in PR #5445.
 - Recorded the completed work for pre-PR coverage applicability on inert refinements (#5421) delivered in PR #5431.
