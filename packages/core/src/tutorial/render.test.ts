@@ -67,6 +67,7 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(message).toContain("3. Echo");
     expect(message).toContain("4. Leave");
     expect(message).toContain("progress is saved");
+    expect(message).toContain("6. Back — not available yet (use Leave or Discuss)");
     expect(message).not.toContain("**Directive** —");
     expect(message).toContain("Something to keep in mind:");
     expect(message).not.toContain("Next:");
@@ -122,7 +123,14 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(fail).toContain("did not verify");
     expect(fail).toContain("1. Try again");
 
+    const pending = renderBeat(mustBeat("write"), glossary, fields, {
+      workItemPending: true,
+    });
+    expect(pending).toContain("Next I'll write the proposed work file and save its path.");
+    expect(pending).not.toContain("--work-item");
+
     const leave = renderBeat(mustBeat("leave"), glossary, fields);
+    expect(leave).toContain("Step 7 of 7 — Wrap up.");
     expect(leave).toContain("Next up: set up your real project.");
   });
 
@@ -130,6 +138,6 @@ describe("Directive Tutorial session messages (#4981)", () => {
     const messages = renderWiredSession(script, glossary, fields);
     expect(messages).toHaveLength(7);
     expect(messages[0]).toContain("Step 1 of 7.");
-    expect(messages[6]).toContain("Step 7 of 7.");
+    expect(messages[6]).toContain("Step 7 of 7 — Wrap up.");
   });
 });

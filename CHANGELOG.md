@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
 
 ### Fixed
+- **fix(tutorial): learner-copy polish for work-file prompt, step-1 Back, and wrap-up (#4981).** Work-file pending text drops `--work-item`; step 1 labels Back as not available yet; step 7 displays as Wrap up. Tracking #4981.
 - **fix(tutorial): returned-failure paths + trigger-case coverage (#4981).** Drop throw-sites for intent-constraint; add eval trigger cases for deft-directive-tutorial. Tracking #4981.
 - **fix(tutorial): clear stale plan on Back, non-delivery close, and census/budget (#4981).** Rewind or project change clears plan/work-file; practice `scope:complete` uses `--non-delivery experiment_archived`; Skills Index triggers, FILES census, RULE-MAP grouping, OpenPackage 7/27 counts, and skillFrontmatterMaxBytes 2337. Tracking #4981.
 - **fix(tutorial): review-cycle harden for install path, menus, and lifecycle (#4981).** Load deposited `tutorial/` via `contentRoot`; fill promote/activate and active work-file commands; require Discuss/Back; refuse completed restart / skip-graduate / in-tree sandboxes; renew evaluator-surface disclosure for `Taskfile.yml`. Tracking #4981.

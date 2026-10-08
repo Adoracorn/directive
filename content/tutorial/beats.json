@@ -6,7 +6,7 @@
       "name": "Welcome & choose",
       "wired": true,
       "where": "Welcome to the Directive Tutorial! Step 1 of 7.",
-      "about": "Directive is the shared path for building with AI — so a later sitting can continue from the same place instead of starting over.\n\nThis practice sitting takes about 10 minutes. You pick one toy project; each option teaches the same path. Nothing here pushes to GitHub.\n\n1. Signal — a tiny CLI that prints your personal status line\n2. Postcard — a one-page local site that shows a short message\n3. Echo — a mini bot that answers one question with a reply you choose\n4. Leave — pause for now (progress is saved; you can start again later)\n5. Discuss\n6. Back",
+      "about": "Directive is the shared path for building with AI — so a later sitting can continue from the same place instead of starting over.\n\nThis practice sitting takes about 10 minutes. You pick one toy project; each option teaches the same path. Nothing here pushes to GitHub.\n\n1. Signal — a tiny CLI that prints your personal status line\n2. Postcard — a one-page local site that shows a short message\n3. Echo — a mini bot that answers one question with a reply you choose\n4. Leave — pause for now (progress is saved; you can start again later)\n5. Discuss\n6. Back — not available yet (use Leave or Discuss)",
       "terms": [],
       "caveat": "Name and preferences stay in setup. This sitting does not ask those again.",
       "output": "",
@@ -29,7 +29,7 @@
       "command": null,
       "next": "{contentPrompt}\n\n1. Use the example\n2. Leave\n3. Discuss\n4. Back",
       "nextAfterPlan": "Do Plan and Done look right?\n\n1. Yes\n2. No — change the plan\n3. Leave\n4. Discuss\n5. Back",
-      "nextAfterWorkPending": "Write the proposed work file next, then record its path with --work-item.\n\n1. Leave\n2. Discuss\n3. Back"
+      "nextAfterWorkPending": "Next I'll write the proposed work file and save its path.\n\n1. Leave\n2. Discuss\n3. Back"
     },
     {
       "id": "start",
@@ -96,9 +96,9 @@
     {
       "id": "leave",
       "number": 7,
-      "name": "Leave",
+      "name": "Wrap up",
       "wired": true,
-      "where": "Step 7 of 7.",
+      "where": "Step 7 of 7 — Wrap up.",
       "about": "You walked the same path a real project uses: write the plan down, start on a branch, build, check, and close. Real delivery also includes GitHub, review, and merge — not taught here. You can re-run this tutorial anytime.\n\nNext up: set up your real project.",
       "terms": [],
       "caveat": "This sitting does not publish the project or open a pull request.",
