@@ -6,7 +6,7 @@
   },
   "plan": {
     "title": "bug(design-critique): bare-arc spend recommend-first still asks (need spend-resolve verb + ask-deny)",
-    "status": "running",
+    "status": "completed",
     "narratives": {
       "Description": "Prevention follow-up: bare-arc spend recommend-first still opens a spend ask before recording spend-recommend. Prefer-A Bound 6047799269.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/5466",
@@ -17,55 +17,127 @@
       {
         "id": "clause.1",
         "title": "Recut Spend ask-MUST for bare-arc missing recommend",
-        "status": "pending",
+        "status": "completed",
         "x-directive/artifact_path": "content/contracts/design-critique.md",
         "narrative": {
           "Acceptance": "Recut content/contracts/design-critique.md Spend (#4705) so bare arc (no closed n=/panel) with missing spend-recommend: is a parent defect: record spend-recommend then resolve spend:/spend-ask:resolved. Ask only for ambiguous mixes, bare panel, or parent-declared unclosable recommend. Update skill Spend one-liner via pack source + packs:render. Pin recut sentences in design_critique_contract.test.ts and add spend.test.ts parent-defect fixture. Not silence to N=1."
+        },
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5476 squash-merge (Tracking #5466). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5476",
+            "mintedAt": "2026-10-08T16:33:00.000Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-08T16:33:00.000Z"
         }
       },
       {
         "id": "clause.2",
         "title": "Add design-critique:spend-resolve verb with --recommend",
-        "status": "pending",
+        "status": "completed",
         "x-directive/artifact_path": "packages/cli/src/design-critique-spend-resolve.ts",
         "narrative": {
           "Acceptance": "Add deft design-critique:spend-resolve -- --utterance <text> --recommend N=1|N>=3. Records closed spend-recommend: plus resolved spend:/spend-ask: via parseOperatorSpend/evaluateSpendRecord. Without --recommend on bare arc: refuse non-zero with remediation; never ask; never default N=1. Mirror only resolveArcRunPostureForHost front-door pattern; do not copy posture missing-token auto-resolve. Wire route-argv + dispatch + content/commands.md."
+        },
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5476 squash-merge (Tracking #5466). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5476",
+            "mintedAt": "2026-10-08T16:33:00.000Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-08T16:33:00.000Z"
         }
       },
       {
         "id": "clause.3",
         "title": "State-keyed PreToolUse deny for spend asks before recommend",
-        "status": "pending",
+        "status": "completed",
         "x-directive/artifact_path": "packages/core/src/hooks/dispatcher-plan-choice.ts",
         "narrative": {
           "Acceptance": "Add host PreToolUse deny for structured ask tools matching QUESTION_HOOK_MATCHER while a design-critique arc is in flight and no closed spend-recommend: exists yet in parent-written arc state readable by the Grok hook. Remediation names spend-resolve. Keep #5373 hatch. Drop utterance-keyed spend-shaped classifier."
+        },
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5476 squash-merge (Tracking #5466). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5476",
+            "mintedAt": "2026-10-08T16:33:00.000Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-08T16:33:00.000Z"
         }
       },
       {
         "id": "clause.4",
         "title": "Skill Stop 1 calls spend-resolve first",
-        "status": "pending",
+        "status": "completed",
         "x-directive/artifact_path": "content/packs/skills/skills-pack-0.1.json",
         "narrative": {
           "Acceptance": "Update deft-directive-design-critique Stop 1 to call spend-resolve before any operator surface; skill forbid is discoverability into limbs 1-3, not sole prevention."
+        },
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5476 squash-merge (Tracking #5466). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5476",
+            "mintedAt": "2026-10-08T16:33:00.000Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-08T16:33:00.000Z"
         }
       },
       {
         "id": "clause.5",
         "title": "Root-cause probe note for #5465 class",
-        "status": "pending",
+        "status": "completed",
         "x-directive/artifact_path": "CHANGELOG.md",
         "narrative": {
           "Acceptance": "Before claiming the stack closed the #5465 class, record a root-cause probe note in acceptance/CHANGELOG: whether that Grok parent carried host-memory always-ask (evaluateHostMemorySpendConflict) or skipped skill load. Does not replace limbs 1-3."
+        },
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5476 squash-merge (Tracking #5466). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5476",
+            "mintedAt": "2026-10-08T16:33:00.000Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-08T16:33:00.000Z"
         }
       },
       {
         "id": "clause.6",
         "title": "Leave parse/evaluate spend semantics intact",
-        "status": "pending",
+        "status": "completed",
         "x-directive/artifact_path": "packages/core/src/design-critique/spend.ts",
         "narrative": {
           "Acceptance": "Leave parseOperatorSpend / evaluateSpendRecord closed-token semantics and #5372 Prefer-A recommend-first rule intact except for the limb-1 ask-MUST recut."
+        },
+        "x-directive/disposition": {
+          "disposition": "not_applicable",
+          "reason": "Prefer-A leftover-complete after product PR #5476 squash-merge (Tracking #5466). Bound limbs shipped; Greptile CLEAN then MERGED. scope:complete refused on empty forge closer set (Tracking/Refs only; #3675 Prefer-A residual).",
+          "provenance": {
+            "kind": "operator-session",
+            "actor": "Scott",
+            "eventRef": "leftover-complete-after-5476",
+            "mintedAt": "2026-10-08T16:33:00.000Z",
+            "mintedVia": "parent-retained-closer"
+          },
+          "recorded_at": "2026-10-08T16:33:00.000Z"
         }
       }
     ],
@@ -232,6 +304,11 @@
           "#5466"
         ],
         "parallel_safe": true
+      },
+      "productPullRequest": 5476,
+      "lifecycleWrite": {
+        "action": "complete",
+        "writtenAt": "2026-10-08T16:33:00.000Z"
       }
     },
     "id": "github.issue.5751254385",
