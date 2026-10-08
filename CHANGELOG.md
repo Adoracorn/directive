@@ -14,15 +14,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Removed #5466 from active work after product PR #5476 shipped. The completed brief keeps the record of the shipped work.
+- Design-critique spend ask gate (#5466). Tracking #5466.
+- Leftover-complete #5365 after product #5484 (forge Environment/trusted-publisher/tag-ruleset evidence remains operator residual; YAML alone does not close).
+- Approved-scope mint for #4961 Prefer-A Bound Path B file_scope (membership fence).
+- Approved-scope mint for #4888 Prefer-A Bound Path B file_scope (membership fence).
+- Approved-scope mint for #4892 Prefer-A Bound Path B file_scope (membership fence).
+- npm publish Environment gate + tarball OIDC job split (#5365). Tracking #5365.
+- Remint approved-scope for #5466 Path B to include docs/RULE-MAP.md (rule-map freshness after contract edits).
+- Keep active #5466 Path B activation (bare-arc spend-resolve membership).
+- Approved-scope mint for #5466 Prefer-A Bound Path B file_scope (spend-resolve / ask-deny membership fence).
+
 ### Added
 - **feat(guidance): Directive Tutorial after Name — Signal, Postcard, or Echo (Tracking #4981).** After Name is first saved, setup offers Start / Skip / Discuss / Back. Progress lives next to USER.md (`tutorial-state.json`). Shared seven steps read `content/tutorial/glossary.md`; project names live under `content/tutorial/projects/`. `deft tutorial:offer|start|inspect|advance|resume|skip|reset` (plus decline/defer aliases) drive the sitting in a disposable local sandbox. A failed check stays on prove-it. Reset clears progress without re-firing the automatic offer. Refs #4371.
 
 ### Changed
 
+- chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
+
 ### Fixed
 - **fix(tutorial): returned-failure paths + trigger-case coverage (#4981).** Drop throw-sites for intent-constraint; add eval trigger cases for deft-directive-tutorial. Tracking #4981.
 - **fix(tutorial): clear stale plan on Back, non-delivery close, and census/budget (#4981).** Rewind or project change clears plan/work-file; practice `scope:complete` uses `--non-delivery experiment_archived`; Skills Index triggers, FILES census, RULE-MAP grouping, OpenPackage 7/27 counts, and skillFrontmatterMaxBytes 2337. Tracking #4981.
 - **fix(tutorial): review-cycle harden for install path, menus, and lifecycle (#4981).** Load deposited `tutorial/` via `contentRoot`; fill promote/activate and active work-file commands; require Discuss/Back; refuse completed restart / skip-graduate / in-tree sandboxes; renew evaluator-surface disclosure for `Taskfile.yml`. Tracking #4981.
+
+- **npm publish review residual (#5365):** map numeric prerelease ids (e.g. `v1.2.3-1`) to dist-tag `next`; run post-publish fixture from a prepare-built runner artifact downloaded into `packages/core` (no `source_sha` checkout + `pnpm install`, clears CodeQL cache-poisoning); strengthen contract tests for refusal `exit 1` and the artifact path. Tracking #5365.
+- **npm publish: Environment gate, SemVer tag hygiene, identity peel, and tarball-only OIDC job (#5365).** Workflow uses `environment: npm`, `v*.*.*` tags, master-ancestry tag peel, prepare-without-`id-token`, and same-run tarball publish; contract tests pin the shape. Operator forge evidence still required before merge: (1) create Environment `npm` with reviewers + Selected branches/tags including release tags; (2) bind trusted publisher for all four `@deftai/*` packages to that Environment; (3) add ruleset creation restriction on `refs/tags/v*` (named bypass only; incident recovery is deprecate/dist-tag while deletion stays blocked). YAML alone does not close. Tracking #5365. Refs Prefer-A Bound 6050330747.
+- **Installer consumer text: dual-invoke `task deft:subagent:pre-cancel` + `.gitattributes` comment/attribute agreement (#5463).** agents-entry #5278 dual-invoke uses the include-only `deft:` Taskfile form; TS/Go deposit comments claim generated/vendored only when those lines are in the same write; Go aligns to `text=auto eol=lf` (#5245); EnsureGitattributes keeps consumer trailing blank lines. Tracking #5463.
+- **Visage 0.8 validate: demote reserved-prefix / clause:N / completed failed-without-invalidates to warnings across VALID_PLAN_STATUSES (#5467).** Keeps envelope 0.8 and writers on `clause.N`; does not widen `isTerminalPlanStatus` or CLASS_B. Tracking #5467.
+- **agents-entry #5278 cancel example restores required `--scope-id`/`--target-id` (#5465).** Deposit/template and Phase-4 Duplicate-Agent recovery no longer teach short `swarm:pre-dispatch --action cancel`; content-contract pins the full argv. Raise `agentsMdBudget.absoluteMaxBytes` 28000→28100 for the restored argv. Tracking #5465.
 
 ### Removed
 

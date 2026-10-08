@@ -95,6 +95,24 @@ const CORE_GITATTRIBUTES_LINES = [
 /** Exact legacy forced-text line removed on refresh (#5245 / #1430). */
 export const LEGACY_CORE_TEXT_EOL_LF = `${CORE_GLOB} text eol=lf` as const;
 
+/** Comment for the lines being appended in this write (#5463). */
+export function gitattributesDepositComment(additions: readonly string[]): string {
+  const hasGenerated = additions.some((line) => line.includes("linguist-generated"));
+  const hasVendored = additions.some((line) => line.includes("linguist-vendored"));
+  if (hasGenerated && hasVendored) {
+    return (
+      "# Deft framework: the vendored payload is packaged framework code, not\n" +
+      "# consumer source. text=auto + eol=lf normalizes text only; binaries keep\n" +
+      "# byte identity. Mark generated + vendored (#1430, #2118, #5245).\n"
+    );
+  }
+  return (
+    "# Deft framework: the vendored payload is packaged framework code, not\n" +
+    "# consumer source. text=auto + eol=lf normalizes text only; binaries keep\n" +
+    "# byte identity (#5245).\n"
+  );
+}
+
 const VBRIEF_LIFECYCLE_DIRS = ["proposed", "pending", "active", "completed", "cancelled"] as const;
 
 const VBRIEF_LIFECYCLE_GITKEEP = `# This file keeps the lifecycle directory present in version control and
@@ -880,6 +898,11 @@ export function ensureGitattributes(projectDir: string, io: InitDepositIo): bool
   // Targeted removal of legacy forced-text, independent of additions short-circuit (#5245).
   const withoutLegacy = lines.filter((line) => line.trim() !== LEGACY_CORE_TEXT_EOL_LF);
   const removedLegacy = withoutLegacy.length !== lines.length;
+  // Drop only the final empty Split artifact from a trailing newline; keep
+  // consumer blank lines above it (#5463 Greptile P2).
+  if (withoutLegacy.length > 0 && withoutLegacy[withoutLegacy.length - 1] === "") {
+    withoutLegacy.pop();
+  }
   const present = new Set(
     withoutLegacy.map((line) => line.trim()).filter((line) => line.length > 0),
   );
@@ -891,15 +914,10 @@ export function ensureGitattributes(projectDir: string, io: InitDepositIo): bool
     return false;
   }
   let body = withoutLegacy.join("\n");
-  // Drop trailing empty lines left by filter so we can append cleanly.
-  while (body.endsWith("\n\n")) body = body.slice(0, -1);
-  if (body && !body.endsWith("\n")) body += "\n";
+  if (body.length > 0) body += "\n";
   if (additions.length > 0) {
     if (body && !body.endsWith("\n\n")) body += "\n";
-    body +=
-      "# Deft framework: the vendored payload is packaged framework code, not\n" +
-      "# consumer source. text=auto + eol=lf normalizes text only; binaries keep\n" +
-      "# byte identity. Mark generated + vendored (#1430, #2118, #5245).\n";
+    body += gitattributesDepositComment(additions);
     for (const add of additions) {
       body += `${add}\n`;
     }

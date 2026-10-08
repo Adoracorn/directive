@@ -12,9 +12,17 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import {
+  isSpendAskDeniedByArcState,
+  optionLabelsLookLikeSpend,
+  readArcSpendState,
+  resolveArcSpendSessionId,
+  sanitizeArcSpendSessionId,
+} from "../design-critique/spend.js";
 import { containedRemove, containedRename, containedWrite } from "../fs/contained-write.js";
 import { isQuestionToolName } from "../tool-events/classify.js";
 import { platformUserConfigDir } from "../user-config/resolve-user-md.js";
+import { resolveHookHostIdentity } from "./classify/host-session-identity.js";
 import { fieldString, record, toolInputRecord } from "./classify/payload.js";
 import {
   CURSOR_PLAN_CHOICE_HOST,
@@ -43,6 +51,9 @@ export type QuestionHatchDecisionCode =
   | "question-hatch-pause-storage-failure"
   | "question-hatch-pause-lock-busy"
   | "question-hatch-pause-resumed";
+
+/** Arc in-flight without spend-recommend — deny structured asks (#5466). */
+export type SpendRecommendGateDecisionCode = "spend-recommend-required";
 
 /** Retention hint only — elapsed time MUST NOT clear the latch (#5373). */
 const PAUSE_TTL_MS = 60 * 60 * 1000;
@@ -307,6 +318,79 @@ function decision(
     message,
     scopePath: null,
   };
+}
+
+export function spendRecommendRequiredMessage(toolName: string): string {
+  return [
+    `Directive denied ${toolName}: design-critique arc is in flight without a closed spend-recommend: record.`,
+    "",
+    "Bare-arc missing spend-recommend is a parent defect (#5466 Prefer-A).",
+    "Remediation: deft design-critique:spend-resolve --utterance <text> --recommend N=1|N≥3",
+    "Open the gate at arc start with --open-gate; clear with --clear when the arc ends.",
+    "Then re-attempt the ask only if still lawful (ambiguous mixes, bare panel, or --unclosable-recommend).",
+    "Keep the #5373 Discuss then Back hatch on any lawful ask.",
+  ].join("\n");
+}
+
+/**
+ * Session key for arc-spend-state that matches `design-critique:spend-resolve`
+ * (#5466). Candidates are host-owned only: payload raw id (Claude
+ * `session_id` / Cursor `conversation_id`), then env (`DEFT_SESSION_ID` /
+ * `DEFT_MONITOR_AGENT_ID` / `GROK_SESSION_ID`). Prefer the first of those that
+ * already has in-flight state so CLI `--session-id` raw and env keys align.
+ * Never borrow shared `no-session` state when a host/env key exists — that
+ * would let another conversation's `askPermitted` leak. `no-session` is only
+ * the key when neither payload nor env identifies a conversation.
+ */
+export function resolveArcSpendSessionForHook(input: HookDispatchInput): string {
+  const fromEnv = resolveArcSpendSessionId({ env: input.environ });
+  const identity = resolveHookHostIdentity(input.host, input.payload, input.environ ?? process.env);
+  const fromPayload =
+    identity.status === "ok" ? sanitizeArcSpendSessionId(identity.rawSessionId) : null;
+  const keyed: string[] = [];
+  if (fromPayload !== null && fromPayload !== "no-session") keyed.push(fromPayload);
+  if (fromEnv !== "no-session") keyed.push(fromEnv);
+  if (keyed.length === 0) return "no-session";
+  const seen = new Set<string>();
+  for (const candidate of keyed) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
+    const state = readArcSpendState(input.projectRoot, {
+      sessionId: candidate,
+      env: {},
+    });
+    if (state !== null) return candidate;
+  }
+  return keyed[0] ?? "no-session";
+}
+
+/**
+ * State-keyed deny for spend-shaped QUESTION_HOOK tools while the session arc
+ * gate is open and no spend-recommend is recorded yet (#5466). Not
+ * utterance-keyed; no NLP. Option labels N=1 / N≥3 are the spend shape.
+ * Missing session state still denies those spend-shaped asks so a fresh arc
+ * cannot slip the first ask past an unopened gate. Unrelated questions are
+ * never blanket-denied by abandoned session state.
+ * #5373 hatch remains for lawful asks after askPermitted or resolved spend.
+ */
+export function decideSpendRecommendGate(
+  input: HookDispatchInput,
+  toolName: string,
+): HookDecision | null {
+  if (input.event !== "tool.before") return null;
+  if (!isQuestionToolName(toolName)) return null;
+  const groups = extractQuestionOptionGroups(input.payload);
+  const spendShaped = groups.some((group) => optionLabelsLookLikeSpend(group.labels));
+  const sessionId = resolveArcSpendSessionForHook(input);
+  const state = readArcSpendState(input.projectRoot, { sessionId, env: {} });
+  if (!isSpendAskDeniedByArcState(state, { spendShaped })) return null;
+  return decision(
+    input,
+    "deny",
+    "spend-recommend-required",
+    toolName,
+    spendRecommendRequiredMessage(toolName),
+  );
 }
 
 /**
