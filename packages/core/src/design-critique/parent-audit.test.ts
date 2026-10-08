@@ -5,6 +5,7 @@ import {
   type ClosedFindingEntry,
   type ClosureAuthority,
   closedFindingCompositeKey,
+  defaultFindingClassUnderMaterialityBar,
   evaluateClosedFindingsResidualRefuse,
   evaluateClosedFindingsUnify,
   evaluateParentAudit,
@@ -270,6 +271,34 @@ describe("pain-coverage parent audit (#4496)", () => {
     );
     expect(result.ok).toBe(false);
     expect(result.failures.some((row) => row.code === "parent-self-clear")).toBe(true);
+  });
+
+  it("defaults unpromoted sharpens to footnote under ship-ready (#5488)", () => {
+    expect(
+      defaultFindingClassUnderMaterialityBar({
+        materialityBar: "ship-ready",
+        rawClass: "sharpens-framing",
+      }),
+    ).toBe("footnote");
+    expect(
+      defaultFindingClassUnderMaterialityBar({
+        materialityBar: "ship-ready",
+        rawClass: "sharpens-framing",
+        operatorPromoted: true,
+      }),
+    ).toBe("sharpens-framing");
+    expect(
+      defaultFindingClassUnderMaterialityBar({
+        materialityBar: "open",
+        rawClass: "sharpens-framing",
+      }),
+    ).toBe("sharpens-framing");
+    expect(
+      defaultFindingClassUnderMaterialityBar({
+        materialityBar: "ship-ready",
+        rawClass: "blocks-the-design",
+      }),
+    ).toBe("blocks-the-design");
   });
 });
 

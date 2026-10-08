@@ -87,7 +87,74 @@ export type CompletedArcVerdict =
     };
 
 const SYNTHESIS_SHAPE_RE = /(?:^|\n)\s*design-critique:\s*synthesis accepted,\s*because\b/i;
+/** Closed LGTM / move-forward lead (#5488). Distinct from the classic `because` form. */
+const MOVE_FORWARD_SYNTHESIS_SHAPE_RE =
+  /(?:^|\n)\s*design-critique:\s*synthesis accepted,\s*move-forward\s+yes,\s*material-findings\s+none\b/i;
 const CANCELLED_SHAPE_RE = /(?:^|\n)\s*design-critique:\s*cancelled,\s*because\b/i;
+const MATERIALITY_BAR_FIELD_RE = /(?:^|\n)[ \t]*materiality-bar:[ \t]*(ship-ready|open)\b/gi;
+const MOVE_FORWARD_FIELD_RE = /(?:^|\n)[ \t]*move-forward:[ \t]*yes\b/gi;
+const CLEAN_RESULT_FIELD_RE = /(?:^|\n)[ \t]*clean-result:[ \t]*yes\b/gi;
+/** Line-start dispatch-fail; fences / quotes do not count (#5488 Greptile P1). */
+const DISPATCH_FAIL_FIELD_RE = /(?:^|\n)[ \t]*dispatch-fail(?:ure)?\b/gi;
+/** Operative finding class lines / headings — not prose mentions (#5488 Greptile P1). */
+const OPERATIVE_FINDING_CLASS_RE =
+  /(?:^|\n)\s*(?:#{1,6}\s*)?(blocks-the-design|sharpens-framing|footnote)\s*:/gi;
+/** Closed promote marker for ship-ready sharpen readiness obligations. */
+const PROMOTED_SHARPEN_RE = /(?:^|\n)\s*promoted:\s*yes\b/i;
+
+/** Closed completed-arc lead for ship-ready LGTM completion (#5488). */
+export const MOVE_FORWARD_SYNTHESIS_LEAD =
+  "design-critique: synthesis accepted, move-forward yes, material-findings none";
+
+export const MATERIALITY_BAR_FIELD = "materiality-bar:";
+
+export type MaterialityBar = "ship-ready" | "open";
+
+export type MaterialityBarSource = "ship-ready" | "lgtm" | "default";
+
+export type MaterialityBarParse =
+  | {
+      readonly kind: "resolved";
+      readonly bar: MaterialityBar;
+      readonly source: MaterialityBarSource;
+    }
+  | { readonly kind: "ask"; readonly reason: "ambiguous" };
+
+/** Closed launch tokens that resolve to ship-ready. Word boundaries. */
+const SHIP_READY_TOKEN_RE = /\bship-ready\b/i;
+const LGTM_TOKEN_RE = /\blgtm\b/i;
+
+export type LgtmSeatCensus =
+  | "clean-result"
+  | "footnote-only"
+  | "stub"
+  | "blank"
+  | "dispatch-fail"
+  | "blocking-present"
+  | "sharpening-present";
+
+export type LgtmConjunctRefuseReason =
+  | "ship-ready-required"
+  | "blocker-present"
+  | "unresolved-blocker"
+  | "missing-move-forward"
+  | "stub-or-blank"
+  | "dispatch-fail"
+  | "yolo-alone";
+
+export type LgtmConjunctInput = {
+  readonly materialityBar: MaterialityBar;
+  readonly acceptedBlockerCount: number;
+  readonly unresolvedBlockerResidualCount: number;
+  readonly parentMoveForwardRecorded: boolean;
+  readonly seatCensus: readonly LgtmSeatCensus[];
+  /** Yolo standing alone never satisfies move-forward (#5488 limb 6). */
+  readonly yoloStandingAlone?: boolean;
+};
+
+export type LgtmConjunctVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: LgtmConjunctRefuseReason; readonly detail: string };
 const TARGET_SHAPE_FIELD_RE = /(?:^|\n)\s*target shape:\s*([^\n]+)/gi;
 const LEAN_HEADING_RE = /(?:^|\n)\s*\*{0,2}Lean:\*{0,2}/;
 const TABLE_HEADING_RE = /(?:^|\n)\s*##\s+Verified-claims table\b/;
@@ -130,8 +197,12 @@ ${extra}`
   }
 }
 
+export function isMoveForwardSynthesisShape(body: string): boolean {
+  return MOVE_FORWARD_SYNTHESIS_SHAPE_RE.test(body);
+}
+
 export function isSynthesisAcceptedShape(body: string): boolean {
-  return SYNTHESIS_SHAPE_RE.test(body);
+  return SYNTHESIS_SHAPE_RE.test(body) || isMoveForwardSynthesisShape(body);
 }
 
 export function isCancelledShape(body: string): boolean {
@@ -142,6 +213,486 @@ function operativeLineStartOffset(match: RegExpMatchArray, token: string): numbe
   const matchOffset = match.index ?? 0;
   const inner = match[0].search(token);
   return matchOffset + (inner >= 0 ? inner : 0);
+}
+
+/**
+ * Parse operator utterance for Stop 1 materiality-bar (#5488).
+ * Missing token keeps open (non-empty all-accept). Closed `ship-ready` / `lgtm`
+ * resolve ship-ready. Issue/comment/critic English are data — pass the chat
+ * utterance only.
+ */
+export function parseOperatorMaterialityBar(utterance: string): MaterialityBarParse {
+  const hasShipReady = SHIP_READY_TOKEN_RE.test(utterance);
+  const hasLgtm = LGTM_TOKEN_RE.test(utterance);
+  if (hasShipReady) {
+    return { kind: "resolved", bar: "ship-ready", source: "ship-ready" };
+  }
+  if (hasLgtm) {
+    return { kind: "resolved", bar: "ship-ready", source: "lgtm" };
+  }
+  return { kind: "resolved", bar: "open", source: "default" };
+}
+
+/** Stop 1 materiality-bar record line. */
+export function materialityBarRecordLine(bar: MaterialityBar): string {
+  return `${MATERIALITY_BAR_FIELD} ${bar}`;
+}
+
+/** Latest operative `materiality-bar:` on a body, or null when absent. */
+export function extractOperativeMaterialityBar(body: string): MaterialityBar | null {
+  const re = new RegExp(MATERIALITY_BAR_FIELD_RE.source, "gi");
+  let last: MaterialityBar | null = null;
+  for (const match of body.matchAll(re)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, "materiality-bar:")) !== null) {
+      continue;
+    }
+    const raw = (match[1] ?? "").toLowerCase();
+    if (raw === "ship-ready" || raw === "open") last = raw;
+  }
+  return last;
+}
+
+export function hasOperativeMoveForwardYes(body: string): boolean {
+  const re = new RegExp(MOVE_FORWARD_FIELD_RE.source, "gi");
+  for (const match of body.matchAll(re)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, "move-forward:")) === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasOperativeCleanResultYes(body: string): boolean {
+  const re = new RegExp(CLEAN_RESULT_FIELD_RE.source, "gi");
+  for (const match of body.matchAll(re)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, "clean-result:")) === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * LGTM / move-forward completion conjunct (#5488 Prefer-A Bound).
+ * Separate from yolo standing. Fixture over parent-claimed / thread-derived
+ * inputs — does not invent a parallel clearance engine.
+ */
+export function evaluateLgtmCompletionConjunct(input: LgtmConjunctInput): LgtmConjunctVerdict {
+  if (input.materialityBar !== "ship-ready") {
+    return {
+      ok: false,
+      reason: "ship-ready-required",
+      detail: "LGTM completion requires recorded materiality-bar: ship-ready",
+    };
+  }
+  if (input.yoloStandingAlone === true && !input.parentMoveForwardRecorded) {
+    return {
+      ok: false,
+      reason: "yolo-alone",
+      detail: "yolo standing alone never admits LGTM / empty-(a) / footnote-only",
+    };
+  }
+  if (input.acceptedBlockerCount > 0) {
+    return {
+      ok: false,
+      reason: "blocker-present",
+      detail: `accepted blocks-the-design count is ${String(input.acceptedBlockerCount)}`,
+    };
+  }
+  if (input.unresolvedBlockerResidualCount > 0) {
+    return {
+      ok: false,
+      reason: "unresolved-blocker",
+      detail: `unresolved blocker residual count is ${String(input.unresolvedBlockerResidualCount)}`,
+    };
+  }
+  if (!input.parentMoveForwardRecorded) {
+    return {
+      ok: false,
+      reason: "missing-move-forward",
+      detail: "parent move-forward / LGTM disposition is missing",
+    };
+  }
+  if (input.seatCensus.some((row) => row === "dispatch-fail")) {
+    return {
+      ok: false,
+      reason: "dispatch-fail",
+      detail: "dispatch-fail seat refuses LGTM completion",
+    };
+  }
+  if (input.seatCensus.some((row) => row === "stub" || row === "blank")) {
+    return {
+      ok: false,
+      reason: "stub-or-blank",
+      detail: "stub / blank seat refuses LGTM completion",
+    };
+  }
+  if (input.seatCensus.some((row) => row === "blocking-present")) {
+    return {
+      ok: false,
+      reason: "blocker-present",
+      detail: "seat census still carries blocks-the-design",
+    };
+  }
+  // Promoted sharpens stay readiness obligations under ship-ready; unpromoted
+  // seats are demoted to footnote before this conjunct sees them.
+  if (input.seatCensus.some((row) => row === "sharpening-present")) {
+    return {
+      ok: false,
+      reason: "stub-or-blank",
+      detail: "promoted sharpens-framing remains unresolved under LGTM",
+    };
+  }
+  const admissible =
+    input.seatCensus.length > 0 &&
+    input.seatCensus.every((row) => row === "clean-result" || row === "footnote-only");
+  if (!admissible) {
+    return {
+      ok: false,
+      reason: "stub-or-blank",
+      detail: "LGTM requires each Round-1 seat to post clean-result or footnote-only census",
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Path 1 / Path 2 empty-(a) / footnote-only waiver under a green LGTM conjunct
+ * (#5488 limb 3). Classic non-empty all-accept stays required when ship-ready
+ * is absent or the conjunct fails.
+ */
+export function emptyOrFootnoteCensusBindAllowed(input: {
+  readonly materialityBar: MaterialityBar;
+  readonly lgtmConjunct: LgtmConjunctVerdict;
+}): boolean {
+  return input.materialityBar === "ship-ready" && input.lgtmConjunct.ok;
+}
+
+/** Collect operative finding-class tokens from headings / `class:` lines. */
+function operativeFindingClasses(body: string): Set<string> {
+  const classes = new Set<string>();
+  const re = new RegExp(OPERATIVE_FINDING_CLASS_RE.source, "gi");
+  for (const match of body.matchAll(re)) {
+    const token = match[1];
+    if (typeof token !== "string" || token.length === 0) continue;
+    if (classifyPosition(body, operativeLineStartOffset(match, token)) !== null) continue;
+    classes.add(token.toLowerCase());
+  }
+  return classes;
+}
+
+const FINDING_CLASSES_FOOTNOTE_RE = /(?:^|\n)[ \t]*finding-classes:[ \t]*footnote\b/gi;
+
+function hasOperativeFindingClassesFootnote(body: string): boolean {
+  const re = new RegExp(FINDING_CLASSES_FOOTNOTE_RE.source, "gi");
+  for (const match of body.matchAll(re)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, "finding-classes:")) === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Classify a Round-1 critic body into an LGTM seat census token.
+ * Uses operative class headings / `class:` lines and clean-result fields —
+ * prose that merely mentions a class token does not count.
+ */
+/** True when an operative line-start dispatch-fail marker is outside examples. */
+function hasOperativeDispatchFail(body: string): boolean {
+  return hasOperativeTokenMatch(body, DISPATCH_FAIL_FIELD_RE, "dispatch-fail");
+}
+
+/**
+ * True when the body is a parent or Stop 1 triage record that may carry
+ * materiality-bar. Critic English stays data (#5488 Greptile P1).
+ */
+function admitsMaterialityBarFallback(body: string): boolean {
+  return /(?:^|\n)\s*role:\s*(?:parent|triage)\b/i.test(body);
+}
+
+export function classifyLgtmSeatCensus(body: string): LgtmSeatCensus {
+  const trimmed = body.trim();
+  if (trimmed.length === 0) return "blank";
+  if (hasOperativeDispatchFail(body)) return "dispatch-fail";
+  const classes = operativeFindingClasses(body);
+  if (classes.has("blocks-the-design")) return "blocking-present";
+  if (classes.has("sharpens-framing")) return "sharpening-present";
+  if (hasOperativeCleanResultYes(body)) return "clean-result";
+  if (classes.has("footnote") || hasOperativeFindingClassesFootnote(body)) {
+    return "footnote-only";
+  }
+  return "stub";
+}
+
+/** True when the critic body records a promoted sharpen readiness obligation. */
+export function hasPromotedSharpenMarker(body: string): boolean {
+  const re = new RegExp(PROMOTED_SHARPEN_RE.source, "gi");
+  for (const match of body.matchAll(re)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, "promoted:")) === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Under ship-ready, demote unpromoted sharpening seats to footnote-only so the
+ * LGTM conjunct only sees promoted sharpens as unresolved obligations.
+ */
+export function mapSeatCensusUnderMaterialityBar(
+  seat: LgtmSeatCensus,
+  materialityBar: MaterialityBar,
+  body: string,
+): LgtmSeatCensus {
+  if (materialityBar !== "ship-ready" || seat !== "sharpening-present") return seat;
+  if (hasPromotedSharpenMarker(body)) return "sharpening-present";
+  return "footnote-only";
+}
+
+/**
+ * True arc boundary: cancel, or a synthesis that cites an existing successor lean.
+ * Lone / cite-not-lean synthesis shapes do not close the arc (#5488 Greptile P1).
+ */
+function isAdmittedArcBoundary(comment: ThreadComment, thread: readonly ThreadComment[]): boolean {
+  if (isCancelledShape(comment.body)) return true;
+  if (!isSynthesisAcceptedShape(comment.body)) return false;
+  const citations = scanCitations(comment.body).citations;
+  if (citations.length === 0) return false;
+  const prior = thread.filter((row) => row.id < comment.id);
+  return resolveCitedLean(citations, byId(thread), latestSuccessorLean(prior)) !== undefined;
+}
+
+/**
+ * Comments belonging to the cited lean's arc: after any prior admitted
+ * synthesis/cancel, before the next. Pre-bind lean revisions and failed
+ * synthesis shapes stay inside the same arc (#5488).
+ * Boundaries walk an id-sorted copy so reversed thread order cannot leak
+ * earlier arcs into the current LGTM check (#5488 Greptile P1).
+ */
+export function commentsInCitedLeanArc(
+  comments: readonly ThreadComment[],
+  citedLean: ThreadComment,
+): readonly ThreadComment[] {
+  const ordered = [...comments].sort((a, b) => a.id - b.id);
+  let priorBoundaryId = 0;
+  for (const comment of ordered) {
+    if (comment.id >= citedLean.id) break;
+    if (isAdmittedArcBoundary(comment, ordered)) priorBoundaryId = comment.id;
+  }
+  let nextBoundaryAfter = Number.POSITIVE_INFINITY;
+  for (const comment of ordered) {
+    if (comment.id <= citedLean.id) continue;
+    if (isAdmittedArcBoundary(comment, ordered)) {
+      nextBoundaryAfter = comment.id;
+      break;
+    }
+  }
+  return ordered.filter(
+    (comment) => comment.id > priorBoundaryId && comment.id < nextBoundaryAfter,
+  );
+}
+
+const PANEL_DEPOSIT_TOKEN_RE = /(?:^|\n)\s*panel-deposit\b/gi;
+const PANEL_SEAT_LINE_RE = /(?:^|\n)\s*seat:\s*(\S+)/gi;
+const PANEL_FAMILIES_FIELD_RE = /(?:^|\n)\s*families:\s*([^\n]+)/gi;
+const PANEL_SIBLINGS_COUNT_RE = /(?:^|\n)\s*siblings:\s*(\d+)\b/gi;
+
+/** True when an operative panel-deposit marker / siblings field is outside examples. */
+function hasOperativePanelDeposit(body: string): boolean {
+  if (!isPanelDepositBody(body)) return false;
+  const depositRe = new RegExp(PANEL_DEPOSIT_TOKEN_RE.source, "gi");
+  for (const match of body.matchAll(depositRe)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, "panel-deposit")) === null) {
+      return true;
+    }
+  }
+  const siblingsRe = new RegExp(PANEL_SIBLINGS_COUNT_RE.source, "gi");
+  for (const match of body.matchAll(siblingsRe)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, "siblings:")) === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Expected Round-1 seat count from the latest operative panel-deposit in the arc. */
+function expectedRound1SeatCount(arcComments: readonly ThreadComment[]): number {
+  let max = 0;
+  for (const comment of arcComments) {
+    const body = comment.body;
+    if (!hasOperativePanelDeposit(body)) continue;
+    const seatIds = new Set<string>();
+    const seatRe = new RegExp(PANEL_SEAT_LINE_RE.source, "gi");
+    for (const match of body.matchAll(seatRe)) {
+      if (classifyPosition(body, operativeLineStartOffset(match, "seat:")) !== null) continue;
+      const id = match[1]?.trim();
+      if (id) seatIds.add(id);
+    }
+    if (seatIds.size === 0) {
+      const familiesRe = new RegExp(PANEL_FAMILIES_FIELD_RE.source, "gi");
+      for (const match of body.matchAll(familiesRe)) {
+        if (classifyPosition(body, operativeLineStartOffset(match, "families:")) !== null) continue;
+        for (const part of (match[1] ?? "").split(",")) {
+          const id = part.trim();
+          if (id) seatIds.add(id);
+        }
+      }
+    }
+    let siblings = Number.NaN;
+    const siblingsRe = new RegExp(PANEL_SIBLINGS_COUNT_RE.source, "gi");
+    for (const match of body.matchAll(siblingsRe)) {
+      if (classifyPosition(body, operativeLineStartOffset(match, "siblings:")) !== null) continue;
+      siblings = Number.parseInt(match[1] ?? "", 10);
+    }
+    const n = seatIds.size > 0 ? seatIds.size : Number.isFinite(siblings) ? siblings : 0;
+    if (n > max) max = n;
+  }
+  return max;
+}
+
+/** Operative token outside fence / quote / strike / negation (#5488 Greptile P1). */
+function hasOperativeTokenMatch(body: string, re: RegExp, token: string): boolean {
+  const scan = new RegExp(re.source, "gi");
+  for (const match of body.matchAll(scan)) {
+    if (classifyPosition(body, operativeLineStartOffset(match, token)) === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Same-line lean take-map: `blocks-the-design … accept-into-contract`. */
+const ACCEPTED_BLOCKER_TAKE_ROW_RE =
+  /(?:^|\n)[ \t]*blocks-the-design(?:[ \t]*:|[ \t]+)[^\n]*\baccept-into-contract\b/gi;
+/** Same-line lean take-map: `blocks-the-design … defer|disagree|…`. */
+const UNRESOLVED_BLOCKER_TAKE_ROW_RE =
+  /(?:^|\n)[ \t]*blocks-the-design(?:[ \t]*:|[ \t]+)[^\n]*\b(?:disagree|defer|omission|unresolved)\b/gi;
+const ACCEPT_INTO_CONTRACT_LINE_RE = /(?:^|\n)[ \t]*accept-into-contract\b/gi;
+const UNRESOLVED_TAKE_LINE_RE = /(?:^|\n)[ \t]*(disagree|defer|omission|unresolved)\b/gi;
+
+/** Line-start unresolved take; classify the matched word, not a fixed token. */
+function hasOperativeUnresolvedTakeLine(body: string): boolean {
+  const scan = new RegExp(UNRESOLVED_TAKE_LINE_RE.source, "gi");
+  for (const match of body.matchAll(scan)) {
+    const token = match[1];
+    if (typeof token !== "string" || token.length === 0) continue;
+    if (classifyPosition(body, operativeLineStartOffset(match, token)) === null) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Accepted blockers: same-line take-map row, or classified `blocks-the-design:`
+ * finding paired with a line-start `accept-into-contract` take. Explanatory
+ * prose mentions do not count (#5488 Greptile P1).
+ */
+function countAcceptedBlockersInBody(body: string): number {
+  if (hasOperativeTokenMatch(body, ACCEPTED_BLOCKER_TAKE_ROW_RE, "blocks-the-design")) {
+    return 1;
+  }
+  if (
+    operativeFindingClasses(body).has("blocks-the-design") &&
+    hasOperativeTokenMatch(body, ACCEPT_INTO_CONTRACT_LINE_RE, "accept-into-contract")
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
+function unresolvedBlockerResidualsInBody(body: string): number {
+  if (hasOperativeTokenMatch(body, UNRESOLVED_BLOCKER_TAKE_ROW_RE, "blocks-the-design")) {
+    if (!hasOperativeTokenMatch(body, ACCEPT_INTO_CONTRACT_LINE_RE, "accept-into-contract")) {
+      return 1;
+    }
+    return 0;
+  }
+  if (
+    operativeFindingClasses(body).has("blocks-the-design") &&
+    hasOperativeUnresolvedTakeLine(body) &&
+    !hasOperativeTokenMatch(body, ACCEPT_INTO_CONTRACT_LINE_RE, "accept-into-contract")
+  ) {
+    return 1;
+  }
+  return 0;
+}
+
+/**
+ * Thread-derived LGTM conjunct for a move-forward synthesis candidate (#5488).
+ * Materiality bar and critic seats are scoped to the cited lean's arc only.
+ * Reuses citation / lean resolution from the completed-arc path; does not
+ * re-run pain/plain-English (those stay on finalizeComplete).
+ */
+export function evaluateMoveForwardThreadAdmission(input: {
+  readonly comments: readonly ThreadComment[];
+  readonly synthesis: ThreadComment;
+  readonly citedLean: ThreadComment;
+}): LgtmConjunctVerdict {
+  const arcComments = commentsInCitedLeanArc(input.comments, input.citedLean);
+  const fromLean = extractOperativeMaterialityBar(input.citedLean.body);
+  // Fallback bar only from parent / Stop 1 triage — critic text cannot opt in (#5488).
+  const fromArc = arcComments
+    .filter((comment) => admitsMaterialityBarFallback(comment.body))
+    .map((comment) => extractOperativeMaterialityBar(comment.body))
+    .reverse()
+    .find((bar) => bar !== null);
+  const materialityBar = fromLean ?? fromArc ?? "open";
+  const parentMoveForwardRecorded =
+    isMoveForwardSynthesisShape(input.synthesis.body) ||
+    hasOperativeMoveForwardYes(input.synthesis.body) ||
+    hasOperativeMoveForwardYes(input.citedLean.body);
+  // Round-1 seats only — targeted pain audits (non-empty audit-targets) stay
+  // on evaluateCompletedArcRecord pain checks. Keep `audit-targets: none`
+  // Round-1 posts that the critic brief requires (#5488).
+  const criticLike = arcComments.filter((comment) => {
+    if (comment.id === input.synthesis.id || comment.id === input.citedLean.id) return false;
+    if (!/(?:^|\n)\s*role:\s*critic\b/i.test(comment.body)) return false;
+    if (isVerifiedClaimsTableBody(comment.body)) return false;
+    if (isSuccessorLeanBody(comment.body)) return false;
+    if (isCancelledShape(comment.body)) return false;
+    if (isSynthesisAcceptedShape(comment.body)) return false;
+    const envelope = extractOperativeAuditTargets(comment.body);
+    if (envelope !== null && !envelope.declaredNone && envelope.auditTargets.length > 0) {
+      return false;
+    }
+    return true;
+  });
+  // Panel-deposit expected seats must all post before LGTM (#5488 P1).
+  const expectedSeats = expectedRound1SeatCount(arcComments);
+  if (expectedSeats > 0 && criticLike.length < expectedSeats) {
+    return {
+      ok: false,
+      reason: "stub-or-blank",
+      detail:
+        `panel expected ${String(expectedSeats)} Round-1 seats; ` +
+        `${String(criticLike.length)} posted`,
+    };
+  }
+  const seatCensus: LgtmSeatCensus[] =
+    criticLike.length > 0
+      ? criticLike.map((comment) =>
+          mapSeatCensusUnderMaterialityBar(
+            classifyLgtmSeatCensus(comment.body),
+            materialityBar,
+            comment.body,
+          ),
+        )
+      : ["stub"];
+  let acceptedBlockerCount = countAcceptedBlockersInBody(input.citedLean.body);
+  let unresolvedBlockerResidualCount = unresolvedBlockerResidualsInBody(input.citedLean.body);
+  for (const comment of criticLike) {
+    acceptedBlockerCount += countAcceptedBlockersInBody(comment.body);
+    unresolvedBlockerResidualCount += unresolvedBlockerResidualsInBody(comment.body);
+  }
+  return evaluateLgtmCompletionConjunct({
+    materialityBar,
+    acceptedBlockerCount,
+    unresolvedBlockerResidualCount,
+    parentMoveForwardRecorded,
+    seatCensus,
+  });
 }
 
 /**
@@ -898,6 +1449,23 @@ function verdictForSynthesis(
   if (!citedTable.ok) {
     return { status: "blocked", reason: citedTable.reason, detail: citedTable.detail };
   }
+  if (isMoveForwardSynthesisShape(comment.body)) {
+    const lgtm = evaluateMoveForwardThreadAdmission({
+      comments,
+      synthesis: comment,
+      citedLean,
+    });
+    if (!lgtm.ok) {
+      return {
+        status: "blocked",
+        reason: "missing-record",
+        detail:
+          `move-forward synthesis ${String(comment.id)} refused by LGTM conjunct (${lgtm.reason}): ` +
+          `${lgtm.detail}; recovery: record materiality-bar: ship-ready, parent move-forward, ` +
+          "zero accepted/unresolved blockers, and clean-result or footnote-only seat census",
+      };
+    }
+  }
   return {
     status: "complete",
     synthesisCommentId: comment.id,
@@ -1018,7 +1586,8 @@ export function evaluateCompletedArcRecord(input: {
     reason: "missing-record",
     detail:
       "design-critique is in flight but the completed-arc record is missing: " +
-      "`design-critique: synthesis accepted, because ...` citing the accepted successor lean; " +
+      "`design-critique: synthesis accepted, because ...` or " +
+      `\`${MOVE_FORWARD_SYNTHESIS_LEAD}\` citing the accepted successor lean; ` +
       `accepted forms: ${ACCEPTED_CITATION_FORMS.join(" | ")}`,
   };
 }
