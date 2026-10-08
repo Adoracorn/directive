@@ -1,0 +1,108 @@
+{
+  "xBRIEFInfo": {
+    "version": "0.8",
+    "description": "Directive Tutorial: first-run offer after Name, menu of sandbox projects, preferences progress, shared teaching beats, glossary hook.",
+    "created": "2026-09-25T17:20:00Z",
+    "updated": "2026-10-05T16:47:37Z"
+  },
+  "plan": {
+    "id": "4981-directive-tutorial",
+    "title": "Directive Tutorial \u2014 first-run menu, preferences progress, shared beats",
+    "status": "running",
+    "narratives": {
+      "Description": "Ship the Directive Tutorial inside Directive. After the person first saves their Name in user preferences, offer an interactive walkthrough. They pick one of three fun controlled practice projects, learn lifecycle, main workflow, and language by doing, and can skip or re-run anytime. Progress is an object in user preferences (operator-scoped). Practice runs in a disposable local sandbox, not the real product repo. Version 1 does not push to GitHub or open a pull request. A wiki/doc site is out of scope.",
+      "Offer": "Trigger the automatic offer when Name is first persisted in USER.md / user preferences and tutorial status is still not_started. Menu choices: Start tutorial, Skip for now, Discuss, Back. Do not wait for project definition or the specification interview. Do not re-ask Name or preference questions inside the tutorial. Skip records skipped and continues normal setup. An explicit tutorial command still works after skip or complete.",
+      "Menu": "v1 menu is locked to three options with the same 7 shared steps: Signal (signal) \u2014 tiny CLI that prints a personal status line; Postcard (postcard) \u2014 one-page local site that shows a short message; Echo (echo) \u2014 mini bot that answers one question with a chosen reply. Each runs in a disposable local sandbox sized for one sitting.",
+      "Flow": "Shared learner path is Step 1\u20137 of 7 for every menu option. (1) Welcome and choose Signal/Postcard/Echo and open the sandbox; Back on step 1 is labeled not available yet. (2) Write it down: confirm plan and acceptance; write the proposed work file (learner text does not show advance flags). (3) Confirm and start: promote then activate on a branch; show owned files; no file-list approval. (4) Make the change: only in-scope files for the toy. (5) Prove it: run acceptance check; stay and retry until verified. (6) Close: complete only after verified. (7) Wrap up: graduation, re-run pointer, handoff to real setup without teaching push/PR/merge. Longer course deferred until a wiki/docs home exists. Message shape: where you are, plain next action, glossary term(s), visible keep-in-mind, one next action.",
+      "State": "Store deterministic tutorial progress in user preferences under the USER.md config home (structured object or sidecar), not in the product project and not only inside the sandbox. Fields include status (not_started | offered | in_progress | completed | skipped), selectedProject (null | signal | postcard | echo), currentBeat, completedBeats (steps 1-7), content version, and offered/started/completed/skipped timestamps. Later sessions resume at the current beat. Reset clears progress and selected project so a different menu option can be chosen; explicit start still works after skip or complete.",
+      "Runtime": "Ship a deft-directive-tutorial skill plus CLI verbs (start, inspect, advance, resume, skip, reset, and a public re-run entry). The agent reads the rendered step and follows it. Advance does not move past a step until the person's required action for that step is recorded. A failed check stays on step 5 until fixed and rerun.",
+      "Sandbox": "Run the chosen practice project in a disposable local Git repository. Keep the same conversation. Point later commands at that repository. Do not switch the editor workspace to abandon the person's real project. Use real Directive lifecycle moves for the practice work item. Do not teach push, pull request, review, or merge in version 1.",
+      "Language": "Keep official terms in one glossary file: official term, one plain sentence, one sentence on what it prevents. v1 entries: Directive, work file, work item, proposed, ready, in progress, done, acceptance, branch, check, evidence, in-scope files. Steps point at that file so JT's language pass can update wording without rewriting the shared beat sequence. Do not wait for that pass to ship the tutorial.",
+      "Acceptance": "After first Name write, Directive offers the tutorial; Start, Skip, and later re-run via command all work. Progress persists in user preferences across sessions. The person can finish Signal, Postcard, or Echo in one sitting without a browser step and without a GitHub push. Glossary edits change rendered wording without rewriting the seven shared steps. Skip and completed both still allow explicit re-run.",
+      "OutOfScope": "Wiki or standalone doc site build; separate React/browser runtime; waiting on full JT language pass; teaching push/PR/review/merge; treating Greptile directive-kb as source of truth; replacing deftai/directive-training."
+    },
+    "items": [
+      {
+        "title": "Preferences progress + first-run offer after Name",
+        "status": "pending",
+        "narrative": {
+          "Acceptance": "Tutorial progress is stored in user preferences (status, selectedProject signal|postcard|echo, currentBeat, completedBeats, version, timestamps). The automatic offer fires after the first Name persist while status is not_started. Skip, Start, and Discuss/Back behave as specified. Explicit re-run works after skip or complete."
+        }
+      },
+      {
+        "title": "Menu of sandbox projects + shared beat content",
+        "status": "pending",
+        "narrative": {
+          "Acceptance": "Signal, Postcard, and Echo each run the shared Step 1-7 sequence in a disposable sandbox. Glossary-backed wording appears in rendered steps. Editing the glossary changes words without rewriting the seven shared steps. Version 1 never pushes or opens a pull request."
+        }
+      },
+      {
+        "title": "Tutorial skill, CLI, and proof",
+        "status": "pending",
+        "narrative": {
+          "Acceptance": "The shipped skill tells the agent to read and follow the rendered step. CLI covers start, inspect, advance, resume, skip, reset, and public re-run. An end-to-end proof covers offer, skip, each menu pick, resume, failed-check retry on step 5, reset, and successful completion in a temporary sandbox."
+        }
+      }
+    ],
+    "metadata": {
+      "kind": "story",
+      "swarm": {
+        "file_scope": [
+          "REFERENCES.md",
+          "Taskfile.yml",
+          "cmd/deft-install/main_test.go",
+          "cmd/deft-install/setup.go",
+          "content/.agents/skills/deft-directive-tutorial/SKILL.md",
+          "content/conventions/content-manifest.json",
+          "content/packs/skills/skills-pack-0.1.json",
+          "content/skills/deft-directive-setup/SKILL.md",
+          "content/skills/deft-directive-tutorial/SKILL.md",
+          "content/tutorial/beats.json",
+          "content/tutorial/glossary.md",
+          "content/tutorial/projects/echo.json",
+          "content/tutorial/projects/postcard.json",
+          "content/tutorial/projects/signal.json",
+          "docs/FILES.md",
+          "docs/RULE-MAP.md",
+          "evals/trigger-cases.jsonl",
+          "packages/cli/src/dispatch.ts",
+          "packages/core/src/agents-md-budget/evaluate.test.ts",
+          "packages/core/src/agents-md-budget/skill-frontmatter.ts",
+          "packages/core/src/init-deposit/skill-discovery-deposit.ts",
+          "packages/core/src/packaging/openpackage-manifest.test.ts",
+          "packages/core/src/packaging/openpackage-tiers.test.ts",
+          "packages/core/src/render/rule-map.ts",
+          "packages/core/src/tutorial/cli.test.ts",
+          "packages/core/src/tutorial/cli.ts",
+          "packages/core/src/tutorial/proof.test.ts",
+          "packages/core/src/tutorial/render.test.ts",
+          "packages/core/src/tutorial/render.ts",
+          "packages/core/src/tutorial/state.test.ts",
+          "packages/core/src/tutorial/state.ts",
+          "packaging/openpackage/README.md",
+          "packaging/openpackage/deft-directive-skills/README.md",
+          "packaging/openpackage/deft-tiers.json",
+          "packaging/openpackage/measure-daily-core-frontmatter.mjs",
+          "tasks/tutorial.yml",
+          "xbrief/PROJECT-DEFINITION.xbrief.json",
+          "xbrief/evaluator-surface-disposition.json",
+          "CHANGELOG.md",
+          "xbrief/active/2026-09-25-4981-directive-tutorial-messages.xbrief.json"
+        ]
+      }
+    },
+    "references": [
+      {
+        "uri": "https://github.com/deftai/directive/issues/4981",
+        "type": "x-xbrief/github-issue",
+        "title": "Issue #4981: first-run Directive Tutorial"
+      },
+      {
+        "uri": "https://github.com/deftai/directive/issues/4371",
+        "type": "x-xbrief/github-issue",
+        "title": "Issue #4371: first-time run review umbrella (JT / visionik)"
+      }
+    ],
+    "updated": "2026-10-05T16:47:37Z"
+  }
+}
