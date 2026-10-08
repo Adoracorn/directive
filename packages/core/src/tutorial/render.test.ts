@@ -2,12 +2,14 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  activeWorkItemPath,
   beatById,
   fillBeat,
   loadTutorial,
   projectFields,
   renderBeat,
   renderWiredSession,
+  shellQuotePath,
   wiredBeats,
 } from "./render.js";
 
@@ -139,5 +141,29 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(messages).toHaveLength(7);
     expect(messages[0]).toContain("Step 1 of 7.");
     expect(messages[6]).toContain("Step 7 of 7 — Wrap up.");
+  });
+
+  it("quotes work-file paths and rewrites Windows proposed paths to active", () => {
+    expect(shellQuotePath("/tmp/My Practice/xbrief/proposed/signal.xbrief.json")).toBe(
+      '"/tmp/My Practice/xbrief/proposed/signal.xbrief.json"',
+    );
+    expect(activeWorkItemPath("xbrief\\proposed\\signal.xbrief.json")).toBe(
+      "xbrief\\active\\signal.xbrief.json",
+    );
+    const withPath = projectFields(
+      projects,
+      "signal",
+      "Alex — on the bridge.",
+      "/tmp/My Practice/xbrief/proposed/signal.xbrief.json",
+    );
+    const start = fillBeat(mustBeat("start"), withPath);
+    expect(start.command).toContain(
+      'deft scope:promote -- "/tmp/My Practice/xbrief/proposed/signal.xbrief.json"',
+    );
+    expect(start.command).not.toMatch(/promote -- \/tmp\/My Practice\//);
+    const close = fillBeat(mustBeat("close"), withPath);
+    expect(close.command).toContain(
+      'deft scope:complete -- "/tmp/My Practice/xbrief/active/signal.xbrief.json"',
+    );
   });
 });

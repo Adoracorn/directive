@@ -173,9 +173,16 @@ export function fillBeat(
 /** Map a proposed/pending work-file path to the active path after promote+activate. */
 export function activeWorkItemPath(workItemPath: string | null): string {
   if (workItemPath === null || workItemPath.trim().length === 0) return "";
+  // Accept either path separator so Windows proposed paths rewrite to active.
   return workItemPath
-    .replace(/xbrief\/proposed\//g, "xbrief/active/")
-    .replace(/xbrief\/pending\//g, "xbrief/active/");
+    .replace(/xbrief([/\\])proposed\1/gi, "xbrief$1active$1")
+    .replace(/xbrief([/\\])pending\1/gi, "xbrief$1active$1");
+}
+
+/** Quote a path for shell command templates (spaces and quotes stay one argument). */
+export function shellQuotePath(value: string): string {
+  if (value.length === 0) return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 export function loadTutorial(repoRoot: string): {
@@ -209,8 +216,8 @@ export function projectFields(
     expandFieldValues({
       ...fields,
       content: content ?? "",
-      workItemPath: workItemPath ?? "",
-      activeWorkItemPath: activeWorkItemPath(workItemPath),
+      workItemPath: shellQuotePath(workItemPath ?? ""),
+      activeWorkItemPath: shellQuotePath(activeWorkItemPath(workItemPath)),
     });
 
   if (projectId === null) {

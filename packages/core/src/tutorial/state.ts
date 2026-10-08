@@ -307,7 +307,22 @@ export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
       state.currentBeat,
     );
   }
-  let next: TutorialState = { ...state, currentBeat: prior };
+  const ids = wiredIds(beats);
+  const priorIndex = ids.indexOf(prior);
+  // Drop completion marks at/after the landing step — rewind invalidates later proof.
+  let next: TutorialState = {
+    ...state,
+    currentBeat: prior,
+    completedBeats: state.completedBeats.filter((id) => {
+      const index = ids.indexOf(id);
+      return index >= 0 && index < priorIndex;
+    }),
+  };
+  // Landing on or before change must re-run prove-it; keep checkPassed only on result+.
+  const changeIndex = ids.indexOf("change");
+  if (changeIndex >= 0 && priorIndex <= changeIndex) {
+    next = { ...next, checkPassed: null };
+  }
   // Rewinding into choose or write must not keep a stale plan / work file.
   if (prior === "choose" || prior === "write") {
     next = clearPlanAndLater(next);

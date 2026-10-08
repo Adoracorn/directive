@@ -225,4 +225,40 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(backed.state.workItemPath).toBeNull();
     expect(backed.state.content).toBeNull();
   });
+
+  it("clears prove-it results when Back returns to change", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "signal" }).state;
+    state = advanceTutorial(state, beats, { content: "Alex — on the bridge." }).state;
+    state = advanceTutorial(state, beats, {
+      confirm: true,
+      workItemPath: "xbrief/proposed/signal.xbrief.json",
+    }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { contentSeen: true }).state;
+    state = advanceTutorial(state, beats, { check: "pass" }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    expect(state.currentBeat).toBe("close");
+    expect(state.checkPassed).toBe(true);
+    expect(state.completedBeats).toContain("result");
+
+    const backed = backBeat(state, beats); // close -> result
+    expect(backed.state.currentBeat).toBe("result");
+    expect(backed.state.checkPassed).toBe(true);
+    expect(backed.state.completedBeats).not.toContain("result");
+
+    const toChange = backBeat(backed.state, beats); // result -> change
+    expect(toChange.state.currentBeat).toBe("change");
+    expect(toChange.state.checkPassed).toBeNull();
+    expect(toChange.state.completedBeats).not.toContain("close");
+
+    // Stale close completion must not graduate after rewind.
+    let skipped = toChange.state;
+    skipped = skipBeat(skipped, beats).state; // change -> result
+    skipped = skipBeat(skipped, beats).state; // result -> close
+    skipped = skipBeat(skipped, beats).state; // close -> leave
+    const finished = advanceTutorial(skipped, beats, {});
+    expect(finished.ok).toBe(false);
+    expect(finished.state.status).not.toBe("completed");
+  });
 });
