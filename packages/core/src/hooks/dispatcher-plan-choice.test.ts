@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { writeArcSpendState } from "../design-critique/spend.js";
 import { cursorPlanChoiceStoreRoot } from "./cursor-plan-choice/index.js";
 import type { CursorPlanChoiceDeps } from "./cursor-plan-choice/types.js";
 import {
@@ -11,9 +12,11 @@ import {
   renderHostDecision,
 } from "./dispatcher.js";
 import {
+  decideSpendRecommendGate,
   evaluateHatchPresence,
   extractQuestionOptionGroups,
   isHatchAliasText,
+  resolveArcSpendSessionForHook,
 } from "./dispatcher-plan-choice.js";
 
 const READY_RITUAL = {
@@ -160,13 +163,14 @@ describe("question hatch gate (#5373)", () => {
         host: "grok",
         event: "tool.before",
         projectRoot: "/project",
+        environ: {},
         payload: {
           tool_name: "ask_user_question",
           tool_input: {
             questions: [
               {
-                question: "Spend?",
-                options: [{ label: "N=1" }, { label: "N=3" }, { label: "Other" }],
+                question: "Pick one?",
+                options: [{ label: "Alpha" }, { label: "Beta" }, { label: "Other" }],
               },
             ],
           },
@@ -189,13 +193,14 @@ describe("question hatch gate (#5373)", () => {
         host: "grok",
         event: "tool.before",
         projectRoot: "/project",
+        environ: {},
         payload: {
           tool_name: "ask_user_question",
           tool_input: {
             questions: [
               {
-                question: "Spend?",
-                options: [{ label: "N=1" }, { label: "Discuss" }, { label: "Back" }],
+                question: "Pick one?",
+                options: [{ label: "Alpha" }, { label: "Discuss" }, { label: "Back" }],
               },
             ],
           },
@@ -354,5 +359,329 @@ describe("question hatch gate (#5373)", () => {
       seams,
     );
     expect(after.code).toBe("question-hatch-ready");
+  });
+});
+
+describe("spend-recommend gate (#5466)", () => {
+  it("denies ask_user_question while arc in flight without spend-recommend", () => {
+    const root = tempDir("spend-gate-");
+    writeArcSpendState(root, {
+      schema: "deft.design-critique.arc-spend-state.v1",
+      status: "in-flight",
+      spendRecommend: null,
+      spend: null,
+      spendAsk: null,
+      askPermitted: false,
+      updatedAt: new Date().toISOString(),
+      utterance: "arc 5466",
+      sessionId: "no-session",
+    });
+    const decision = decideHook(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: root,
+        environ: {},
+        payload: {
+          tool_name: "ask_user_question",
+          tool_input: {
+            questions: [
+              {
+                question: "Spend?",
+                options: [{ label: "N=1" }, { label: "Discuss" }, { label: "Back" }],
+              },
+            ],
+          },
+        },
+      },
+      readySeams(),
+    );
+    expect(decision.verdict).toBe("deny");
+    expect(decision.code).toBe("spend-recommend-required");
+    expect(decision.message).toContain("design-critique:spend-resolve");
+  });
+
+  it("allows ask after spend-recommend recorded (hatch still applies)", () => {
+    const root = tempDir("spend-gate-ok-");
+    writeArcSpendState(root, {
+      schema: "deft.design-critique.arc-spend-state.v1",
+      status: "in-flight",
+      spendRecommend: "N=1",
+      spend: "N=1",
+      spendAsk: "resolved",
+      askPermitted: false,
+      updatedAt: new Date().toISOString(),
+      utterance: "arc 5466",
+      sessionId: "no-session",
+    });
+    const decision = decideHook(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: root,
+        environ: {},
+        payload: {
+          tool_name: "ask_user_question",
+          tool_input: {
+            questions: [
+              {
+                question: "Ambiguous spend?",
+                options: [{ label: "N=1" }, { label: "Discuss" }, { label: "Back" }],
+              },
+            ],
+          },
+        },
+      },
+      readySeams(),
+    );
+    expect(decision.verdict).toBe("allow");
+    expect(decision.code).toBe("question-hatch-ready");
+  });
+
+  it("does not deny when no arc-spend-state exists for non-spend questions", () => {
+    const root = tempDir("spend-gate-absent-");
+    const gate = decideSpendRecommendGate(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: root,
+        environ: {},
+        payload: {
+          tool_name: "ask_user_question",
+          tool_input: {
+            questions: [
+              {
+                question: "Pick?",
+                options: [{ label: "Alpha" }, { label: "Discuss" }, { label: "Back" }],
+              },
+            ],
+          },
+        },
+      },
+      "ask_user_question",
+    );
+    expect(gate).toBeNull();
+  });
+
+  it("denies spend-shaped ask when session gate was never opened", () => {
+    const root = tempDir("spend-gate-shaped-");
+    const gate = decideSpendRecommendGate(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: root,
+        environ: {},
+        payload: {
+          tool_name: "ask_user_question",
+          tool_input: {
+            questions: [
+              {
+                question: "Spend?",
+                options: [{ label: "N=1" }, { label: "Discuss" }, { label: "Back" }],
+              },
+            ],
+          },
+        },
+      },
+      "ask_user_question",
+    );
+    expect(gate?.verdict).toBe("deny");
+    expect(gate?.code).toBe("spend-recommend-required");
+  });
+
+  it("denies numbered spend labels while open unresolved gate", () => {
+    const root = tempDir("spend-gate-numbered-");
+    writeArcSpendState(root, {
+      schema: "deft.design-critique.arc-spend-state.v1",
+      status: "in-flight",
+      spendRecommend: null,
+      spend: null,
+      spendAsk: null,
+      askPermitted: false,
+      updatedAt: new Date().toISOString(),
+      utterance: "arc 5466",
+      sessionId: "no-session",
+    });
+    const gate = decideSpendRecommendGate(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: root,
+        environ: {},
+        payload: {
+          tool_name: "ask_user_question",
+          tool_input: {
+            questions: [
+              {
+                question: "Spend?",
+                options: [
+                  { label: "1. N=1" },
+                  { label: "2. N≥3" },
+                  { label: "3. Discuss" },
+                  { label: "4. Back" },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      "ask_user_question",
+    );
+    expect(gate?.verdict).toBe("deny");
+    expect(gate?.code).toBe("spend-recommend-required");
+  });
+
+  it("allows unrelated questions while session gate is open without recommend", () => {
+    const root = tempDir("spend-gate-unrelated-");
+    writeArcSpendState(root, {
+      schema: "deft.design-critique.arc-spend-state.v1",
+      status: "in-flight",
+      spendRecommend: null,
+      spend: null,
+      spendAsk: null,
+      askPermitted: false,
+      updatedAt: new Date().toISOString(),
+      utterance: "arc 5466",
+      sessionId: "no-session",
+    });
+    const gate = decideSpendRecommendGate(
+      {
+        host: "grok",
+        event: "tool.before",
+        projectRoot: root,
+        environ: {},
+        payload: {
+          tool_name: "ask_user_question",
+          tool_input: {
+            questions: [
+              {
+                question: "Unrelated?",
+                options: [{ label: "Alpha" }, { label: "Discuss" }, { label: "Back" }],
+              },
+            ],
+          },
+        },
+      },
+      "ask_user_question",
+    );
+    expect(gate).toBeNull();
+  });
+
+  it("aligns hook session with CLI --session-id via payload when env is empty", () => {
+    const root = tempDir("spend-gate-session-align-");
+    writeArcSpendState(root, {
+      schema: "deft.design-critique.arc-spend-state.v1",
+      status: "in-flight",
+      spendRecommend: null,
+      spend: null,
+      spendAsk: null,
+      askPermitted: true,
+      updatedAt: new Date().toISOString(),
+      utterance: "arc panel",
+      sessionId: "sess-a",
+    });
+    const input = {
+      host: "claude",
+      event: "tool.before" as const,
+      projectRoot: root,
+      environ: {},
+      payload: {
+        session_id: "sess-a",
+        tool_name: "ask_user_question",
+        tool_input: {
+          questions: [
+            {
+              question: "Spend?",
+              options: [{ label: "N=1" }, { label: "Discuss" }, { label: "Back" }],
+            },
+          ],
+        },
+      },
+    };
+    expect(resolveArcSpendSessionForHook(input)).toBe("sess-a");
+    const gate = decideSpendRecommendGate(input, "ask_user_question");
+    expect(gate).toBeNull();
+    const mismatch = decideSpendRecommendGate(
+      {
+        ...input,
+        payload: { ...input.payload, session_id: "other-session" },
+      },
+      "ask_user_question",
+    );
+    // other-session has no state; falls back to no-session (also empty) → deny
+    expect(mismatch?.verdict).toBe("deny");
+    expect(mismatch?.code).toBe("spend-recommend-required");
+  });
+
+  it("does not borrow no-session askPermitted when payload session is empty", () => {
+    const root = tempDir("spend-gate-nosession-no-borrow-");
+    writeArcSpendState(root, {
+      schema: "deft.design-critique.arc-spend-state.v1",
+      status: "in-flight",
+      spendRecommend: null,
+      spend: null,
+      spendAsk: null,
+      askPermitted: true,
+      updatedAt: new Date().toISOString(),
+      utterance: "arc panel",
+      sessionId: "no-session",
+    });
+    const input = {
+      host: "claude",
+      event: "tool.before" as const,
+      projectRoot: root,
+      environ: {},
+      payload: {
+        session_id: "sess-b",
+        tool_name: "ask_user_question",
+        tool_input: {
+          questions: [
+            {
+              question: "Spend?",
+              options: [{ label: "N=1" }, { label: "Discuss" }, { label: "Back" }],
+            },
+          ],
+        },
+      },
+    };
+    expect(resolveArcSpendSessionForHook(input)).toBe("sess-b");
+    const gate = decideSpendRecommendGate(input, "ask_user_question");
+    expect(gate?.verdict).toBe("deny");
+    expect(gate?.code).toBe("spend-recommend-required");
+  });
+
+  it("prefers payload session state over a different env session id", () => {
+    const root = tempDir("spend-gate-payload-over-env-");
+    writeArcSpendState(root, {
+      schema: "deft.design-critique.arc-spend-state.v1",
+      status: "in-flight",
+      spendRecommend: null,
+      spend: null,
+      spendAsk: null,
+      askPermitted: true,
+      updatedAt: new Date().toISOString(),
+      utterance: "arc panel",
+      sessionId: "sess-a",
+    });
+    const input = {
+      host: "claude",
+      event: "tool.before" as const,
+      projectRoot: root,
+      environ: { DEFT_SESSION_ID: "host:claude:v1:other" },
+      payload: {
+        session_id: "sess-a",
+        tool_name: "ask_user_question",
+        tool_input: {
+          questions: [
+            {
+              question: "Spend?",
+              options: [{ label: "N=1" }, { label: "Discuss" }, { label: "Back" }],
+            },
+          ],
+        },
+      },
+    };
+    expect(resolveArcSpendSessionForHook(input)).toBe("sess-a");
+    expect(decideSpendRecommendGate(input, "ask_user_question")).toBeNull();
   });
 });
