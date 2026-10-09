@@ -23,8 +23,8 @@ import {
   skipBeat,
   skipOffer,
   startTutorial,
-  tutorialStatePathPersonal,
   type TutorialStep,
+  tutorialStatePathPersonal,
 } from "./state.js";
 
 export interface TutorialIo {
@@ -321,10 +321,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         ? undefined
         : tutorialStatePathPersonal();
   const asJson = hasFlag(rest, "--json");
-  const stateOpts =
-    statePath !== undefined
-      ? { projectRoot, path: statePath }
-      : { projectRoot };
+  const stateOpts = statePath !== undefined ? { projectRoot, path: statePath } : { projectRoot };
 
   let tutorial: ReturnType<typeof loadTutorial>;
   try {

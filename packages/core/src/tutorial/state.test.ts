@@ -16,9 +16,9 @@ import {
   skipBeat,
   skipOffer,
   startTutorial,
-  tutorialStatePathPersonal,
   type TutorialBeatRef,
   type TutorialState,
+  tutorialStatePathPersonal,
 } from "./state.js";
 
 const beats: readonly TutorialBeatRef[] = [

@@ -158,11 +158,7 @@ export function tutorialStatePath(
  * `.deft/USER.md`, so practice-sandbox cwd does not fork tutorial-state.json.
  */
 export function tutorialStatePathPersonal(
-  options: {
-    env?: NodeJS.ProcessEnv;
-    platform?: NodeJS.Platform;
-    homeDir?: string;
-  } = {},
+  options: { env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; homeDir?: string } = {},
 ): string {
   const env = options.env ?? process.env;
   const override = env.DEFT_USER_PATH?.trim();
