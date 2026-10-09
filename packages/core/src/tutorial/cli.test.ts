@@ -391,14 +391,13 @@ describe("deft tutorial commands (#4981)", () => {
     const prefs = tempDir("deft-tutorial-prefs-");
     const repo = tempDir("deft-tutorial-repo-");
     expect(run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]).code).toBe(0);
-    const paused = run(projectRoot, prefs, [
-      "advance",
-      "--project",
-      "I have questions",
-      "--json",
-    ]);
+    const paused = run(projectRoot, prefs, ["advance", "--project", "I have questions", "--json"]);
     expect(paused.code).toBe(0);
-    const body = JSON.parse(paused.out) as { ok: boolean; message: string; state: { currentBeat: string } };
+    const body = JSON.parse(paused.out) as {
+      ok: boolean;
+      message: string;
+      state: { currentBeat: string };
+    };
     expect(body.ok).toBe(true);
     expect(body.message).toContain("What would you like to discuss?");
     expect(body.state.currentBeat).toBe("choose");

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(tutorial): Greptile 4/5 — refuse Back past close + Discuss hatch alias (#4981).** Once close has run, Back stops at close (no rewind to prove/change with a missing check command); `I have questions` pauses like Discuss. Tracking #4981.
 - Record approved scope for #5521 so Path B product work can pass scope checks (mint only).
 - Lifecycle gates honor typed plan.policy.deliveryBranch before master/main fallbacks (scope-provenance, evaluator-surface, verify:branch, pre-push). Tracking #5520.
 - Unpaid skip-CI seam for Windows Step 5 hang (#5526): one-cut --allow-skip-ci=5526 (later reuse needs --allow-unpaid-skip-ci=5526). Tracking #5526.
@@ -72,7 +73,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
 
 ### Fixed
-- **fix(tutorial): Greptile 4/5 — refuse Back past close + Discuss hatch alias (#4981).** Once close has run, Back stops at close (no rewind to prove/change with a missing check command); `I have questions` pauses like Discuss. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — suppress verify:ac after close on Back (#4981).** Once close has run, Back to prove-it does not re-emit `verify:ac` against the moved work file. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — close Back nulling + literal field expansion (#4981).** Remember close already ran so Back from wrap-up does not re-emit `scope:complete`; expand `{slots}` only in authored project templates, not in learner content or paths. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — shell-safe path quoting + protect completed leave (#4981).** Quote practice paths for the host shell (POSIX single quotes; Windows double quotes); refuse `tutorial:leave` for every completed sitting (including wrap-up). Tracking #4981.
