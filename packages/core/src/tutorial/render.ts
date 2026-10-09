@@ -179,16 +179,11 @@ export function activeWorkItemPath(workItemPath: string | null): string {
     .replace(/xbrief([/\\])pending\1/gi, "xbrief$1active$1");
 }
 
-/** Quote a path for shell command templates (spaces and quotes stay one argument). */
+/** Quote a path for shell command templates (spaces and expansions stay one literal argument). */
 export function shellQuotePath(value: string): string {
   if (value.length === 0) return value;
-  // Escape POSIX expansions inside double quotes so literal `$`, backticks, and `!` stay unchanged.
-  return `"${value
-    .replace(/\\/g, "\\\\")
-    .replace(/"/g, '\\"')
-    .replace(/\$/g, "\\$")
-    .replace(/`/g, "\\`")
-    .replace(/!/g, "\\!")}"`;
+  // POSIX single quotes preserve `$`, backticks, and `!`. Only `'` needs the '\'' breakout.
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 export function loadTutorial(repoRoot: string): {

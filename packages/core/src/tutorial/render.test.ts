@@ -145,13 +145,16 @@ describe("Directive Tutorial session messages (#4981)", () => {
 
   it("quotes work-file paths and rewrites Windows proposed paths to active", () => {
     expect(shellQuotePath("/tmp/My Practice/xbrief/proposed/signal.xbrief.json")).toBe(
-      '"/tmp/My Practice/xbrief/proposed/signal.xbrief.json"',
+      "'/tmp/My Practice/xbrief/proposed/signal.xbrief.json'",
     );
     expect(shellQuotePath("/tmp/$USER/xbrief/proposed/signal.xbrief.json")).toBe(
-      '"/tmp/\\$USER/xbrief/proposed/signal.xbrief.json"',
+      "'/tmp/$USER/xbrief/proposed/signal.xbrief.json'",
     );
-    expect(shellQuotePath("/tmp/`whoami`/xbrief/proposed/signal.xbrief.json")).toBe(
-      '"/tmp/\\`whoami\\`/xbrief/proposed/signal.xbrief.json"',
+    expect(shellQuotePath("/tmp/practice!/xbrief/proposed/signal.xbrief.json")).toBe(
+      "'/tmp/practice!/xbrief/proposed/signal.xbrief.json'",
+    );
+    expect(shellQuotePath("/tmp/it's/xbrief/proposed/signal.xbrief.json")).toBe(
+      `'/tmp/it'\\''s/xbrief/proposed/signal.xbrief.json'`,
     );
     expect(activeWorkItemPath("xbrief\\proposed\\signal.xbrief.json")).toBe(
       "xbrief\\active\\signal.xbrief.json",
@@ -164,12 +167,12 @@ describe("Directive Tutorial session messages (#4981)", () => {
     );
     const start = fillBeat(mustBeat("start"), withPath);
     expect(start.command).toContain(
-      'deft scope:promote -- "/tmp/My Practice/xbrief/proposed/signal.xbrief.json"',
+      "deft scope:promote -- '/tmp/My Practice/xbrief/proposed/signal.xbrief.json'",
     );
     expect(start.command).not.toMatch(/promote -- \/tmp\/My Practice\//);
     const close = fillBeat(mustBeat("close"), withPath);
     expect(close.command).toContain(
-      'deft scope:complete -- "/tmp/My Practice/xbrief/active/signal.xbrief.json"',
+      "deft scope:complete -- '/tmp/My Practice/xbrief/active/signal.xbrief.json'",
     );
   });
 });
