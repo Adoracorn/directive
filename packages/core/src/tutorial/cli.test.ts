@@ -80,6 +80,80 @@ describe("deft tutorial commands (#4981)", () => {
     expect(body.beatText).not.toContain("{name}");
   });
 
+  it("accepts displayed write/result menu labels, not only hyphen tokens", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    expect(run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    const example = run(projectRoot, prefs, ["advance", "--project", "Use the example", "--json"]);
+    expect(example.code).toBe(0);
+    expect(JSON.parse(example.out).state.content).toContain("Alex");
+    expect(run(projectRoot, prefs, ["advance", "--project", "No — change the plan"]).code).toBe(0);
+    expect(JSON.parse(run(projectRoot, prefs, ["inspect", "--json"]).out).state.content).toBeNull();
+    expect(run(projectRoot, prefs, ["advance", "--project", "Use the example"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(
+      run(projectRoot, prefs, [
+        "advance",
+        "--confirm",
+        "--work-item",
+        "xbrief/proposed/signal.xbrief.json",
+      ]).code,
+    ).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content-seen"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--check", "fail"]).code).toBe(0);
+    const retried = run(projectRoot, prefs, [
+      "advance",
+      "--project",
+      "Try again",
+      "--check",
+      "pass",
+      "--json",
+    ]);
+    expect(retried.code).toBe(0);
+    expect(JSON.parse(retried.out).state.checkPassed).toBe(true);
+  });
+
+  it("accepts displayed menu labels such as Use the example and Try again", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    expect(run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    const example = run(projectRoot, prefs, ["advance", "--project", "Use the example", "--json"]);
+    expect(example.code).toBe(0);
+    expect(JSON.parse(example.out).state.content).toContain("Alex");
+    expect(
+      run(projectRoot, prefs, ["advance", "--project", "No — change the plan", "--json"]).code,
+    ).toBe(0);
+    expect(JSON.parse(run(projectRoot, prefs, ["inspect", "--json"]).out).state.content).toBeNull();
+    expect(run(projectRoot, prefs, ["advance", "--project", "Use the example"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(
+      run(projectRoot, prefs, [
+        "advance",
+        "--confirm",
+        "--work-item",
+        "xbrief/proposed/signal.xbrief.json",
+      ]).code,
+    ).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content-seen"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--check", "fail"]).code).toBe(0);
+    const retried = run(projectRoot, prefs, [
+      "advance",
+      "--project",
+      "Try again",
+      "--check",
+      "pass",
+      "--json",
+    ]);
+    expect(retried.code).toBe(0);
+    expect(JSON.parse(retried.out).state.checkPassed).toBe(true);
+  });
+
   it("refuses to use the person's project as the sandbox", () => {
     const projectRoot = tempDir("deft-tutorial-cli-");
     const prefs = tempDir("deft-tutorial-prefs-");

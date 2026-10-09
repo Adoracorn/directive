@@ -263,12 +263,28 @@ function actionFrom(argv: readonly string[]): AdvanceAction {
   };
 }
 
+/** Normalize a menu label ("Use the example" → "use-the-example"). */
+function menuToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[—–]/g, "-")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function menuMatches(flag: string | undefined, ...aliases: string[]): boolean {
+  if (flag === undefined || flag.length === 0) return false;
+  const token = menuToken(flag);
+  return aliases.some((alias) => token === menuToken(alias));
+}
+
 function isDiscussPick(flag: string | undefined): boolean {
-  return flag === "discuss";
+  return menuMatches(flag, "discuss");
 }
 
 function isBackPick(flag: string | undefined): boolean {
-  return flag === "back";
+  return menuMatches(flag, "back");
 }
 
 function discussStep(state: Parameters<typeof leaveTutorial>[0]): TutorialStep {
@@ -428,7 +444,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         }
 
         const leavePick =
-          projectFlag === "leave" ||
+          menuMatches(projectFlag, "leave") ||
           (state.currentBeat === "choose" && projectFlag === "4") ||
           (state.currentBeat === "write" && !hasContent && projectFlag === "2") ||
           (state.currentBeat === "write" &&
@@ -451,11 +467,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
 
         // Write step: content first. 1 Use the example / free --content; Leave/Discuss/Back above.
         if (state.currentBeat === "write" && !hasContent) {
-          if (
-            projectFlag === "1" ||
-            projectFlag === "example" ||
-            projectFlag === "use-the-example"
-          ) {
+          if (menuMatches(projectFlag, "1", "example", "use-the-example", "use the example")) {
             const fields = projectFields(
               tutorial.projects,
               state.selectedProject,
@@ -480,7 +492,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
 
         // Write step: after content, Plan/Done menu — 1 Yes / 2 No — change the plan.
         if (state.currentBeat === "write" && hasContent && !state.planAccepted) {
-          if (projectFlag === "2" || projectFlag === "no") {
+          if (menuMatches(projectFlag, "2", "no", "no-change-the-plan", "no — change the plan")) {
             step = {
               ok: true,
               message: "Plan not accepted. Ask for new toy content.",
@@ -490,19 +502,19 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
             };
             break;
           }
-          if (projectFlag === "1" || projectFlag === "yes") {
+          if (menuMatches(projectFlag, "1", "yes")) {
             step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
             break;
           }
         }
 
         // Start: 1 Yes → confirm
-        if (state.currentBeat === "start" && (projectFlag === "1" || projectFlag === "yes")) {
+        if (state.currentBeat === "start" && menuMatches(projectFlag, "1", "yes")) {
           step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
           break;
         }
         // Change: 1 Go → content seen
-        if (state.currentBeat === "change" && (projectFlag === "1" || projectFlag === "go")) {
+        if (state.currentBeat === "change" && menuMatches(projectFlag, "1", "go")) {
           step = advanceTutorial(state, beats, { ...actionFrom(rest), contentSeen: true });
           break;
         }
@@ -510,7 +522,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         if (
           state.currentBeat === "result" &&
           state.checkPassed === true &&
-          (projectFlag === "1" || projectFlag === "continue" || projectFlag === "go")
+          menuMatches(projectFlag, "1", "continue", "go")
         ) {
           step = advanceTutorial(state, beats, { ...actionFrom(rest), confirm: true });
           break;
@@ -519,7 +531,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         if (
           state.currentBeat === "result" &&
           state.checkPassed === false &&
-          (projectFlag === "1" || projectFlag === "try-again" || projectFlag === "go")
+          menuMatches(projectFlag, "1", "try-again", "try again", "go")
         ) {
           const action = actionFrom(rest);
           if (action.check === "pass" || action.check === "fail") {
@@ -536,7 +548,7 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           break;
         }
         // Close: 1 Go → complete
-        if (state.currentBeat === "close" && (projectFlag === "1" || projectFlag === "go")) {
+        if (state.currentBeat === "close" && menuMatches(projectFlag, "1", "go")) {
           step = advanceTutorial(state, beats, { ...actionFrom(rest), complete: true });
           break;
         }

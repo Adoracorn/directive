@@ -12,7 +12,7 @@
     "ownedFilesChange": "index.html, postcard.test.mjs, and the test script in package.json",
     "testCommand": "npm test",
     "branch": "feat/postcard-shows-this-message",
-    "startCommand": "git switch -c {branch}\ndeft scope:promote -- {workItemPath}\ndeft scope:activate -- {workItemPath}",
+    "startCommand": "deft scope:promote -- {workItemPath}\ndeft scope:activate -- {workItemPath}\ngit switch -c {branch}",
     "verifyCommand": "deft verify:ac {activeWorkItemPath}",
     "completeCommand": "deft scope:complete -- {activeWorkItemPath} --non-delivery experiment_archived"
   }

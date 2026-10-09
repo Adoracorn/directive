@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
 
 ### Fixed
+- **fix(tutorial): Greptile 4/5 findings — accept displayed menu labels + lead with promote/activate (#4981).** Advance accepts the on-screen labels (Use the example, No — change the plan, Try again). Start commands promote and activate before creating the branch so practice work can close. Tracking #4981.
 - **fix(tutorial): Greptile P1 — Windows-safe link fixture for sandbox path compare (#4981).** Use a directory junction on Windows (or skip when links cannot be created) so the suite does not fail without symlink privilege. Tracking #4981.
 - **fix(tutorial): Greptile P1 — physical-path compare for sandbox Git roots (#4981).** Compare practice paths with `realpath` so macOS `/tmp` vs `/private/tmp` (and other directory links) are not refused as a foreign checkout. Tracking #4981.
 - **fix(tutorial): Greptile P1 — require a working Git root before accepting `.git` (#4981).** Do not treat a broken `.git` as a ready practice sandbox; init or refuse. Tracking #4981.
