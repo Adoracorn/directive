@@ -190,7 +190,17 @@ describe("deft tutorial commands (#4981)", () => {
     execFileSync("git", ["init", "-q"], { cwd: physical });
     const linkParent = tempDir("deft-tutorial-link-parent-");
     const linked = join(linkParent, "practice-link");
-    symlinkSync(physical, linked);
+    // Junctions on Windows do not need SeCreateSymbolicLinkPrivilege.
+    try {
+      if (process.platform === "win32") {
+        symlinkSync(physical, linked, "junction");
+      } else {
+        symlinkSync(physical, linked);
+      }
+    } catch {
+      // Host cannot create links — isolation still covered by other tests.
+      return;
+    }
     const started = run(projectRoot, prefs, [
       "start",
       "--repo",
