@@ -10,6 +10,7 @@ import {
   renderBeat,
   renderWiredSession,
   shellQuotePath,
+  shellQuotePathFor,
   wiredBeats,
 } from "./render.js";
 
@@ -144,17 +145,23 @@ describe("Directive Tutorial session messages (#4981)", () => {
   });
 
   it("quotes work-file paths and rewrites Windows proposed paths to active", () => {
-    expect(shellQuotePath("/tmp/My Practice/xbrief/proposed/signal.xbrief.json")).toBe(
+    expect(shellQuotePathFor("linux", "/tmp/My Practice/xbrief/proposed/signal.xbrief.json")).toBe(
       "'/tmp/My Practice/xbrief/proposed/signal.xbrief.json'",
     );
-    expect(shellQuotePath("/tmp/$USER/xbrief/proposed/signal.xbrief.json")).toBe(
+    expect(shellQuotePathFor("linux", "/tmp/$USER/xbrief/proposed/signal.xbrief.json")).toBe(
       "'/tmp/$USER/xbrief/proposed/signal.xbrief.json'",
     );
-    expect(shellQuotePath("/tmp/practice!/xbrief/proposed/signal.xbrief.json")).toBe(
+    expect(shellQuotePathFor("linux", "/tmp/practice!/xbrief/proposed/signal.xbrief.json")).toBe(
       "'/tmp/practice!/xbrief/proposed/signal.xbrief.json'",
     );
-    expect(shellQuotePath("/tmp/it's/xbrief/proposed/signal.xbrief.json")).toBe(
+    expect(shellQuotePathFor("linux", "/tmp/it's/xbrief/proposed/signal.xbrief.json")).toBe(
       `'/tmp/it'\\''s/xbrief/proposed/signal.xbrief.json'`,
+    );
+    expect(
+      shellQuotePathFor("win32", String.raw`C:\My Practice\xbrief\proposed\signal.xbrief.json`),
+    ).toBe(String.raw`"C:\My Practice\xbrief\proposed\signal.xbrief.json"`);
+    expect(shellQuotePathFor("win32", String.raw`C:\say "hi"\signal.xbrief.json`)).toBe(
+      String.raw`"C:\say ""hi""\signal.xbrief.json"`,
     );
     expect(activeWorkItemPath("xbrief\\proposed\\signal.xbrief.json")).toBe(
       "xbrief\\active\\signal.xbrief.json",
@@ -166,13 +173,11 @@ describe("Directive Tutorial session messages (#4981)", () => {
       "/tmp/My Practice/xbrief/proposed/signal.xbrief.json",
     );
     const start = fillBeat(mustBeat("start"), withPath);
-    expect(start.command).toContain(
-      "deft scope:promote -- '/tmp/My Practice/xbrief/proposed/signal.xbrief.json'",
-    );
+    const quoted = shellQuotePath("/tmp/My Practice/xbrief/proposed/signal.xbrief.json");
+    expect(start.command).toContain(`deft scope:promote -- ${quoted}`);
     expect(start.command).not.toMatch(/promote -- \/tmp\/My Practice\//);
     const close = fillBeat(mustBeat("close"), withPath);
-    expect(close.command).toContain(
-      "deft scope:complete -- '/tmp/My Practice/xbrief/active/signal.xbrief.json'",
-    );
+    const activeQuoted = shellQuotePath("/tmp/My Practice/xbrief/active/signal.xbrief.json");
+    expect(close.command).toContain(`deft scope:complete -- ${activeQuoted}`);
   });
 });

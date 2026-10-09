@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { type TutorialIo, tutorialMain } from "./cli.js";
+import { shellQuotePath } from "./render.js";
 
 const frameworkRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const temps: string[] = [];
@@ -351,17 +352,15 @@ describe("deft tutorial commands (#4981)", () => {
     expect(planned.code).toBe(0);
     const startStep = run(projectRoot, prefs, ["inspect", "--json"]);
     const startBody = JSON.parse(startStep.out) as { command: string | null };
-    expect(startBody.command).toContain(
-      "deft scope:promote -- 'xbrief/proposed/signal.xbrief.json'",
-    );
-    expect(startBody.command).toContain(
-      "deft scope:activate -- 'xbrief/proposed/signal.xbrief.json'",
-    );
+    const proposed = shellQuotePath("xbrief/proposed/signal.xbrief.json");
+    const active = shellQuotePath("xbrief/active/signal.xbrief.json");
+    expect(startBody.command).toContain(`deft scope:promote -- ${proposed}`);
+    expect(startBody.command).toContain(`deft scope:activate -- ${proposed}`);
     expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--content-seen"]).code).toBe(0);
     const prove = run(projectRoot, prefs, ["inspect", "--json"]);
     const proveBody = JSON.parse(prove.out) as { command: string | null };
-    expect(proveBody.command).toContain("deft verify:ac 'xbrief/active/signal.xbrief.json'");
+    expect(proveBody.command).toContain(`deft verify:ac ${active}`);
     expect(proveBody.command).not.toContain("<active-work-file>");
   });
 

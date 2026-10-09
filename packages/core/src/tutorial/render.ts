@@ -179,11 +179,20 @@ export function activeWorkItemPath(workItemPath: string | null): string {
     .replace(/xbrief([/\\])pending\1/gi, "xbrief$1active$1");
 }
 
-/** Quote a path for shell command templates (spaces and expansions stay one literal argument). */
-export function shellQuotePath(value: string): string {
+/** Quote a path for a specific shell family (tests inject `win32` vs POSIX). */
+export function shellQuotePathFor(platform: NodeJS.Platform, value: string): string {
   if (value.length === 0) return value;
-  // POSIX single quotes preserve `$`, backticks, and `!`. Only `'` needs the '\'' breakout.
+  if (platform === "win32") {
+    // cmd.exe / PowerShell: double quotes; embed `"` as `""`.
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  // POSIX: single quotes preserve `$`, backticks, and `!`. Only `'` needs '\''.
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Quote a path for shell command templates on this host. */
+export function shellQuotePath(value: string): string {
+  return shellQuotePathFor(process.platform, value);
 }
 
 export function loadTutorial(repoRoot: string): {
