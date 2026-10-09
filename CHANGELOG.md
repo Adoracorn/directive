@@ -20,22 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Earlier design reviews no longer affect the current review when comments arrive newest first (#5488).
 - Leftover-complete #5492 after product #5510.
 - Leftover-complete #5478 after product #5509.
-- Keep active #4961 Path B activation (membership fence).
-- Keep active Path B activation after rebase (PR #5495).
-- Leftover-complete #5488 after product #5498.
-
-### Added
-- **Design-critique later-arc closed-findings (#5489).** Later arcs on the same ticket no longer re-litigate findings the parent already closed: critics demote authorized restatements, and reopen needs evidence. Adjacent-polish hydra remainder deferred to #5493. Tracking #5489. Refs Prefer-A Bound 6065006497.
-
-### Fixed
 - Leftover-complete #5489 after product #5497.
-- Approved-scope mint for #5492 Prefer-A Bound Path B file_scope (skills-pack).
-- Approved-scope mint for #5488 Prefer-A Bound Path B file_scope (RULE-MAP + skills-pack).
-- Approved-scope mint for #5489 Prefer-A Bound Path B file_scope (RULE-MAP).
-- Remint approved-scope for #4892 Path B: nonempty module_boundary (ADR-003 Continuity cite + cohesion_exemption).
-- Approved-scope mint for #5364 Prefer-A Bound Path B file_scope (membership fence).
+- Keep active #4961 Path B activation (membership fence).
+- **Path B activation survives rebase (#5495).** After rebasing onto master, the approved brief stays active so the stacked product PR can still use its declared file list. Tracking #5495.
+- **Stalled Claude critics (#5478).** Adds checks to detect stalled Claude critics and stop them and their child processes before replacement. A successful launch check does not prove that a critic will finish; reliable completion still needs a later successful run. The separate Windows command-length issue remains tracked in #5492. Tracking #5478. Refs Prefer-A Bound 6065703308.
+- **Human-approved Path B scopes for #5478 / #5492 / #5488 / #5489 / #5364.** Later product PRs can use these allowlists to pass scope membership without rewriting product behavior. Tracking those issues.
+- **Remint approved-scope for #4892 Path B.** The stacked product PR can pass scope checks after this remint refreshes the approved tip and nonempty module boundary. Tracking #4892.
 
 ### Added
+- **Active #4892 Prefer-A Bound brief for Path B.** Lands the approved active brief and file list so a later product PR can implement Continuity ADR-003 docs without a scope-membership block. Leaves metadata.productPullRequest unset on this activation land. Tracking #4892.
+- **Design-critique later-arc closed-findings (#5489).** Later arcs on the same ticket no longer re-litigate findings the parent already closed: critics demote authorized restatements, and reopen needs evidence. Adjacent-polish hydra remainder deferred to #5493. Tracking #5489. Refs Prefer-A Bound 6065006497.
 
 ### Changed
 
