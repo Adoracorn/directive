@@ -152,6 +152,31 @@ export function tutorialStatePath(
   return join(dirname(resolved.path), TUTORIAL_STATE_FILENAME);
 }
 
+/**
+ * Tutorial progress is personal (#4981 / PR #5464 Greptile P1).
+ * Prefer DEFT_USER_PATH / platform USER.md and skip cwd workspace-local
+ * `.deft/USER.md`, so practice-sandbox cwd does not fork tutorial-state.json.
+ */
+export function tutorialStatePathPersonal(
+  options: {
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+  } = {},
+): string {
+  const env = options.env ?? process.env;
+  const override = env.DEFT_USER_PATH?.trim();
+  if (override) {
+    return join(dirname(resolve(override)), TUTORIAL_STATE_FILENAME);
+  }
+  const resolved = resolveUserMdPath({
+    ...options,
+    // Sentinel with no USER.md → platform / default rungs only.
+    projectRoot: join(options.homeDir ?? ".", "__deft_tutorial_no_workspace__"),
+  });
+  return join(dirname(resolved.path), TUTORIAL_STATE_FILENAME);
+}
+
 export function loadTutorialState(
   options: {
     projectRoot?: string;

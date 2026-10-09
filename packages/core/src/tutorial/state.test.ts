@@ -16,6 +16,7 @@ import {
   skipBeat,
   skipOffer,
   startTutorial,
+  tutorialStatePathPersonal,
   type TutorialBeatRef,
   type TutorialState,
 } from "./state.js";
@@ -77,6 +78,16 @@ describe("Directive Tutorial state (#4981)", () => {
     const resumed = resumeTutorial(loaded);
     expect(resumed.state.currentBeat).toBe("write");
     expect(resumed.state.selectedProject).toBe("signal");
+  });
+
+  it("personal state path ignores cwd workspace-local USER.md (#5464)", () => {
+    const home = prefsHome();
+    const personal = tutorialStatePathPersonal({
+      env: {},
+      platform: "win32",
+      homeDir: home,
+    });
+    expect(personal).toBe(join(home, "AppData", "Roaming", "deft", "tutorial-state.json"));
   });
 
   it("keeps a failed check on prove-it and advances only after continue on a pass", () => {

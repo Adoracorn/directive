@@ -23,6 +23,7 @@ import {
   skipBeat,
   skipOffer,
   startTutorial,
+  tutorialStatePathPersonal,
   type TutorialStep,
 } from "./state.js";
 
@@ -307,13 +308,23 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
     return 1;
   }
 
-  const projectRoot = resolve(flagValue(rest, "--project-root") ?? ".");
+  const projectRootFlag = flagValue(rest, "--project-root");
+  const projectRoot = resolve(projectRootFlag ?? ".");
   const frameworkRoot = resolve(flagValue(rest, "--framework-root") ?? defaultFrameworkRoot());
   const prefsHome = flagValue(rest, "--prefs-home");
+  // Personal prefs by default so sandbox cwd cannot fork tutorial-state (#5464 P1).
+  // Explicit --prefs-home / --project-root keep the prior binding.
   const statePath =
-    prefsHome !== undefined ? join(resolve(prefsHome), "tutorial-state.json") : undefined;
+    prefsHome !== undefined
+      ? join(resolve(prefsHome), "tutorial-state.json")
+      : projectRootFlag !== undefined
+        ? undefined
+        : tutorialStatePathPersonal();
   const asJson = hasFlag(rest, "--json");
-  const stateOpts = { projectRoot, path: statePath };
+  const stateOpts =
+    statePath !== undefined
+      ? { projectRoot, path: statePath }
+      : { projectRoot };
 
   let tutorial: ReturnType<typeof loadTutorial>;
   try {

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **fix(tutorial): keep progress when practice cwd changes (#4981 / #5464).** Tutorial state stays next to personal USER.md prefs so sandbox practice commands do not lose the saved run. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — stamp evidence before close + refuse Back when completed (#4981).** Close runs `scope:stamp-evidence` before `scope:complete --non-delivery`; Back refuses after status is completed so finished progress cannot reopen. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — refuse Back past close + Discuss hatch alias (#4981).** Once close has run, Back stops at close (no rewind to prove/change with a missing check command); `I have questions` pauses like Discuss. Tracking #4981.
 - Path B activation for #5521 membership fence.
