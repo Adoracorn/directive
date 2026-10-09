@@ -39,6 +39,11 @@ export interface TutorialState {
    * commands after the work file left proposed/.
    */
   readonly startLifecycleDone: boolean;
+  /**
+   * Close step (`scope:complete`) already ran for this sitting. Survives Back
+   * to `close` so the agent does not re-run complete against a moved file.
+   */
+  readonly closeLifecycleDone: boolean;
   /** Write step: Plan/Done accepted after toy content is collected. */
   readonly planAccepted: boolean;
   readonly planConfirmed: boolean;
@@ -80,6 +85,7 @@ export function emptyTutorialState(): TutorialState {
     repoPath: null,
     checkPassed: null,
     startLifecycleDone: false,
+    closeLifecycleDone: false,
     planAccepted: false,
     planConfirmed: false,
     contentSeen: false,
@@ -219,6 +225,7 @@ function normalizeState(raw: Partial<TutorialState> & Record<string, unknown>): 
     repoPath: typeof raw.repoPath === "string" ? raw.repoPath : null,
     checkPassed: raw.checkPassed === true ? true : raw.checkPassed === false ? false : null,
     startLifecycleDone: raw.startLifecycleDone === true,
+    closeLifecycleDone: raw.closeLifecycleDone === true,
     planAccepted: raw.planAccepted === true,
     planConfirmed: raw.planConfirmed === true,
     contentSeen: raw.contentSeen === true || raw.lineSeen === true,
@@ -300,6 +307,7 @@ function clearPlanAndLater(state: TutorialState): TutorialState {
     contentSeen: false,
     checkPassed: null,
     startLifecycleDone: false,
+    closeLifecycleDone: false,
   };
 }
 
@@ -334,6 +342,7 @@ export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
     next = { ...next, checkPassed: null };
   }
   // Rewinding into choose or write must not keep a stale plan / work file.
+  // clearPlanAndLater also clears closeLifecycleDone (same as startLifecycleDone).
   if (prior === "choose" || prior === "write") {
     next = clearPlanAndLater(next);
   }
@@ -343,7 +352,9 @@ export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
   const message =
     prior === "start" && next.startLifecycleDone
       ? "Moved back one step. Lifecycle commands already ran — do not re-run them. Read it aloud."
-      : "Moved back one step. Read it aloud.";
+      : prior === "close" && next.closeLifecycleDone
+        ? "Moved back one step. Close already ran — do not re-run it. Read it aloud."
+        : "Moved back one step. Read it aloud.";
   return step(true, message, next, prior);
 }
 
@@ -643,7 +654,11 @@ function gateAdvance(
       if (action.complete !== true && action.confirm !== true) {
         return { ok: false, message: "Confirm complete before this step can move on." };
       }
-      return { ok: true, message: "Work closed.", state };
+      return {
+        ok: true,
+        message: state.closeLifecycleDone ? "Work closed. Complete already ran." : "Work closed.",
+        state: { ...state, closeLifecycleDone: true },
+      };
     }
     case "leave": {
       const closedProperly = state.checkPassed === true && state.completedBeats.includes("close");

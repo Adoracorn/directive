@@ -257,6 +257,31 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(toWrite.state.startLifecycleDone).toBe(false);
   });
 
+  it("keeps closeLifecycleDone when Back returns to close so complete is not repeated", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "signal" }).state;
+    state = advanceTutorial(state, beats, { content: "Alex — on the bridge." }).state;
+    state = advanceTutorial(state, beats, {
+      confirm: true,
+      workItemPath: "xbrief/proposed/signal.xbrief.json",
+    }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { contentSeen: true }).state;
+    state = advanceTutorial(state, beats, { check: "pass" }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    expect(state.currentBeat).toBe("close");
+    expect(state.closeLifecycleDone).toBe(false);
+
+    state = advanceTutorial(state, beats, { complete: true }).state;
+    expect(state.currentBeat).toBe("leave");
+    expect(state.closeLifecycleDone).toBe(true);
+
+    const backed = backBeat(state, beats);
+    expect(backed.state.currentBeat).toBe("close");
+    expect(backed.state.closeLifecycleDone).toBe(true);
+    expect(backed.message).toContain("Close already ran");
+  });
+
   it("clears prove-it results when Back returns to change", () => {
     let state = begin();
     state = advanceTutorial(state, beats, { project: "signal" }).state;

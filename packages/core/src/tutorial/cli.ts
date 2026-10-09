@@ -594,9 +594,12 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           checkVerdict: step.beatId === "result" && step.state.checkPassed !== null,
           checkPassed: step.state.checkPassed,
         });
-  // After start lifecycle ran once, do not re-emit promote/activate commands on Back.
+  // After start/close lifecycle ran once, do not re-emit those commands on Back.
   const command =
-    step.beatId === "start" && step.state.startLifecycleDone ? null : (filled?.command ?? null);
+    (step.beatId === "start" && step.state.startLifecycleDone) ||
+    (step.beatId === "close" && step.state.closeLifecycleDone)
+      ? null
+      : (filled?.command ?? null);
 
   if (asJson) {
     io.writeOut(payload(step, beatText, command));

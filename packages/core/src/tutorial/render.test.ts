@@ -144,6 +144,20 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(messages[6]).toContain("Step 7 of 7 — Wrap up.");
   });
 
+  it("does not expand slots inside learner content or work-file paths", () => {
+    const withLiteralSlots = projectFields(
+      projects,
+      "signal",
+      "Say {name} aloud",
+      "/tmp/{name}/xbrief/proposed/signal.xbrief.json",
+    );
+    expect(withLiteralSlots.content).toBe("Say {name} aloud");
+    expect(withLiteralSlots.workItemPath).toContain("{name}");
+    expect(withLiteralSlots.workItemPath).not.toContain("Signal");
+    // Authored templates still expand {content}; the literal's `{name}` stays literal.
+    expect(withLiteralSlots.workSentence).toBe("Signal prints this status line: Say {name} aloud");
+  });
+
   it("quotes work-file paths and rewrites Windows proposed paths to active", () => {
     expect(shellQuotePathFor("linux", "/tmp/My Practice/xbrief/proposed/signal.xbrief.json")).toBe(
       "'/tmp/My Practice/xbrief/proposed/signal.xbrief.json'",

@@ -335,6 +335,43 @@ describe("deft tutorial commands (#4981)", () => {
     expect(JSON.parse(inspect.out).command).toBeNull();
   });
 
+  it("does not re-emit close complete after Back from leave", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    expect(run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    expect(
+      run(projectRoot, prefs, [
+        "advance",
+        "--confirm",
+        "--work-item",
+        "xbrief/proposed/signal.xbrief.json",
+      ]).code,
+    ).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--content-seen"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--check", "pass"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    const onClose = run(projectRoot, prefs, ["inspect", "--json"]);
+    expect(JSON.parse(onClose.out).command).toContain("scope:complete");
+    expect(run(projectRoot, prefs, ["advance", "--complete"]).code).toBe(0);
+    const backStep = run(projectRoot, prefs, ["advance", "--project", "back", "--json"]);
+    expect(backStep.code).toBe(0);
+    const backBody = JSON.parse(backStep.out) as {
+      command: string | null;
+      state: { currentBeat: string; closeLifecycleDone: boolean };
+      message: string;
+    };
+    expect(backBody.state.currentBeat).toBe("close");
+    expect(backBody.state.closeLifecycleDone).toBe(true);
+    expect(backBody.command).toBeNull();
+    expect(backBody.message).toContain("Close already ran");
+    const inspect = run(projectRoot, prefs, ["inspect", "--json"]);
+    expect(JSON.parse(inspect.out).command).toBeNull();
+  });
+
   it("fills promote/activate and active work-file paths into start/verify commands", () => {
     const projectRoot = tempDir("deft-tutorial-cli-");
     const prefs = tempDir("deft-tutorial-prefs-");

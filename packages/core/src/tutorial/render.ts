@@ -125,16 +125,24 @@ export function fillSlots(text: string, fields: Readonly<Record<string, string>>
   });
 }
 
-/** Expand nested `{content}` (and other) slots inside field values once. */
-function expandFieldValues(fields: Readonly<Record<string, string>>): Record<string, string> {
+/**
+ * Expand `{slots}` inside authored project templates only.
+ * `literals` (learner content / paths) are available for substitution but are
+ * never themselves treated as templates — a content value of `{name}` stays `{name}`.
+ */
+function expandAuthoredFields(
+  fields: Readonly<Record<string, string>>,
+  literals: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const lookup = { ...fields, ...literals };
   const expanded: Record<string, string> = {};
   for (const [key, value] of Object.entries(fields)) {
     expanded[key] = value.replace(FIELD_SLOT, (_slot, name: string) => {
-      const inner = fields[name];
+      const inner = lookup[name];
       return inner === undefined ? `{${name}}` : inner;
     });
   }
-  return expanded;
+  return { ...expanded, ...literals };
 }
 
 export function fillBeat(
@@ -223,8 +231,7 @@ export function projectFields(
   workItemPath: string | null = null,
 ): Readonly<Record<string, string>> {
   const withPaths = (fields: Readonly<Record<string, string>>): Record<string, string> =>
-    expandFieldValues({
-      ...fields,
+    expandAuthoredFields(fields, {
       content: content ?? "",
       workItemPath: shellQuotePath(workItemPath ?? ""),
       activeWorkItemPath: shellQuotePath(activeWorkItemPath(workItemPath)),

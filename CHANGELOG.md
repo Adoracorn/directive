@@ -70,6 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
 
 ### Fixed
+- **fix(tutorial): Greptile 4/5 — close Back nulling + literal field expansion (#4981).** Remember close already ran so Back from wrap-up does not re-emit `scope:complete`; expand `{slots}` only in authored project templates, not in learner content or paths. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — shell-safe path quoting + protect completed leave (#4981).** Quote practice paths for the host shell (POSIX single quotes; Windows double quotes); refuse `tutorial:leave` for every completed sitting (including wrap-up). Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — put promote/activate/complete in shared beats (#4981).** Practice lifecycle commands live in `beats.json` (promote, activate, branch, verify, non-delivery complete) so close is visible without per-project command fields. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 findings — accept displayed menu labels + lead with promote/activate (#4981).** Advance accepts the on-screen labels (Use the example, No — change the plan, Try again). Start commands promote and activate before creating the branch so practice work can close. Tracking #4981.
