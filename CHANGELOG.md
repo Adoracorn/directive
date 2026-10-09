@@ -17,11 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Record the approved scope for #5364 so its product changes can pass scope checks.
 - Path B remint approved-scope for #5364 Bound call-site inventory (sync-default, launch, origin-active-brief).
+- **Unsafe deliveryBranch fetch argv (#5364).** Rejects hostile or empty delivery-branch names before `git fetch` on the core policy helpers, generation-gate, and finalize-owed path; a missing PROJECT-DEFINITION with a usable git default still proceeds. Remaining Bound call sites (launch, sync-default, origin-active-brief, delivery-evidence) stay on a follow-up under the #4956 production allowance. Tracking #5364.
+- **Unsafe deliveryBranch fetch argv (#5364).** Rejects hostile or empty delivery-branch names before `git fetch` on the core policy helpers and generation-gate; a missing PROJECT-DEFINITION with a usable git default still proceeds. Follow-up #5516 covers finalize-owed plus remaining Bound inventory (launch, sync-default, origin-active-brief, delivery-evidence) under the #4956 production allowance. Tracking #5364. Refs #5516.
 - Leftover-complete #5488 after product #5498.
 - Design-critique ship-ready LGTM move-forward completion (#5488). Tracking #5488.
 - Earlier design reviews no longer affect the current review when comments arrive newest first (#5488).
 - Leftover-complete #5492 after product #5510.
 - Leftover-complete #5478 after product #5509.
+- Keep active #4961 Path B activation (membership fence).
+- Keep active Path B activation after rebase (PR #5495).
+- Leftover-complete #5488 after product #5498.
+
+### Added
+- **Design-critique later-arc closed-findings (#5489).** Later arcs on the same ticket no longer re-litigate findings the parent already closed: critics demote authorized restatements, and reopen needs evidence. Adjacent-polish hydra remainder deferred to #5493. Tracking #5489. Refs Prefer-A Bound 6065006497.
+
+### Fixed
 - Leftover-complete #5489 after product #5497.
 - Keep active #4961 Path B activation (membership fence).
 - **Path B activation survives rebase (#5495).** After rebasing onto master, the approved brief stays active so the stacked product PR can still use its declared file list. Tracking #5495.

@@ -14,7 +14,11 @@ import {
   type GitExecFn,
   type GitExecResult,
 } from "../init-deposit/update-git-preflight.js";
-import { resolveDeliveryBranch } from "../policy/delivery-branch.js";
+import {
+  assertSafeBranchName,
+  privateDestFetchArgv,
+  resolveDeliveryBranch,
+} from "../policy/delivery-branch.js";
 import {
   inspectLocalGeneration,
   type LocalGenerationInspection,
@@ -154,18 +158,37 @@ function deliveryTipRef(runId: string): string {
   return `refs/deft/update/${runId}/delivery-tip`;
 }
 
-export function generationFetchArgs(remote: string, branch: string, runId: string): string[] {
-  return [
-    "--no-optional-locks",
-    "fetch",
-    "--no-tags",
-    "--no-recurse-submodules",
-    "--no-write-fetch-head",
-    "--no-auto-maintenance",
-    "--refmap=",
-    remote,
-    `+refs/heads/${branch}:${deliveryTipRef(runId)}`,
-  ];
+export function generationFetchArgs(
+  remote: string,
+  branch: string,
+  runId: string,
+): { ok: true; argv: string[] } | { ok: false; error: string } {
+  const safe = assertSafeBranchName(branch, "deliveryBranch");
+  if (!safe.ok) {
+    return safe;
+  }
+  const destRef = deliveryTipRef(runId);
+  // Gate via privateDestFetchArgv, then rebuild with generation lock/refmap
+  // options and forced (`+`) tip update (#5364 limbs 3–4).
+  const gated = privateDestFetchArgv(remote, safe.branch, destRef);
+  if (!gated.ok) {
+    return gated;
+  }
+  return {
+    ok: true,
+    argv: [
+      "--no-optional-locks",
+      "fetch",
+      "--no-tags",
+      "--no-recurse-submodules",
+      "--no-write-fetch-head",
+      "--no-auto-maintenance",
+      "--refmap=",
+      remote,
+      "--",
+      `+refs/heads/${safe.branch}:${destRef}`,
+    ],
+  };
 }
 
 function deletePerRunRef(execGit: GitExecFn, projectDir: string, ref: string): void {
@@ -260,7 +283,18 @@ export function pinDeliveryTipOid(input: PinDeliveryTipInput): PinDeliveryTipRes
   const execGit = input.execGit ?? defaultGitExec;
   const runId = input.runId ?? randomUUID();
   const ref = deliveryTipRef(runId);
-  const fetchArgs = generationFetchArgs(input.remote, input.branch, runId);
+  const fetchArgsResult = generationFetchArgs(input.remote, input.branch, runId);
+  if (!fetchArgsResult.ok) {
+    return {
+      ok: false,
+      runId,
+      ref,
+      fetchArgs: [],
+      status: 1,
+      stderr: fetchArgsResult.error,
+    };
+  }
+  const fetchArgs = fetchArgsResult.argv;
   const fetch = execGit(fetchArgs, gitCwd(input.projectDir));
   if (fetch.status) {
     deletePerRunRef(execGit, input.projectDir, ref);
@@ -365,8 +399,12 @@ function lsRemoteAssertsAbsence(
   remote: string,
   branch: string,
 ): boolean {
+  const safe = assertSafeBranchName(branch, "deliveryBranch");
+  if (!safe.ok) {
+    return false;
+  }
   const listed = execGit(
-    ["--no-optional-locks", "ls-remote", remote, `refs/heads/${branch}`],
+    ["--no-optional-locks", "ls-remote", "--", remote, `refs/heads/${safe.branch}`],
     gitCwd(projectDir),
   );
   return !listed.status && !listed.stdout.trim().length;
@@ -465,6 +503,18 @@ function resolveTipState(input: {
     return { tip: { kind: "no-remote" } };
   }
   const delivery = resolveDeliveryBranch(input.projectDir);
+  // Hard refuse only when the branch is empty (typed unsafe name). Soft errors
+  // such as missing PROJECT-DEFINITION with a usable git-default / fallback
+  // branch must still classify tip state so first-time init and #4120 R3 work
+  // (#5364 Greptile P1).
+  if (delivery.branch.length === 0) {
+    return {
+      tip: {
+        kind: "remote-configured-unreadable",
+        detail: delivery.error ?? "delivery branch refused",
+      },
+    };
+  }
   const remote = pickFetchRemote(remotes.remotes);
   const pin = pinDeliveryTipOid({
     projectDir: input.projectDir,
