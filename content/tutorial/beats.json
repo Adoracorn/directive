@@ -43,7 +43,7 @@
       ],
       "caveat": "Saying yes starts the work. This practice project stays on this machine — no GitHub push and no pull request.",
       "output": "",
-      "command": "{startCommand}",
+      "command": "deft scope:promote -- {workItemPath}\ndeft scope:activate -- {workItemPath}\ngit switch -c {branch}",
       "next": "Ready to confirm and start?\n\n1. Yes\n2. Leave\n3. Discuss\n4. Back"
     },
     {
@@ -73,7 +73,7 @@
       ],
       "caveat": "A green local test only means your own test passed. The acceptance check is separate.",
       "output": "",
-      "command": "{verifyCommand}",
+      "command": "deft verify:ac {activeWorkItemPath}",
       "next": "Run the acceptance check?\n\n1. Go\n2. Leave\n3. Discuss\n4. Back",
       "nextAfterCheckPass": "The acceptance check verified.\n\n1. Continue\n2. Leave\n3. Discuss\n4. Back",
       "nextAfterCheckFail": "The acceptance check did not verify. Stay on this step, fix the mismatch, and run the same check again.\n\n1. Try again\n2. Leave\n3. Discuss\n4. Back"
@@ -90,7 +90,7 @@
       ],
       "caveat": "",
       "output": "",
-      "command": "{completeCommand}",
+      "command": "deft scope:complete -- {activeWorkItemPath} --non-delivery experiment_archived",
       "next": "Complete the work item?\n\n1. Go\n2. Leave\n3. Discuss\n4. Back"
     },
     {
