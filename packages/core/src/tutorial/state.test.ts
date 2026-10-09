@@ -226,6 +226,31 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(backed.state.content).toBeNull();
   });
 
+  it("keeps startLifecycleDone when Back returns to start so commands are not repeated", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "signal" }).state;
+    state = advanceTutorial(state, beats, { content: "Alex — on the bridge." }).state;
+    state = advanceTutorial(state, beats, {
+      confirm: true,
+      workItemPath: "xbrief/proposed/signal.xbrief.json",
+    }).state;
+    expect(state.currentBeat).toBe("start");
+    expect(state.startLifecycleDone).toBe(false);
+
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    expect(state.currentBeat).toBe("change");
+    expect(state.startLifecycleDone).toBe(true);
+
+    const backed = backBeat(state, beats);
+    expect(backed.state.currentBeat).toBe("start");
+    expect(backed.state.startLifecycleDone).toBe(true);
+    expect(backed.message).toContain("do not re-run");
+
+    const toWrite = backBeat(backed.state, beats);
+    expect(toWrite.state.currentBeat).toBe("write");
+    expect(toWrite.state.startLifecycleDone).toBe(false);
+  });
+
   it("clears prove-it results when Back returns to change", () => {
     let state = begin();
     state = advanceTutorial(state, beats, { project: "signal" }).state;

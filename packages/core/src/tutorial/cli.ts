@@ -4,7 +4,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -124,6 +124,18 @@ function disposableRepoError(repo: string, projectRoot: string): string | null {
   return null;
 }
 
+function initGitRepo(repo: string): { ok: true } | { ok: false; message: string } {
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: repo });
+    return { ok: true };
+  } catch (initErr: unknown) {
+    return {
+      ok: false,
+      message: initErr instanceof Error ? initErr.message : String(initErr),
+    };
+  }
+}
+
 function ensureRepo(
   projectRoot: string,
   requested: string | undefined,
@@ -133,6 +145,33 @@ function ensureRepo(
     const repo = resolve(requested);
     const err = disposableRepoError(repo, projectRoot);
     if (err !== null) return { ok: false, message: err };
+
+    if (existsSync(repo)) {
+      try {
+        if (!statSync(repo).isDirectory()) {
+          return { ok: false, message: `Sandbox path is not a directory: ${repo}` };
+        }
+      } catch (statErr: unknown) {
+        return {
+          ok: false,
+          message: statErr instanceof Error ? statErr.message : String(statErr),
+        };
+      }
+    } else {
+      try {
+        mkdirSync(repo, { recursive: true });
+      } catch (mkdirErr: unknown) {
+        return {
+          ok: false,
+          message: mkdirErr instanceof Error ? mkdirErr.message : String(mkdirErr),
+        };
+      }
+    }
+
+    if (gitRoot(repo) === null) {
+      const inited = initGitRepo(repo);
+      if (!inited.ok) return { ok: false, message: inited.message };
+    }
     return { ok: true, repo };
   }
   const prefix = projectId ? `${projectId}-` : "tutorial-";
@@ -142,16 +181,12 @@ function ensureRepo(
     rmSync(repo, { recursive: true, force: true });
     return { ok: false, message: err };
   }
-  try {
-    execFileSync("git", ["init", "-q"], { cwd: repo });
-    return { ok: true, repo };
-  } catch (initErr: unknown) {
+  const inited = initGitRepo(repo);
+  if (!inited.ok) {
     rmSync(repo, { recursive: true, force: true });
-    return {
-      ok: false,
-      message: initErr instanceof Error ? initErr.message : String(initErr),
-    };
+    return { ok: false, message: inited.message };
   }
+  return { ok: true, repo };
 }
 
 function beatById(beats: readonly TutorialBeat[], id: string): TutorialBeat | undefined {
@@ -475,7 +510,9 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           checkVerdict: step.beatId === "result" && step.state.checkPassed !== null,
           checkPassed: step.state.checkPassed,
         });
-  const command = filled?.command ?? null;
+  // After start lifecycle ran once, do not re-emit promote/activate commands on Back.
+  const command =
+    step.beatId === "start" && step.state.startLifecycleDone ? null : (filled?.command ?? null);
 
   if (asJson) {
     io.writeOut(payload(step, beatText, command));

@@ -3,17 +3,17 @@
     "version": "0.8",
     "description": "Directive Tutorial: first-run offer after Name, menu of sandbox projects, preferences progress, shared teaching beats, glossary hook.",
     "created": "2026-09-25T17:20:00Z",
-    "updated": "2026-10-05T16:47:37Z"
+    "updated": "2026-10-09T16:12:45Z"
   },
   "plan": {
     "id": "4981-directive-tutorial",
-    "title": "Directive Tutorial \u2014 first-run menu, preferences progress, shared beats",
+    "title": "Directive Tutorial — first-run menu, preferences progress, shared beats",
     "status": "running",
     "narratives": {
       "Description": "Ship the Directive Tutorial inside Directive. After the person first saves their Name in user preferences, offer an interactive walkthrough. They pick one of three fun controlled practice projects, learn lifecycle, main workflow, and language by doing, and can skip or re-run anytime. Progress is an object in user preferences (operator-scoped). Practice runs in a disposable local sandbox, not the real product repo. Version 1 does not push to GitHub or open a pull request. A wiki/doc site is out of scope.",
       "Offer": "Trigger the automatic offer when Name is first persisted in USER.md / user preferences and tutorial status is still not_started. Menu choices: Start tutorial, Skip for now, Discuss, Back. Do not wait for project definition or the specification interview. Do not re-ask Name or preference questions inside the tutorial. Skip records skipped and continues normal setup. An explicit tutorial command still works after skip or complete.",
-      "Menu": "v1 menu is locked to three options with the same 7 shared steps: Signal (signal) \u2014 tiny CLI that prints a personal status line; Postcard (postcard) \u2014 one-page local site that shows a short message; Echo (echo) \u2014 mini bot that answers one question with a chosen reply. Each runs in a disposable local sandbox sized for one sitting.",
-      "Flow": "Shared learner path is Step 1\u20137 of 7 for every menu option. (1) Welcome and choose Signal/Postcard/Echo and open the sandbox; Back on step 1 is labeled not available yet. (2) Write it down: confirm plan and acceptance; write the proposed work file (learner text does not show advance flags). (3) Confirm and start: promote then activate on a branch; show owned files; no file-list approval. (4) Make the change: only in-scope files for the toy. (5) Prove it: run acceptance check; stay and retry until verified. (6) Close: complete only after verified. (7) Wrap up: graduation, re-run pointer, handoff to real setup without teaching push/PR/merge. Longer course deferred until a wiki/docs home exists. Message shape: where you are, plain next action, glossary term(s), visible keep-in-mind, one next action.",
+      "Menu": "v1 menu is locked to three options with the same 7 shared steps: Signal (signal) — tiny CLI that prints a personal status line; Postcard (postcard) — one-page local site that shows a short message; Echo (echo) — mini bot that answers one question with a chosen reply. Each runs in a disposable local sandbox sized for one sitting.",
+      "Flow": "Shared learner path is Step 1–7 of 7 for every menu option. (1) Welcome and choose Signal/Postcard/Echo and open the sandbox; Back on step 1 is labeled not available yet. (2) Write it down: confirm plan and acceptance; write the proposed work file (learner text does not show advance flags). (3) Confirm and start: promote then activate on a branch; show owned files; no file-list approval. (4) Make the change: only in-scope files for the toy. (5) Prove it: run acceptance check; stay and retry until verified. (6) Close: complete only after verified. (7) Wrap up: graduation, re-run pointer, handoff to real setup without teaching push/PR/merge. Longer course deferred until a wiki/docs home exists. Message shape: where you are, plain next action, glossary term(s), visible keep-in-mind, one next action.",
       "State": "Store deterministic tutorial progress in user preferences under the USER.md config home (structured object or sidecar), not in the product project and not only inside the sandbox. Fields include status (not_started | offered | in_progress | completed | skipped), selectedProject (null | signal | postcard | echo), currentBeat, completedBeats (steps 1-7), content version, and offered/started/completed/skipped timestamps. Later sessions resume at the current beat. Reset clears progress and selected project so a different menu option can be chosen; explicit start still works after skip or complete.",
       "Runtime": "Ship a deft-directive-tutorial skill plus CLI verbs (start, inspect, advance, resume, skip, reset, and a public re-run entry). The agent reads the rendered step and follows it. Advance does not move past a step until the person's required action for that step is recorded. A failed check stays on step 5 until fixed and rerun.",
       "Sandbox": "Run the chosen practice project in a disposable local Git repository. Keep the same conversation. Point later commands at that repository. Do not switch the editor workspace to abandon the person's real project. Use real Directive lifecycle moves for the practice work item. Do not teach push, pull request, review, or merge in version 1.",
@@ -104,6 +104,6 @@
         "title": "Issue #4371: first-time run review umbrella (JT / visionik)"
       }
     ],
-    "updated": "2026-10-05T16:47:37Z"
+    "updated": "2026-10-09T16:12:45Z"
   }
 }

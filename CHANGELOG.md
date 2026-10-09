@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
 
 ### Fixed
+- **fix(tutorial): Greptile P1s — missing `--repo` sandbox + Back re-run of start commands (#4981).** Create/init a missing disposable `--repo` path (or refuse a non-directory); remember start lifecycle so Back from change does not re-emit promote/activate. Tracking #4981.
 - **fix(tutorial): address Greptile/SLizard P1s on practice paths, Back proof, and skill deposit (#4981).** Quote work-file paths in practice commands; rewrite Windows proposed/pending separators to active; clear check/completion on Back; add tutorial to daily-core frontmatter list and Go `.agents/skills` deposit. Tracking #4981.
 - **fix(tutorial): learner-copy polish for work-file prompt, step-1 Back, and wrap-up (#4981).** Work-file pending text drops `--work-item`; step 1 labels Back as not available yet; step 7 displays as Wrap up. Tracking #4981.
 - **fix(tutorial): returned-failure paths + trigger-case coverage (#4981).** Drop throw-sites for intent-constraint; add eval trigger cases for deft-directive-tutorial. Tracking #4981.

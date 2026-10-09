@@ -33,6 +33,12 @@ export interface TutorialState {
   readonly workItemPath: string | null;
   readonly repoPath: string | null;
   readonly checkPassed: boolean | null;
+  /**
+   * Start step lifecycle (branch + promote + activate) already ran for this
+   * sitting. Survives Back to `start` so the agent does not re-run those
+   * commands after the work file left proposed/.
+   */
+  readonly startLifecycleDone: boolean;
   /** Write step: Plan/Done accepted after toy content is collected. */
   readonly planAccepted: boolean;
   readonly planConfirmed: boolean;
@@ -73,6 +79,7 @@ export function emptyTutorialState(): TutorialState {
     workItemPath: null,
     repoPath: null,
     checkPassed: null,
+    startLifecycleDone: false,
     planAccepted: false,
     planConfirmed: false,
     contentSeen: false,
@@ -210,6 +217,7 @@ function normalizeState(raw: Partial<TutorialState> & Record<string, unknown>): 
     workItemPath: typeof raw.workItemPath === "string" ? raw.workItemPath : null,
     repoPath: typeof raw.repoPath === "string" ? raw.repoPath : null,
     checkPassed: raw.checkPassed === true ? true : raw.checkPassed === false ? false : null,
+    startLifecycleDone: raw.startLifecycleDone === true,
     planAccepted: raw.planAccepted === true,
     planConfirmed: raw.planConfirmed === true,
     contentSeen: raw.contentSeen === true || raw.lineSeen === true,
@@ -290,6 +298,7 @@ function clearPlanAndLater(state: TutorialState): TutorialState {
     planConfirmed: false,
     contentSeen: false,
     checkPassed: null,
+    startLifecycleDone: false,
   };
 }
 
@@ -330,7 +339,11 @@ export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
   if (prior === "choose") {
     next = { ...next, selectedProject: null };
   }
-  return step(true, "Moved back one step. Read it aloud.", next, prior);
+  const message =
+    prior === "start" && next.startLifecycleDone
+      ? "Moved back one step. Lifecycle commands already ran — do not re-run them. Read it aloud."
+      : "Moved back one step. Read it aloud.";
+  return step(true, message, next, prior);
 }
 
 function withCompleted(state: TutorialState, beatId: string): TutorialState {
@@ -579,7 +592,13 @@ function gateAdvance(
       if (action.confirm !== true) {
         return { ok: false, message: "The person has to say yes before this step can move on." };
       }
-      return { ok: true, message: "Plan confirmed.", state: { ...state, planConfirmed: true } };
+      return {
+        ok: true,
+        message: state.startLifecycleDone
+          ? "Plan confirmed. Lifecycle commands already ran."
+          : "Plan confirmed.",
+        state: { ...state, planConfirmed: true, startLifecycleDone: true },
+      };
     }
     case "change": {
       if (action.contentSeen !== true) {

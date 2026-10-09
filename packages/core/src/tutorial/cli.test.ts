@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -124,6 +124,57 @@ describe("deft tutorial commands (#4981)", () => {
     ]);
     expect(retried.code).toBe(0);
     expect(JSON.parse(retried.out).state.checkPassed).toBe(true);
+  });
+
+  it("creates and inits a missing --repo path before saving progress", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const missing = join(tempDir("deft-tutorial-parent-"), "my-practice");
+    const started = run(projectRoot, prefs, [
+      "start",
+      "--repo",
+      missing,
+      "--project",
+      "signal",
+      "--json",
+    ]);
+    expect(started.code).toBe(0);
+    const body = JSON.parse(started.out) as { state: { repoPath: string } };
+    expect(body.state.repoPath).toBe(resolve(missing));
+    expect(existsSync(join(missing, ".git"))).toBe(true);
+  });
+
+  it("does not re-emit start lifecycle commands after Back from change", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    expect(run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
+    expect(
+      run(projectRoot, prefs, [
+        "advance",
+        "--confirm",
+        "--work-item",
+        "xbrief/proposed/signal.xbrief.json",
+      ]).code,
+    ).toBe(0);
+    const onStart = run(projectRoot, prefs, ["inspect", "--json"]);
+    expect(JSON.parse(onStart.out).command).toContain("scope:promote");
+    expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
+    const backStep = run(projectRoot, prefs, ["advance", "--project", "4", "--json"]);
+    expect(backStep.code).toBe(0);
+    const backBody = JSON.parse(backStep.out) as {
+      command: string | null;
+      state: { currentBeat: string; startLifecycleDone: boolean };
+      message: string;
+    };
+    expect(backBody.state.currentBeat).toBe("start");
+    expect(backBody.state.startLifecycleDone).toBe(true);
+    expect(backBody.command).toBeNull();
+    expect(backBody.message).toContain("do not re-run");
+    const inspect = run(projectRoot, prefs, ["inspect", "--json"]);
+    expect(JSON.parse(inspect.out).command).toBeNull();
   });
 
   it("fills promote/activate and active work-file paths into start/verify commands", () => {
