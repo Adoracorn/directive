@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #4892",
-    "updated": "2026-10-08T12:18:05Z"
+    "updated": "2026-10-09T16:53:45Z"
   },
   "plan": {
     "title": "Managed card cites ADR-003 but docs/decisions never ships",
-    "status": "running",
+    "status": "cancelled",
     "narratives": {
       "Description": "Managed card cites ADR-003 but docs/decisions never ships in deposit. Prefer-A Bound 6050318913.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4892",
@@ -17,7 +17,7 @@
       {
         "id": "clause.1",
         "title": "Deposit ADR-003 via content/docs flatten",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "content/docs/decisions/ADR-003-a2a-nuclear-family-topology.md",
         "narrative": {
           "Acceptance": "Place ADR-003 on deposit-reachable path using content/docs -> pack docs -> consumer .deft/core/docs flatten. Include accepted bytes at content/docs/decisions/ADR-003-a2a-nuclear-family-topology.md. Wire deposit-required-paths / link rewrite. Keep maintainer docs/decisions as SoT or document dual-path. No root-docs prepack carve-out."
@@ -26,7 +26,7 @@
       {
         "id": "clause.2",
         "title": "Update Continuity cites to deposit-reachable path",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "content/templates/agents-entry.md",
         "narrative": {
           "Acceptance": "Update shipped Continuity cites naming ADR-003 for consumers: agents-entry managed card Depth line, content/swarm/swarm.md, content/meta/security.md. Point at deposit-reachable path after agents:refresh / pack projection."
@@ -35,7 +35,7 @@
       {
         "id": "clause.3",
         "title": "Refuse docs/decisions root-docs prepack carve-out",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "CHANGELOG.md",
         "narrative": {
           "Acceptance": "Refuse a docs/decisions root-docs prepack carve-out (same Reject as #4891 Prefer-A Bound)."
@@ -44,7 +44,7 @@
       {
         "id": "clause.4",
         "title": "Leave #3940 tracker; cross-link only",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "CHANGELOG.md",
         "narrative": {
           "Acceptance": "Leave parent #3940 as tracker. Cross-link only to #3847 and #4890; do not absorb those scopes."
@@ -186,9 +186,13 @@
           "#4892"
         ],
         "parallel_safe": true
+      },
+      "lifecycleWrite": {
+        "action": "cancel",
+        "writtenAt": "2026-10-09T16:53:45Z"
       }
     },
     "id": "github.issue.5540583613",
-    "updated": "2026-10-08T12:18:05Z"
+    "updated": "2026-10-09T16:53:45Z"
   }
 }

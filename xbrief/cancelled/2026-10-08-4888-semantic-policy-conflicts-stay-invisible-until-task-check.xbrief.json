@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #4888",
-    "updated": "2026-10-08T12:18:11Z"
+    "updated": "2026-10-09T16:53:40Z"
   },
   "plan": {
     "title": "Semantic policy conflicts stay invisible until task check",
-    "status": "running",
+    "status": "cancelled",
     "narratives": {
       "Description": "Semantic policy conflicts stay invisible until task check. Prefer-A Bound 6050812821.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4888",
@@ -17,7 +17,7 @@
       {
         "id": "clause.1",
         "title": "Widen scm cascade stale-base guidance to three-axis model",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "content/scm/github.md",
         "narrative": {
           "Acceptance": "Generalize content/scm/github.md #1369/#2385 cascade stale-base caveat beyond --cascade with three-axis model (textual/behavioral/policy). Operative MUST for conflict-resolve/behind-rebase/pre-push in scm + deft-directive-pre-pr. AGENTS/agents-entry pointer + agents:refresh. Frame #4883 CLEAN as axis-1 necessity."
@@ -26,7 +26,7 @@
       {
         "id": "clause.2",
         "title": "Extend evaluateSemanticGreen for non-cascade candidate validation",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "packages/core/src/pr-wait-mergeable/semantic-green.ts",
         "narrative": {
           "Acceptance": "Extend evaluateSemanticGreen stale-base limb so non-cascade routes can require candidate validation keyed to (pr_head_sha, target_head_sha). Additive; do not weaken --cascade absolute refusal. Machine-checkable attestation; fail closed names probe. Primary vehicle TypeScript."
@@ -35,7 +35,7 @@
       {
         "id": "clause.3",
         "title": "Land lessons pack entry for three-axis semantic policy",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "content/packs/lessons/lessons-pack-0.1.json",
         "narrative": {
           "Acceptance": "Land lessons entry via lessons pack source with ## Title (YYYY-MM) convention + Canonical-encoding line pointing at probe and scm rule, plus content-contract test."
@@ -44,7 +44,7 @@
       {
         "id": "clause.4",
         "title": "Keep #4889 out; withdraw Python SoT shape",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "CHANGELOG.md",
         "narrative": {
           "Acceptance": "Keep #4889 strictly out. Withdraw #964 optional scripts/check_pr_semantic_drift.py shape; implementers must not satisfy with rejected Python SoT."
@@ -53,7 +53,7 @@
       {
         "id": "clause.5",
         "title": "Disclose #633 forge supersession for local probe",
-        "status": "pending",
+        "status": "cancelled",
         "x-directive/artifact_path": "content/scm/github.md",
         "narrative": {
           "Acceptance": "Name #633/#1517 up-to-date-required + Merge gate aggregator as superseding forge-layer control. Scope local probe as interim; state retirement condition. Reject mutating GitHub mergeable_state."
@@ -193,9 +193,13 @@
           "#4888"
         ],
         "parallel_safe": true
+      },
+      "lifecycleWrite": {
+        "action": "cancel",
+        "writtenAt": "2026-10-09T16:53:40Z"
       }
     },
     "id": "github.issue.5540579955",
-    "updated": "2026-10-08T12:18:11Z"
+    "updated": "2026-10-09T16:53:40Z"
   }
 }
