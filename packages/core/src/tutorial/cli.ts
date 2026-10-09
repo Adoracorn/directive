@@ -186,20 +186,29 @@ function ensureRepo(
       return { ok: false, message: late };
     }
 
-    const hasOwnGit = existsSync(join(repo, ".git"));
+    // Nested under another checkout (git root is a parent) — refuse.
     const root = gitRoot(repo);
-    if (root !== null && !hasOwnGit) {
+    if (root !== null && !samePath(root, repo)) {
       cleanup();
       return { ok: false, message: DISPOSABLE_REPO_MSG };
     }
 
-    if (!hasOwnGit) {
+    // Require a working Git root. A dir with a broken/empty `.git` must not
+    // report ready — attempt init (or surface the failure) like before.
+    if (root === null) {
       const inited = initGitRepo(repo);
       if (!inited.ok) {
         cleanup();
         return { ok: false, message: inited.message };
       }
       createdGit = true;
+      if (gitRoot(repo) === null) {
+        cleanup();
+        return {
+          ok: false,
+          message: "Could not initialize a Git repository in the practice path.",
+        };
+      }
       const afterInit = disposableRepoError(repo, projectRoot);
       if (afterInit !== null) {
         cleanup();

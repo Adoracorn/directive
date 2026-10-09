@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
 
 ### Fixed
+- **fix(tutorial): Greptile P1 — require a working Git root before accepting `.git` (#4981).** Do not treat a broken `.git` as a ready practice sandbox; init or refuse. Tracking #4981.
 - **fix(tutorial): Greptile P1s — sandbox post-create isolation + Back command nulling (#4981).** Re-check disposable isolation after materializing `--repo`, refuse nested foreign Git checkouts, refuse completed/bad `--project` before creating a sandbox, and teach the skill that null `command` means do not re-run promote/activate after Back. Tracking #4981.
 - **fix(tutorial): Greptile P1s — missing `--repo` sandbox + Back re-run of start commands (#4981).** Create/init a missing disposable `--repo` path (or refuse a non-directory); remember start lifecycle so Back from change does not re-emit promote/activate. Tracking #4981.
 - **fix(tutorial): address Greptile/SLizard P1s on practice paths, Back proof, and skill deposit (#4981).** Quote work-file paths in practice commands; rewrite Windows proposed/pending separators to active; clear check/completion on Back; add tutorial to daily-core frontmatter list and Go `.agents/skills` deposit. Tracking #4981.

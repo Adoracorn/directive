@@ -104,13 +104,7 @@ describe("deft tutorial commands (#4981)", () => {
     mkdirSync(projectRoot);
     const prefs = tempDir("deft-tutorial-prefs-");
     const practice = join(parent, "practice");
-    const refused = run(projectRoot, prefs, [
-      "start",
-      "--repo",
-      practice,
-      "--project",
-      "signal",
-    ]);
+    const refused = run(projectRoot, prefs, ["start", "--repo", practice, "--project", "signal"]);
     expect(refused.code).toBe(1);
     expect(`${refused.out}${refused.err}`).toContain("disposable repository");
     expect(existsSync(practice)).toBe(false);
@@ -120,13 +114,7 @@ describe("deft tutorial commands (#4981)", () => {
     const projectRoot = tempDir("deft-tutorial-cli-");
     const prefs = tempDir("deft-tutorial-prefs-");
     const missing = join(tempDir("deft-tutorial-parent-"), "should-not-exist");
-    const refused = run(projectRoot, prefs, [
-      "start",
-      "--repo",
-      missing,
-      "--project",
-      "nope",
-    ]);
+    const refused = run(projectRoot, prefs, ["start", "--repo", missing, "--project", "nope"]);
     expect(refused.code).toBe(1);
     expect(`${refused.out}${refused.err}`).toContain("Pick 1 Signal");
     expect(existsSync(missing)).toBe(false);
@@ -141,13 +129,7 @@ describe("deft tutorial commands (#4981)", () => {
       "utf8",
     );
     const missing = join(tempDir("deft-tutorial-parent-"), "should-not-exist");
-    const refused = run(projectRoot, prefs, [
-      "start",
-      "--repo",
-      missing,
-      "--project",
-      "signal",
-    ]);
+    const refused = run(projectRoot, prefs, ["start", "--repo", missing, "--project", "signal"]);
     expect(refused.code).toBe(1);
     expect(`${refused.out}${refused.err}`).toContain("already finished");
     expect(existsSync(missing)).toBe(false);
@@ -199,6 +181,19 @@ describe("deft tutorial commands (#4981)", () => {
     const body = JSON.parse(started.out) as { state: { repoPath: string } };
     expect(body.state.repoPath).toBe(resolve(missing));
     expect(existsSync(join(missing, ".git"))).toBe(true);
+  });
+
+  it("refuses a --repo with a non-working .git file instead of reporting ready", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    // A .git *file* (not a repo) used to be skipped by the hasOwnGit short-circuit.
+    writeFileSync(join(repo, ".git"), "not a git directory\n", "utf8");
+    const refused = run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]);
+    expect(refused.code).toBe(1);
+    expect(`${refused.out}${refused.err}`).toMatch(
+      /Git repository|not a git repository|initialize|invalid/i,
+    );
   });
 
   it("does not re-emit start lifecycle commands after Back from change", () => {
