@@ -6,7 +6,7 @@
   },
   "plan": {
     "title": "feat(setup): seed PROJECT-DEFINITION from a design document (--from / --answers) instead of interview-only",
-    "status": "cancelled",
+    "status": "running",
     "narratives": {
       "Description": "feat(setup): seed PROJECT-DEFINITION from a design document (--from / --answers) instead of interview-only",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4961",

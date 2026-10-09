@@ -6,7 +6,7 @@
   },
   "plan": {
     "title": "Managed card cites ADR-003 but docs/decisions never ships",
-    "status": "cancelled",
+    "status": "running",
     "narratives": {
       "Description": "Managed card cites ADR-003 but docs/decisions never ships in deposit. Prefer-A Bound 6050318913.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4892",

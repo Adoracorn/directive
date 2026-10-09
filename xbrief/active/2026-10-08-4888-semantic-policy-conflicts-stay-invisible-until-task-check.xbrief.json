@@ -6,7 +6,7 @@
   },
   "plan": {
     "title": "Semantic policy conflicts stay invisible until task check",
-    "status": "cancelled",
+    "status": "running",
     "narratives": {
       "Description": "Semantic policy conflicts stay invisible until task check. Prefer-A Bound 6050812821.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4888",
