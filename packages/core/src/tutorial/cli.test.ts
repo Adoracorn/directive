@@ -371,18 +371,37 @@ describe("deft tutorial commands (#4981)", () => {
     const inspect = run(projectRoot, prefs, ["inspect", "--json"]);
     expect(JSON.parse(inspect.out).command).toBeNull();
 
-    // Back again to result must not re-emit verify:ac against the moved file.
-    const toResult = run(projectRoot, prefs, ["advance", "--project", "back", "--json"]);
-    expect(toResult.code).toBe(0);
-    const resultBody = JSON.parse(toResult.out) as {
-      command: string | null;
+    // Further Back past close is refused — editable/prove rewind after close
+    // would clear checkPassed while suppressing the check command.
+    const pastClose = run(projectRoot, prefs, ["advance", "--project", "back", "--json"]);
+    expect(pastClose.code).toBe(1);
+    const pastBody = JSON.parse(pastClose.out) as {
+      ok: boolean;
+      message: string;
       state: { currentBeat: string; closeLifecycleDone: boolean };
     };
-    expect(resultBody.state.currentBeat).toBe("result");
-    expect(resultBody.state.closeLifecycleDone).toBe(true);
-    expect(resultBody.command).toBeNull();
-    const resultInspect = run(projectRoot, prefs, ["inspect", "--json"]);
-    expect(JSON.parse(resultInspect.out).command).toBeNull();
+    expect(pastBody.ok).toBe(false);
+    expect(pastBody.state.currentBeat).toBe("close");
+    expect(pastBody.state.closeLifecycleDone).toBe(true);
+    expect(pastBody.message).toContain("Work already closed");
+  });
+
+  it("accepts I have questions as the Discuss pause alias", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const repo = tempDir("deft-tutorial-repo-");
+    expect(run(projectRoot, prefs, ["start", "--repo", repo, "--project", "signal"]).code).toBe(0);
+    const paused = run(projectRoot, prefs, [
+      "advance",
+      "--project",
+      "I have questions",
+      "--json",
+    ]);
+    expect(paused.code).toBe(0);
+    const body = JSON.parse(paused.out) as { ok: boolean; message: string; state: { currentBeat: string } };
+    expect(body.ok).toBe(true);
+    expect(body.message).toContain("What would you like to discuss?");
+    expect(body.state.currentBeat).toBe("choose");
   });
 
   it("fills promote/activate and active work-file paths into start/verify commands", () => {

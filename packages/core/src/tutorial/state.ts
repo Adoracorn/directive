@@ -327,6 +327,18 @@ export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]
   }
   const ids = wiredIds(beats);
   const priorIndex = ids.indexOf(prior);
+  // After close ran, Back may return to close (to re-read) but must not reach
+  // earlier editable/prove steps — that clears checkPassed while keeping
+  // closeLifecycleDone, so forward shows "run the check" with command null.
+  const closeIndex = ids.indexOf("close");
+  if (state.closeLifecycleDone && closeIndex >= 0 && priorIndex < closeIndex) {
+    return step(
+      false,
+      "Work already closed. Leave or Discuss instead of going back to earlier steps.",
+      state,
+      state.currentBeat,
+    );
+  }
   // Drop completion marks at/after the landing step — rewind invalidates later proof.
   let next: TutorialState = {
     ...state,

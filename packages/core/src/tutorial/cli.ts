@@ -280,7 +280,8 @@ function menuMatches(flag: string | undefined, ...aliases: string[]): boolean {
 }
 
 function isDiscussPick(flag: string | undefined): boolean {
-  return menuMatches(flag, "discuss");
+  // #5373 / #1470: visible hatch is Discuss; "I have questions" is the accepted-input alias.
+  return menuMatches(flag, "discuss", "I have questions");
 }
 
 function isBackPick(flag: string | undefined): boolean {

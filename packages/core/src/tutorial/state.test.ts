@@ -280,6 +280,13 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(backed.state.currentBeat).toBe("close");
     expect(backed.state.closeLifecycleDone).toBe(true);
     expect(backed.message).toContain("Close already ran");
+
+    // Further Back past close is refused once close has run.
+    const pastClose = backBeat(backed.state, beats);
+    expect(pastClose.ok).toBe(false);
+    expect(pastClose.state.currentBeat).toBe("close");
+    expect(pastClose.state.closeLifecycleDone).toBe(true);
+    expect(pastClose.message).toContain("Work already closed");
   });
 
   it("clears prove-it results when Back returns to change", () => {
