@@ -17,6 +17,7 @@ import {
   loadTutorialState,
   offerTutorial,
   resetTutorial,
+  resolveProjectChoice,
   resumeTutorial,
   saveTutorialState,
   skipBeat,
@@ -143,8 +144,15 @@ function ensureRepo(
 ): { ok: true; repo: string } | { ok: false; message: string } {
   if (requested !== undefined && requested.trim().length > 0) {
     const repo = resolve(requested);
-    const err = disposableRepoError(repo, projectRoot);
-    if (err !== null) return { ok: false, message: err };
+    const early = disposableRepoError(repo, projectRoot);
+    if (early !== null) return { ok: false, message: early };
+
+    let createdDir = false;
+    let createdGit = false;
+    const cleanup = (): void => {
+      if (createdGit) rmSync(join(repo, ".git"), { recursive: true, force: true });
+      if (createdDir) rmSync(repo, { recursive: true, force: true });
+    };
 
     if (existsSync(repo)) {
       try {
@@ -160,6 +168,7 @@ function ensureRepo(
     } else {
       try {
         mkdirSync(repo, { recursive: true });
+        createdDir = true;
       } catch (mkdirErr: unknown) {
         return {
           ok: false,
@@ -168,9 +177,34 @@ function ensureRepo(
       }
     }
 
-    if (gitRoot(repo) === null) {
+    // Re-check after materializing: a missing path under a parent Git checkout
+    // (e.g. --project-root /repo/app --repo /repo/practice) only reveals the
+    // shared git root once the directory exists.
+    const late = disposableRepoError(repo, projectRoot);
+    if (late !== null) {
+      cleanup();
+      return { ok: false, message: late };
+    }
+
+    const hasOwnGit = existsSync(join(repo, ".git"));
+    const root = gitRoot(repo);
+    if (root !== null && !hasOwnGit) {
+      cleanup();
+      return { ok: false, message: DISPOSABLE_REPO_MSG };
+    }
+
+    if (!hasOwnGit) {
       const inited = initGitRepo(repo);
-      if (!inited.ok) return { ok: false, message: inited.message };
+      if (!inited.ok) {
+        cleanup();
+        return { ok: false, message: inited.message };
+      }
+      createdGit = true;
+      const afterInit = disposableRepoError(repo, projectRoot);
+      if (afterInit !== null) {
+        cleanup();
+        return { ok: false, message: afterInit };
+      }
     }
     return { ok: true, repo };
   }
@@ -269,6 +303,25 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
         break;
       case "start": {
         const projectFlag = flagValue(rest, "--project");
+        // Refuse completed / bad --project before creating a sandbox on disk.
+        if (state.status === "completed") {
+          step = startTutorial(state, state.repoPath ?? "", beats, projectFlag);
+          break;
+        }
+        if (
+          (state.currentBeat === null || state.status !== "in_progress") &&
+          projectFlag !== undefined &&
+          resolveProjectChoice(projectFlag) === null
+        ) {
+          step = {
+            ok: false,
+            message: "Pick 1 Signal, 2 Postcard, 3 Echo, or 4 Leave.",
+            state,
+            beatId: state.currentBeat,
+            offerNow: false,
+          };
+          break;
+        }
         let repoPath = state.repoPath ?? "";
         if (state.currentBeat === null || state.status !== "in_progress") {
           const ensured = ensureRepo(

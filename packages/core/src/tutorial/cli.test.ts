@@ -1,4 +1,5 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +95,62 @@ describe("deft tutorial commands (#4981)", () => {
     const refused = run(projectRoot, prefs, ["start", "--repo", nested]);
     expect(refused.code).toBe(1);
     expect(`${refused.out}${refused.err}`).toContain("disposable repository");
+  });
+
+  it("refuses a missing --repo that would share the person's Git checkout and cleans up", () => {
+    const parent = tempDir("deft-tutorial-shared-");
+    execFileSync("git", ["init", "-q"], { cwd: parent });
+    const projectRoot = join(parent, "app");
+    mkdirSync(projectRoot);
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const practice = join(parent, "practice");
+    const refused = run(projectRoot, prefs, [
+      "start",
+      "--repo",
+      practice,
+      "--project",
+      "signal",
+    ]);
+    expect(refused.code).toBe(1);
+    expect(`${refused.out}${refused.err}`).toContain("disposable repository");
+    expect(existsSync(practice)).toBe(false);
+  });
+
+  it("refuses a bad --project before creating a missing --repo path", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const missing = join(tempDir("deft-tutorial-parent-"), "should-not-exist");
+    const refused = run(projectRoot, prefs, [
+      "start",
+      "--repo",
+      missing,
+      "--project",
+      "nope",
+    ]);
+    expect(refused.code).toBe(1);
+    expect(`${refused.out}${refused.err}`).toContain("Pick 1 Signal");
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  it("refuses a completed start before creating a missing --repo path", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    writeFileSync(
+      join(prefs, "tutorial-state.json"),
+      JSON.stringify({ status: "completed", completedAt: "2026-01-01T00:00:00.000Z" }),
+      "utf8",
+    );
+    const missing = join(tempDir("deft-tutorial-parent-"), "should-not-exist");
+    const refused = run(projectRoot, prefs, [
+      "start",
+      "--repo",
+      missing,
+      "--project",
+      "signal",
+    ]);
+    expect(refused.code).toBe(1);
+    expect(`${refused.out}${refused.err}`).toContain("already finished");
+    expect(existsSync(missing)).toBe(false);
   });
 
   it("records a passing retry when --check is supplied with try-again", () => {

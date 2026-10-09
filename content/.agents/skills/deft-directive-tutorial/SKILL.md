@@ -68,12 +68,13 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 ⊗ Paraphrase it or invent a step.
 ⊗ Paste the JSON `command` block into what the person sees.
 ! When JSON `command` is non-null, run those commands in `repoPath` yourself after the person's next action.
+⊗ Run promote/activate (or any start lifecycle commands) when `command` is null — that means `startLifecycleDone` already ran (for example after Back to start).
 ! Record progress with `deft tutorial:advance` and the matching flags.
 ⊗ Move on when advance refuses.
 
 - Step 1 choose: `--project signal|postcard|echo` (or `1|2|3`); Leave → `deft tutorial:leave`; Discuss / Back as above
 - Step 2 write: first `--content "..."` (or `--project 1` / Use the example), then `--confirm` (Plan/Done; menu 1 Yes / 2 No — change the plan / 3 Leave / 4 Discuss / 5 Back), then `--work-item <path>` (may combine with confirm). After Plan/Done is accepted without a path, show the work-file prompt — do not re-ask for content.
-- Step 3 start: `--confirm` (menu: 1 Yes / 2 Leave / 3 Discuss / 4 Back). Commands promote and activate the proposed work file, then create the branch.
+- Step 3 start: `--confirm` (menu: 1 Yes / 2 Leave / 3 Discuss / 4 Back). Commands promote and activate the proposed work file, then create the branch. After `startLifecycleDone` (Back to start), JSON `command` is null — do not re-run them.
 - Step 4 change: `--content-seen` (menu: 1 Go / 2 Leave / 3 Discuss / 4 Back)
 - Step 5 prove: menu 1 Go (run check), then record `--check pass|fail` (fail stays; pass stays on Continue). Menu after pass: 1 Continue / 2 Leave / 3 Discuss / 4 Back. After fail: 1 Try again / 2 Leave / 3 Discuss / 4 Back. A combined `--project 1 --check pass` on a failed prove step records the new result.
 - Step 6 close: `--complete` (menu: 1 Go / 2 Leave / 3 Discuss / 4 Back; only after a pass + Continue)
