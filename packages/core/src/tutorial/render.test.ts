@@ -147,6 +147,12 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(shellQuotePath("/tmp/My Practice/xbrief/proposed/signal.xbrief.json")).toBe(
       '"/tmp/My Practice/xbrief/proposed/signal.xbrief.json"',
     );
+    expect(shellQuotePath("/tmp/$USER/xbrief/proposed/signal.xbrief.json")).toBe(
+      '"/tmp/\\$USER/xbrief/proposed/signal.xbrief.json"',
+    );
+    expect(shellQuotePath("/tmp/`whoami`/xbrief/proposed/signal.xbrief.json")).toBe(
+      '"/tmp/\\`whoami\\`/xbrief/proposed/signal.xbrief.json"',
+    );
     expect(activeWorkItemPath("xbrief\\proposed\\signal.xbrief.json")).toBe(
       "xbrief\\active\\signal.xbrief.json",
     );

@@ -176,6 +176,12 @@ describe("Directive Tutorial state (#4981)", () => {
     state = advanceTutorial(state, beats, { complete: true }).state;
     state = advanceTutorial(state, beats, {}).state;
     expect(state.status).toBe("completed");
+    expect(state.currentBeat).toBe("leave");
+
+    const leaveRefused = leaveTutorial(state);
+    expect(leaveRefused.ok).toBe(false);
+    expect(leaveRefused.message).toContain("already finished");
+    expect(leaveRefused.state.status).toBe("completed");
 
     const refused = startTutorial(state, "/tmp/signal-sandbox-2", beats, "echo");
     expect(refused.ok).toBe(false);

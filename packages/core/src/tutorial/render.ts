@@ -182,7 +182,13 @@ export function activeWorkItemPath(workItemPath: string | null): string {
 /** Quote a path for shell command templates (spaces and quotes stay one argument). */
 export function shellQuotePath(value: string): string {
   if (value.length === 0) return value;
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  // Escape POSIX expansions inside double quotes so literal `$`, backticks, and `!` stay unchanged.
+  return `"${value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\$/g, "\\$")
+    .replace(/`/g, "\\`")
+    .replace(/!/g, "\\!")}"`;
 }
 
 export function loadTutorial(repoRoot: string): {

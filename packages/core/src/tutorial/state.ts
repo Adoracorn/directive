@@ -108,12 +108,13 @@ export function resolveProjectChoice(value: string): TutorialProjectId | null {
  * does not fire again; explicit start still works.
  */
 export function leaveTutorial(state: TutorialState): TutorialStep {
-  if (state.status === "completed" && state.currentBeat === null) {
+  // Completion leaves currentBeat on "leave"; protect every completed sitting.
+  if (state.status === "completed") {
     return step(
       false,
       "The tutorial is already finished. Reset before leaving again.",
       state,
-      null,
+      state.currentBeat,
     );
   }
   if (state.status === "not_started" && state.currentBeat === null) {
