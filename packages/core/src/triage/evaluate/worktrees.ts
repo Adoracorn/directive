@@ -47,12 +47,33 @@ function forceDeleteWorktreeDir(worktreePath: string): void {
 }
 
 const caseInsensitiveDirCache = new Map<string, boolean>();
+/** Test-only: force probe result (undefined = live probe / cache). */
+let caseInsensitiveDirOverride: boolean | undefined;
+
+/** Test-only: seed the probe cache (stale-true regression). */
+export function __testOnly_seedCaseInsensitiveDirCache(dir: string, ignores: boolean): void {
+  caseInsensitiveDirCache.set(resolve(dir), ignores);
+}
+
+/** Test-only: force directoryIgnoresCase for sibling-gate / fold regressions. */
+export function __testOnly_setDirectoryIgnoresCaseOverride(value: boolean | undefined): void {
+  caseInsensitiveDirOverride = value;
+}
+
+/** Test-only: clear the probe cache between cases. */
+export function __testOnly_clearCaseInsensitiveDirCache(): void {
+  caseInsensitiveDirCache.clear();
+  caseInsensitiveDirOverride = undefined;
+}
 
 function slashResolve(path: string): string {
   return resolve(path).replace(/\\/g, "/");
 }
 
 function directoryIgnoresCase(dir: string, options?: { readonly bypassCache?: boolean }): boolean {
+  if (caseInsensitiveDirOverride !== undefined) {
+    return caseInsensitiveDirOverride;
+  }
   let existing = resolve(dir);
   while (!existsSync(existing)) {
     const parent = dirname(existing);
@@ -149,7 +170,8 @@ function canonicalizeWorktreePath(path: string): string {
   } catch {
     // Keep slash-resolved parent.
   }
-  const leaf = directoryIgnoresCase(parent) ? base.toLowerCase() : base;
+  // Bypass cache: a stale true must not fold a missing leaf (#5519 / #5460 class).
+  const leaf = directoryIgnoresCase(parent, { bypassCache: true }) ? base.toLowerCase() : base;
   return `${parentCanon}/${leaf}`;
 }
 
@@ -201,6 +223,17 @@ function pruneEvaluatorWorktreeAdmin(
       continue;
     }
     const recordedWorktree = recorded.replace(/\\/g, "/").replace(/\/\.git$/u, "");
+    const recordedBase = basename(recordedWorktree);
+    const targetBase = basename(worktreePath.replace(/\\/g, "/").replace(/\/\.git$/u, ""));
+    if (
+      existsSync(recordedWorktree) &&
+      recordedBase !== targetBase &&
+      recordedBase.toLowerCase() === targetBase.toLowerCase()
+    ) {
+      // Recorded worktree still on disk as a case-distinct sibling — never unregister,
+      // even when a probe/cache would fold (#5519 Bound).
+      continue;
+    }
     if (worktreePathsReferToSame(recordedWorktree, worktreePath)) {
       containedRemove({
         root: resolve(worktreesDir),
