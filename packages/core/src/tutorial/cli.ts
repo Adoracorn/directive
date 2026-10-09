@@ -595,9 +595,11 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
           checkPassed: step.state.checkPassed,
         });
   // After start/close lifecycle ran once, do not re-emit those commands on Back.
+  // Close also moves the active work file — suppress result verify:ac afterward.
   const command =
     (step.beatId === "start" && step.state.startLifecycleDone) ||
-    (step.beatId === "close" && step.state.closeLifecycleDone)
+    (step.beatId === "close" && step.state.closeLifecycleDone) ||
+    (step.beatId === "result" && step.state.closeLifecycleDone)
       ? null
       : (filled?.command ?? null);
 

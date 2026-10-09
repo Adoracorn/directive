@@ -370,6 +370,19 @@ describe("deft tutorial commands (#4981)", () => {
     expect(backBody.message).toContain("Close already ran");
     const inspect = run(projectRoot, prefs, ["inspect", "--json"]);
     expect(JSON.parse(inspect.out).command).toBeNull();
+
+    // Back again to result must not re-emit verify:ac against the moved file.
+    const toResult = run(projectRoot, prefs, ["advance", "--project", "back", "--json"]);
+    expect(toResult.code).toBe(0);
+    const resultBody = JSON.parse(toResult.out) as {
+      command: string | null;
+      state: { currentBeat: string; closeLifecycleDone: boolean };
+    };
+    expect(resultBody.state.currentBeat).toBe("result");
+    expect(resultBody.state.closeLifecycleDone).toBe(true);
+    expect(resultBody.command).toBeNull();
+    const resultInspect = run(projectRoot, prefs, ["inspect", "--json"]);
+    expect(JSON.parse(resultInspect.out).command).toBeNull();
   });
 
   it("fills promote/activate and active work-file paths into start/verify commands", () => {
