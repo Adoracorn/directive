@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #4961",
-    "updated": "2026-10-09T16:53:49Z"
+    "updated": "2026-10-09T18:29:45Z"
   },
   "plan": {
     "title": "feat(setup): seed PROJECT-DEFINITION from a design document (--from / --answers) instead of interview-only",
-    "status": "running",
+    "status": "proposed",
     "narratives": {
       "Description": "feat(setup): seed PROJECT-DEFINITION from a design document (--from / --answers) instead of interview-only",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4961",
@@ -198,7 +198,7 @@
       },
       "lifecycleWrite": {
         "action": "cancel",
-        "writtenAt": "2026-10-09T16:53:49Z"
+        "writtenAt": "2026-10-09T18:29:33Z"
       }
     },
     "acceptance": {
@@ -311,6 +311,6 @@
       "ambiguity_attestation": "none_found"
     },
     "id": "github.issue.5555957365",
-    "updated": "2026-10-09T16:53:49Z"
+    "updated": "2026-10-09T18:29:45Z"
   }
 }
