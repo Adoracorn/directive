@@ -312,16 +312,14 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   const projectRoot = resolve(projectRootFlag ?? ".");
   const frameworkRoot = resolve(flagValue(rest, "--framework-root") ?? defaultFrameworkRoot());
   const prefsHome = flagValue(rest, "--prefs-home");
-  // Personal prefs by default so sandbox cwd cannot fork tutorial-state (#5464 P1).
-  // Explicit --prefs-home / --project-root keep the prior binding.
+  // Always personal prefs unless --prefs-home (sidecar next to USER.md).
+  // --project-root only places the practice sandbox; it must not fork state (#5464 P1).
   const statePath =
     prefsHome !== undefined
       ? join(resolve(prefsHome), "tutorial-state.json")
-      : projectRootFlag !== undefined
-        ? undefined
-        : tutorialStatePathPersonal();
+      : tutorialStatePathPersonal();
   const asJson = hasFlag(rest, "--json");
-  const stateOpts = statePath !== undefined ? { projectRoot, path: statePath } : { projectRoot };
+  const stateOpts = { projectRoot, path: statePath };
 
   let tutorial: ReturnType<typeof loadTutorial>;
   try {
