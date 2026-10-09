@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -181,6 +181,27 @@ describe("deft tutorial commands (#4981)", () => {
     const body = JSON.parse(started.out) as { state: { repoPath: string } };
     expect(body.state.repoPath).toBe(resolve(missing));
     expect(existsSync(join(missing, ".git"))).toBe(true);
+  });
+
+  it("accepts a --repo whose Git root differs only by a directory link (macOS /tmp)", () => {
+    const projectRoot = tempDir("deft-tutorial-cli-");
+    const prefs = tempDir("deft-tutorial-prefs-");
+    const physical = tempDir("deft-tutorial-repo-");
+    execFileSync("git", ["init", "-q"], { cwd: physical });
+    const linkParent = tempDir("deft-tutorial-link-parent-");
+    const linked = join(linkParent, "practice-link");
+    symlinkSync(physical, linked);
+    const started = run(projectRoot, prefs, [
+      "start",
+      "--repo",
+      linked,
+      "--project",
+      "signal",
+      "--json",
+    ]);
+    expect(started.code).toBe(0);
+    const body = JSON.parse(started.out) as { state: { repoPath: string } };
+    expect(body.state.repoPath).toBe(resolve(linked));
   });
 
   it("refuses a --repo with a non-working .git file instead of reporting ready", () => {

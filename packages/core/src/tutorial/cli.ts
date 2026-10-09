@@ -4,7 +4,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,13 +89,23 @@ function hasFlag(argv: readonly string[], name: string): boolean {
   return argv.includes(name);
 }
 
+/** Physical path when the entry exists (macOS `/tmp` → `/private/tmp`); else resolve. */
+function physicalPath(path: string): string {
+  try {
+    if (existsSync(path)) return realpathSync(path);
+  } catch {
+    // fall through
+  }
+  return resolve(path);
+}
+
 function samePath(left: string, right: string): boolean {
-  return resolve(left) === resolve(right);
+  return physicalPath(left) === physicalPath(right);
 }
 
 function pathIsInside(inner: string, outer: string): boolean {
-  const root = resolve(outer);
-  const target = resolve(inner);
+  const root = physicalPath(outer);
+  const target = physicalPath(inner);
   return target === root || target.startsWith(root + sep);
 }
 
