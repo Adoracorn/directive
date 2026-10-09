@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Lifecycle gates honor typed `plan.policy.deliveryBranch` before master/main fallbacks (scope-provenance, evaluator-surface, verify:branch, pre-push). Tracking #5520.
+
 ### Removed
 
 ## [0.124.0] - 2026-10-09
@@ -50,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Design-critique later-arc closed-findings (#5489).** Later arcs on the same ticket no longer re-litigate findings the parent already closed: critics demote authorized restatements, and reopen needs evidence. Adjacent-polish hydra remainder deferred to #5493. Tracking #5489. Refs Prefer-A Bound 6065006497.
 
 ### Fixed
+- Recorded the planned files for the Directive Tutorial (#4981) before its product PR lands.
 - Leftover-complete #5489 after product #5497.
 - Keep active #4961 Path B activation (membership fence).
 - **Path B activation survives rebase (#5495).** After rebasing onto master, the approved brief stays active so the stacked product PR can still use its declared file list. Tracking #5495.
