@@ -352,16 +352,16 @@ describe("deft tutorial commands (#4981)", () => {
     const startStep = run(projectRoot, prefs, ["inspect", "--json"]);
     const startBody = JSON.parse(startStep.out) as { command: string | null };
     expect(startBody.command).toContain(
-      'deft scope:promote -- "xbrief/proposed/signal.xbrief.json"',
+      "deft scope:promote -- 'xbrief/proposed/signal.xbrief.json'",
     );
     expect(startBody.command).toContain(
-      'deft scope:activate -- "xbrief/proposed/signal.xbrief.json"',
+      "deft scope:activate -- 'xbrief/proposed/signal.xbrief.json'",
     );
     expect(run(projectRoot, prefs, ["advance", "--confirm"]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--content-seen"]).code).toBe(0);
     const prove = run(projectRoot, prefs, ["inspect", "--json"]);
     const proveBody = JSON.parse(prove.out) as { command: string | null };
-    expect(proveBody.command).toContain('deft verify:ac "xbrief/active/signal.xbrief.json"');
+    expect(proveBody.command).toContain("deft verify:ac 'xbrief/active/signal.xbrief.json'");
     expect(proveBody.command).not.toContain("<active-work-file>");
   });
 
