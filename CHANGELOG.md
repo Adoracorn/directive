@@ -18,9 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Typed `plan.policy.review.minGreptileConfidence=4` so Greptile CLEAN / merge-ready accept 4/5 for this cohort (#3095).
+
 ### Fixed
 
 - **fix(tutorial): Greptile 4/5 — refuse Back past close + Discuss hatch alias (#4981).** Once close has run, Back stops at close (no rewind to prove/change with a missing check command); `I have questions` pauses like Discuss. Tracking #4981.
+- Record the completed work for #5479 after product PR #5530.
+- Record the completed work for #5526 after product PR #5528.
 - Record approved scope for #5521 so Path B product work can pass scope checks (mint only).
 - Lifecycle gates honor typed plan.policy.deliveryBranch before master/main fallbacks (scope-provenance, evaluator-surface, verify:branch, pre-push). Tracking #5520.
 - Unpaid skip-CI seam for Windows Step 5 hang (#5526): one-cut --allow-skip-ci=5526 (later reuse needs --allow-unpaid-skip-ci=5526). Tracking #5526.
