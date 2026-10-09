@@ -173,6 +173,14 @@ Dest is per-arc (`ensureArcDest`) at origin/<default> after fetch. Not primary. 
 
 **Claude** (cwd = dest). Unset Process-scope `ANTHROPIC_API_KEY` and `CLAUDE_API_KEY`.
 
+On every host, write the critic envelope under the arc dest and pass only a short pointer prompt (`claude -p "Read and follow <envelope-path>"`). Do not put the full envelope on argv or stdin.
+
+Windows command-line limits are **launcher-dependent** whole-command ceilings (not a prompt-only allowance): cmd.exe/batch paths have an 8,191-character limit; CreateProcessW permits 32,767 characters including the terminating null. Do **not** treat a sole "CreateProcess ~8191" string as the OS threshold.
+
+Launch-probe pong-ok proves only that the probe invocation under critic argv succeeded. It proves neither long-prompt transport nor envelope read/completion.
+
+Adjacent class (do not collapse): post-pointer 0-byte hang with CPU after a short pointer is already in use — [#5478](https://github.com/deftai/directive/issues/5478). Empty immediate exit from a full-envelope `-p` is this argv/command-line length class.
+
 ```text
 claude -p "Read and follow <envelope-path>" --model opus --permission-mode bypassPermissions --output-format text
 ```
@@ -206,6 +214,35 @@ That CLI is classified launcher-family argv (#4219): dest-present linked dest is
 ⊗ Dual-launch native + CLI. ⊗ Retarget the contract Grok seat to CLI.
 
 Keep process-only plus one `gh issue comment --body-file` post. `claude agents` may report print-mode as `kind: interactive`; do not kill it as a TTY leftover.
+
+### Critic-spawn hygiene + progress (#5478)
+
+Claude Critic-spawn hygiene MUST before claiming the seat live (Prefer-A Bound #5478):
+
+- Hold the log `outFd` open until the child exits.
+- Refuse `detached` + `unref` (parent exit closes the fd → 0-byte log).
+- Close stdin via Node `ignore` or an integer fd (not host `<nul` alone; not a WriteStream with null `fd`).
+- Parent waits on the child (no fire-and-forget).
+- Pass integer fds for stdout/stderr tees (not `WriteStream` with null `fd`).
+
+Progress gate on Critic spawn (not on `evaluateN3LaunchProbe` / #4432):
+
+- Fail closed if no first log byte / no log growth within `T_progress`; emit captured stderr on that path.
+- Keep a hard `T_timeout` backstop that cannot be renewed indefinitely by log chatter alone.
+- Zero stdout alone is not the sole inactivity oracle for text print mode — use a disposable diagnostic envelope for tool-progress validation when needed.
+- Executable module: `packages/core/src/design-critique/critic-spawn-progress.ts`.
+
+Termination/completion boundary:
+
+- Named supervisor owns the timer.
+- Timeout kills the owned process tree (`taskkill /T /F` on Windows; process-group kill elsewhere).
+- Establish termination before replacement/reseat.
+- Reconcile whether a critic comment already posted before classifying no-comment `dispatch-fail`.
+- Reuse the existing `dispatch-fail` / halt protocol. ⊗ Add a new halt token.
+
+Adjacent, not the same defect: `#5492` names the Windows CreateProcess argv ceiling (full `-p` envelope → immediate empty exit). This `#5478` class is post-pointer hang (0-byte log, CPU alive after a short pointer prompt). Do not collapse them. Launch-probe pong stays launchability only — it does not prove envelope progress.
+
+Containment vs restoration: Prefer-A binds containment of the hang class (hygiene + progress + fail-closed). Restored reliable Claude seating needs a later successful representative pointer-envelope completion after the diagnosed fix; until then P3 residual (drop-Claude amend) may remain operator recovery.
 
 ## Out of scope
 

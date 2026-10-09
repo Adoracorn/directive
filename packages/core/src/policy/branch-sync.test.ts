@@ -43,8 +43,14 @@ function gitForSync(options: {
 }): GitRunner {
   return (_cwd, args) => {
     if (args[0] === "fetch") {
-      const target = args[args.length - 1] ?? "";
-      if (options.destFetchFailTargets?.includes(target)) {
+      const dd = args.indexOf("--");
+      const refspec = dd >= 0 ? (args[dd + 1] ?? "") : (args[args.length - 1] ?? "");
+      const branchFromRefspec = /^[+]?refs\/heads\/([^:]+):/.exec(refspec)?.[1] ?? refspec;
+      const target = branchFromRefspec;
+      if (
+        options.destFetchFailTargets?.includes(target) ||
+        options.destFetchFailTargets?.includes(refspec)
+      ) {
         return { code: 1, stdout: "", stderr: "dest fetch failed" };
       }
       return { code: options.fetchOk === false ? 1 : 0, stdout: "", stderr: "" };
@@ -286,6 +292,21 @@ describe("detectBranchSync (#3388)", () => {
     expect(result.isSync).toBe(false);
     expect(result.reason).toBe("source-equals-dest");
   });
+
+  it("hostile dest-ref typed policy is a terminal refuse (#5364)", () => {
+    root = makeProject({ deliveryBranch: "master" });
+    const result = detectBranchSyncFromProject({
+      projectRoot: root,
+      prBase: "master",
+      headSha: "abc",
+      runGit: gitForSync({
+        destRefPolicy: { deliveryBranch: "--upload-pack=evil", baseBranch: "develop" },
+        headOnIntegration: true,
+      }),
+    });
+    expect(result.isSync).toBe(false);
+    expect(result.reason).toBe("invalid-branch");
+  });
 });
 
 describe("applyCoreGuardWithBranchSync (#3388)", () => {
@@ -339,8 +360,11 @@ describe("deposited core-guard detector fragment (#3388)", () => {
     expect(body).toContain(BRANCH_SYNC_EXEMPTION_PREFIX);
     expect(body).toContain(`origin/' + pr_base + ':${BRANCH_SYNC_POLICY_BLOB}'`);
     expect(body).toContain("('main', 'master')");
+    expect(body).toContain("def safe_branch(n):");
+    expect(body).toContain("def fetch_branch(b):");
+    expect(body).toContain("if fetch_branch(pr_base).returncode != 0: sys.exit(1)");
     expect(body).toContain(
-      "if git('fetch', '--quiet', 'origin', pr_base).returncode != 0: sys.exit(1)",
+      "return git('fetch', '--quiet', 'origin', '--', 'refs/heads/' + b + ':refs/remotes/origin/' + b)",
     );
     expect(body).not.toContain("pathlib");
     expect(body).not.toMatch(/head\s*==\s*['"]develop['"]/);

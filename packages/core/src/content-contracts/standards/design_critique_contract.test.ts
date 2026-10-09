@@ -1210,6 +1210,41 @@ describe("design-critique contract + brief template + thin skill (#3434)", () =>
     expect(ceiling).toContain("Design-critique dispatch");
   });
 
+  it("locks Windows Claude argv ceiling + pong-only-proves-probe playbook limbs (#5492)", () => {
+    const dispatch = markdownSection(
+      readText("docs/grok-build-subscription-setup.md"),
+      "## Design-critique dispatch",
+    );
+    expect(dispatch).toContain("On every host");
+    expect(dispatch).toContain("Do not put the full envelope on argv or stdin");
+    expect(dispatch).toContain("launcher-dependent");
+    expect(dispatch).toContain("cmd.exe/batch");
+    expect(dispatch).toContain("8,191");
+    expect(dispatch).toContain("CreateProcessW");
+    expect(dispatch).toContain("32,767");
+    expect(dispatch).toContain("terminating null");
+    expect(dispatch).toContain('sole "CreateProcess ~8191"');
+    expect(dispatch).toContain("Do **not** treat a sole");
+    expect(dispatch).toContain("pong-ok proves only");
+    expect(dispatch).toContain("long-prompt transport");
+    expect(dispatch).toContain("envelope read/completion");
+    expect(dispatch).toContain("#5478");
+    expect(dispatch).not.toMatch(/(?:^|[^.])CreateProcess\s+~?\s*8191(?:\s|$)/m);
+    const ceiling = markdownSection(readText(CONTRACT), "### Envelope and ceiling");
+    expect(ceiling).toContain("Windows launcher-dependent command-line limits");
+    expect(ceiling).toContain("pong-only-proves-probe");
+    expect(ceiling).toContain("#5492");
+    expect(ceiling).toContain("#5478");
+    expect(ceiling).toContain("do not collapse with argv empty-exit");
+    const skill = readText(SKILL_REL);
+    expect(skill).toContain("#5478");
+    expect(skill).toContain("pong-only-proves-probe");
+    expect(skill).toContain("do not collapse with argv empty-exit");
+    expect(skill.split("\n").length).toBeLessThanOrEqual(MAX_SKILL_LINES);
+    expect(skill).not.toContain("CreateProcessW");
+    expect(skill).not.toContain("8,191");
+  });
+
   it("locks Grok critic-seat count-select and CLI recovery on the playbook (#4391)", () => {
     const dispatch = markdownSection(
       readText("docs/grok-build-subscription-setup.md"),
@@ -1256,6 +1291,38 @@ describe("design-critique contract + brief template + thin skill (#3434)", () =>
     expect(dispatch).not.toContain("wait on #4315");
     expect(dispatch).toContain("Do not make plan the critic seat");
     expect(dispatch).toContain("#4219");
+  });
+
+  it("locks Claude Critic-spawn hygiene + progress pointers (#5478)", () => {
+    const dispatch = markdownSection(
+      readText("docs/grok-build-subscription-setup.md"),
+      "## Design-critique dispatch",
+    );
+    expect(dispatch).toContain("Critic-spawn hygiene + progress (#5478)");
+    expect(dispatch).toContain("outFd");
+    expect(dispatch).toContain("detached");
+    expect(dispatch).toContain("unref");
+    expect(dispatch).toContain("T_progress");
+    expect(dispatch).toContain("T_timeout");
+    expect(dispatch).toContain("critic-spawn-progress.ts");
+    expect(dispatch).toContain("process tree");
+    expect(dispatch).toContain("#5492");
+    expect(dispatch).toContain("CreateProcess");
+    expect(dispatch).toContain("containment");
+    expect(dispatch).not.toContain("grow evaluateN3LaunchProbe into");
+    const ceiling = markdownSection(readText(CONTRACT), "### Envelope and ceiling");
+    expect(ceiling).toContain("Critic-spawn hygiene + progress (#5478)");
+    expect(ceiling).toContain("critic-spawn-progress.ts");
+    expect(ceiling).toContain("#5492");
+    expect(ceiling).toContain("containment");
+    expect(ceiling).toMatch(
+      /\u2297 Grow `evaluateN3LaunchProbe` into envelope progress, a watchdog, or a panel scheduler/,
+    );
+    const skill = readText(SKILL_REL);
+    expect(skill).toContain("Critic-spawn hygiene + progress (#5478)");
+    expect(skill).toContain("#5492 adjacent");
+    expect(skill).toContain("Containment first");
+    expect(skill.split("\n").length).toBeLessThanOrEqual(MAX_SKILL_LINES);
   });
 
   it("locks run-posture front door tokens and fixtures (#4072)", () => {

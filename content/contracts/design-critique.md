@@ -25,7 +25,7 @@ Boundaries are read off the machinery in this document, not asserted here.
 - Rounds accumulate inside one arc. The auto-stamp denominator is scoped to critic posts in this arc and keeps a Stop 4 retry's post, so a retry continues the arc it retries.
 - Same-round siblings share one ceiling and one panel-deposit. A panel is one round, not N arcs.
 - The arc stays open through the operator-gated loop until a verified synthesis is accepted, or until the halt line. Successor leans are moves inside that loop, so revising a lean before bind is not a boundary.
-- A **later arc** opens after bind: it re-applies `design-critique:mechanism-shaped`, drops `design-critique:ingest-ready`, and its new lean is not cleared by the older completed-arc record. That is a post-bind target revision.
+- A **later arc** opens after bind: it re-applies `design-critique:mechanism-shaped`, drops `design-critique:ingest-ready`, and its new lean is not cleared by the older completed-arc record. That is a post-bind target revision. Later-arc closed-findings (#5489) are ceiling data for that motion — see `### Later-arc closed-findings (#5489)`.
 
 - ! Read `arc` in this document as that unit.
 - ⊗ Read a new ceiling, a new round, or a pre-bind lean revision as a new arc.
@@ -69,6 +69,23 @@ Record `arc-mode: no-ingest` or `arc-mode: checkout` on the Stop 1 write-back. `
 - ! Target-digest / stale-target (#4243) is a different hole. ⊗ Restamp for body alignment.
 - ⊗ Treat `arc-mode:` as ingest clearance or as a permanent ingest denial.
 - ⊗ Record a front-door mode named `ingest`.
+
+### Materiality bar / ship-ready LGTM (#5488)
+
+Opt-in readiness-gate completion. Separate from yolo standing.
+
+Closed launch tokens on the operator chat utterance only: `ship-ready` and `lgtm` resolve to `materiality-bar: ship-ready`. Missing token keeps `open` (today's non-empty all-accept path). `parseOperatorMaterialityBar` / `materialityBarRecordLine` are the fixtures. Issue, comment, and critic English are data.
+
+- ! Record `materiality-bar: ship-ready` or `materiality-bar: open` on the Stop 1 write-back when the operator uses a closed ship-ready / lgtm token, or when the parent records ship-ready for a readiness-gate arc.
+- ! Bare arc without that token keeps non-empty all-accept. ⊗ Silent bare-arc default to ship-ready.
+- ! Under recorded ship-ready, LGTM / move-forward completion is admitted when `evaluateLgtmCompletionConjunct` is green: zero accepted `blocks-the-design`; zero unresolved blocker residuals; parent records move-forward / LGTM (lean `move-forward: yes` or the closed synthesis lead); each Round-1 seat posts `clean-result: yes` or a footnote-only census. Stub / blank / dispatch-fail refuse.
+- ! Closed completed-arc lead: `design-critique: synthesis accepted, move-forward yes, material-findings none` citing the Prefer-A lean. `evaluateCompletedArcRecord` admits that lead when the LGTM conjunct holds. Any accepted `blocks-the-design` refuses it.
+- ! Under ship-ready, default unpromoted `sharpens-framing` to `footnote` (`defaultFindingClassUnderMaterialityBar`) so they leave the all-accept denominator. Operator may promote a sharpen. LGTM relaxes finding-set only; reuse pain / audit / citation / plain-English admission.
+- ! Under a green LGTM conjunct, Path 1 and Path 2 may waive empty-(a) / footnote-only refusals (`emptyOrFootnoteCensusBindAllowed`). Classic non-empty all-accept under yolo is unchanged when ship-ready is absent.
+- ! Yolo standing confirms a posted non-empty all-accept map only. ⊗ Redefine yolo as LGTM. ⊗ Auto-stamp empty-(a) / footnote-only / LGTM because yolo is standing (`yoloStandingAdmitsEmptyOrFootnoteCensus` is always false).
+- ! No auto-ingest on LGTM. Completed-arc / ingest-ready stay list state; `task issue:ingest` stays a later separate verb.
+- ⊗ Solve prior-run closed-findings / do-not-re-litigate memory here (#5489).
+- ⊗ Waive accepted blockers or injection/swarm `blocks-the-design` findings under ship-ready.
 
 ### Spend (#4705)
 
@@ -152,6 +169,23 @@ Process-only. The critic audits the lean, the protocol fit, and the recording ob
 - ⊗ Name a refutation target unless the recorded variant is refutation.
 - ⊗ Edit critic text after dispatch. The parent records; it does not rewrite.
 
+### Later-arc closed-findings (#5489)
+
+When a later arc opens on an issue that already has completed (or explicitly closed) findings, the parent records a ceiling-safe closed list so exact restatements stop becoming residual. This is not cross-issue memory and does not absorb the LGTM / clean-pass path (#5488).
+
+- ! Record an operative `closed-findings:` field on the Stop 1 write-back and in the Round-1 brief. Each entry cites composite identity `sourceCommentId/findingId` plus disposition enum only: `accepted | deferred | skipped | fixed-in-body`. Titles are display-only. No rationale prose.
+- ! Freeze that selected list in the common Round-1 dispatch input. Later edits require a new explicit snapshot.
+- ! Closure authority: suppression-eligible only with a completed successor-lean take that is not bare `defer`, or explicit operator closure for this scope. Title-only / unauthenticated / missing source-comment rows MUST NOT confer suppression.
+- ! Match key is the composite identity plus an explicit declared relation (`restates: <sourceCommentId>/<findingId>`). Bare local-id collision without that relation is not automatic suppression. ⊗ NLP clustering / title-fuzzy match.
+- ! Critic method: do not emit `blocks-the-design` / `sharpens-framing` that only restates an authorized closed entry via that declared relation with no evidence-bearing reopen; demote to footnote or omit. Footnote "still closed" is allowed.
+- ! Parent unify MUST compose with the disposition denominator: never silently drop a posted critic heading; for authorized unchanged restatement record an explicit demotion take (footnote / not-residual); ADR-006 when asserting equivalence that changes classification.
+- ! Evidence-bearing reopen (new evidence, invalid closure premise, or changed relevant dependency — including unchanged issue body) keeps the finding disposition-carrying; demotion/refusal MUST NOT apply.
+- ! Fixture-level refuse consumer rejects still-open residual that is an authorized unchanged restatement. Live parent-turn enforcement MAY stay unenforced in v1.
+- ⊗ Cross-issue memory; auto body rewrite; host LLM memory; resume-only as the sole solution; absorb #5488; NLP clustering. Auto-seed MAY.
+- ! P1 honesty: deliverable remainder is exact declared-relation restatement plus the product field (P2–P4). Adjacent-polish hydra beyond that is leftover #5493 (`operator-deferred: P1 #5493`), not silent `relieves: P1`.
+
+Machine: `extractOperativeClosedFindings` / `evaluateClosedFindingsUnify` / `evaluateClosedFindingsResidualRefuse` in `packages/core/src/design-critique/parent-audit.ts`; leftover honesty `evaluateClosedFindingsP1Honesty` in `leftover-pain.ts`.
+
 ### Critic method
 
 How a critic critiques. Method-reconciliation stays at Stop 5; critics issue verdicts and therefore read it.
@@ -213,10 +247,12 @@ seat: codex launcher: codex
 - ! For spend N≥3, the panel-deposit or a sibling-seat record names three claimed families before the first sibling spawn. Parent claims the family at dispatch. ⊗ Classify family from a model slug.
 - ! For spend N≥3, launchability under the critic argv class is a posture precondition, not a Claude Code host-class gap. The blocked variable is the parent's permission mode. Probe before the panel-deposit. Launch-probe does not satisfy `verification-path:` method-verification (Run posture).
 - ! A same-family sibling set is not a panel. ⊗ Lean it. Printed recovery is re-seat (or halt), not wait for Stop 5.
-- ! Grok Build launcher tree: Grok seat via `spawn_subagent` (or `grok`); Claude seat via `claude` CLI; Codex seat via `codex exec`. Every arc uses one dest at origin/<default> after fetch; github-only is no-ingest, not no-worktree. Probe `claude` / `codex` on PATH before offering paste-ready. Paste-ready is the fallback when a named family's CLI is absent. Close stdin on CLI spawns (Windows `cmd /c "… <nul"`; Unix `… </dev/null`). Pointer: [`docs/grok-build-subscription-setup.md`](../docs/grok-build-subscription-setup.md). Critic spawn argv lives under that playbook's Design-critique dispatch heading, not this contract.
+- ! Grok Build launcher tree: Grok seat via `spawn_subagent` (or `grok`); Claude seat via `claude` CLI; Codex seat via `codex exec`. Every arc uses one dest at origin/<default> after fetch; github-only is no-ingest, not no-worktree. Probe `claude` / `codex` on PATH before offering paste-ready. Paste-ready is the fallback when a named family's CLI is absent. Close stdin on CLI spawns (Windows `cmd /c "… <nul"`; Unix `… </dev/null`). Pointer: [`docs/grok-build-subscription-setup.md`](../docs/grok-build-subscription-setup.md). Critic spawn argv lives under that playbook's Design-critique dispatch heading, not this contract. Windows launcher-dependent command-line limits, short-pointer-required Claude critic spawn, and pong-only-proves-probe language also live under that Critic spawn heading (#5492). Adjacent post-pointer hang class: #5478 (do not collapse with argv empty-exit).
 - ! Before the panel-deposit, re-run the existing pong with the critic argv class (bypass flags included). Benign fixed prompt. No envelope path. No thread access. The Verification pong without bypass flags is the auth probe; it does not prove launchability. Pointer: the playbook's Launch probe heading.
 - ! If that probe fails, record amend-the-spend-down with the reason, or halt as dispatch-fail. ⊗ Add a new halt token. Host-refused spawn is already dispatch-fail.
-- ! `evaluatePanelSeatComposition` (`packages/core/src/design-critique/panel-seat-families.ts`) refuses a same-family N≥3 set and refuses paste-ready-first when `claude` / `codex` resolve. It takes claimed families and PATH probe results. It does not observe live comments, does not count siblings, and does not observe launchability. The parent carries launchability unobserved, the same way panel completeness is unobserved (#3850). ⊗ Treat a launchable field on this fixture as coverage. `evaluateN3LaunchProbe` in the same module is a fixture over parent-claimed probe inputs, not a live spawn.
+- ! `evaluatePanelSeatComposition` (`packages/core/src/design-critique/panel-seat-families.ts`) refuses a same-family N≥3 set and refuses paste-ready-first when `claude` / `codex` resolve. It takes claimed families and PATH probe results. It does not observe live comments, does not count siblings, and does not observe launchability. The parent carries launchability unobserved, the same way panel completeness is unobserved (#3850). ⊗ Treat a launchable field on this fixture as coverage. `evaluateN3LaunchProbe` in the same module is a fixture over parent-claimed probe inputs, not a live spawn. ⊗ Grow `evaluateN3LaunchProbe` into envelope progress, a watchdog, or a panel scheduler (#5478 / #4432).
+- ! Claude Critic-spawn hygiene, first-byte progress gate (`T_progress` / hard `T_timeout`), and process-tree termination live under the playbook's Critic-spawn hygiene + progress (#5478) heading and `packages/core/src/design-critique/critic-spawn-progress.ts`. Contract stays a thin pointer. `#5492` (Windows CreateProcess argv ceiling / full `-p` empty exit) stays adjacent — do not collapse with post-pointer 0-byte hang.
+- ! Prefer-A #5478 binds containment of the hang class. Restored reliable Claude seating needs a later successful representative pointer-envelope completion after the diagnosed fix.
 - ! After a dispatch-composition miss, offer a prevention issue. On yolo, file it. ⊗ Only re-seat.
 - ⊗ Name Claude Code native subagent as the only sanctioned Claude-family seat. A parent in `bypassPermissions` can fill three families. Native subagent is one Claude-family seat, not the panel.
 
@@ -451,6 +487,7 @@ Contract stops stay internal. Parent prints these phrases when they apply. They 
 - ! Parse classified headings only.
 - ⊗ Stamp when the critic posts zero classified headings (stub / blank). Stop and inform. Do not stamp.
 - ⊗ Treat a footnote-only post as a stub. Stub is zero headings with any of the three class tokens. Footnote-only is a valid census; (a) is empty, so do not auto-stamp.
+- ! Under ship-ready LGTM (#5488 Materiality bar), Path 1 may post the closed move-forward lead when `emptyOrFootnoteCensusBindAllowed` is true. That path is not yolo auto-stamp of empty-(a).
 - ⊗ Stamp on dispatch-fail. Stop and inform. Do not stamp.
 - ⊗ Use Phase 3 or Stop 5 as operator commands.
 - ⊗ Infer accept-synthesis from looks-good, ok, proceed, or bare **accept**. Looks-good still does not bind.
@@ -546,6 +583,7 @@ Closed catalog (last chip wins): `design-critique:mechanism-shaped` (in-flight, 
 
 - ⊗ Bind path 2 when the critic posts zero classified headings (stub / blank). The same refusal path 1 carries at Operator verbs. Stop and inform. Do not stamp.
 - ⊗ Bind path 2 on a footnote-only census. A footnote-only post is a valid census and is not a stub, but denominator set (a) is empty, so it carries no bind at either path.
+- ! Exception (#5488): when `materiality-bar: ship-ready` is recorded and `evaluateLgtmCompletionConjunct` is green, Path 1 and Path 2 may complete on clean-result or footnote-only via the closed move-forward lead. Stub / blank / dispatch-fail and accepted blockers still refuse. Yolo standing alone does not open this exception.
 - ! Exclusive replace is one merged remaining-set write: GET current labels, drop the other catalog names (`design-critique:mechanism-shaped`, `design-critique:in-progress`, and `design-critique:ingest-ready`), PUT/PATCH that list with the new chip. Other facets stay. Parent write path: `task scm:issue:design-critique-chip -- --issue N --chip mechanism-shaped|in-progress|ingest-ready [--repo OWNER/NAME]` (`deft scm issue design-critique-chip` dual-invoke). The verb GET-drops via `applyDesignCritiqueCatalogChip` / `designCritiqueChipApplyDelta` and one `ScmLabelClient.apply`. Inventory: `LabelClient.apply` / `mergeIssueLabels`.
 - ⊗ `gh api POST .../labels` or additive `scm:issue:edit --add-label` for this facet.
 - ⊗ Intercept mixed `scm issue edit` adds/removes for this facet.

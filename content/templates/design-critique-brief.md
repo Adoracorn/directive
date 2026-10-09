@@ -13,11 +13,13 @@ Dispatch envelope skeleton for one critic or synthesis pass. Fill the fields. Re
 - Id ceiling (GitHub comment id, inclusive):
 - SHA at dispatch:
 - Run posture (`arc-mode: no-ingest` | `arc-mode: checkout`):
+- Materiality bar (`materiality-bar: open` | `materiality-bar: ship-ready`; ship-ready / lgtm launch tokens):
 - Target (work issue or umbrella):
 - Audit targets (marker ids, comma-separated, or `none`; ids only, no parent rationale). Copy onto the posted critic comment as an operative line-start `audit-targets:`. Pain-audit of relieves uses those ids (`pain-P1`), not an English heading:
 - Seat families (N≥3: three claimed families before spawn):
 - Dual-stop reserved literacy (N≥3 + non-vacuous pain: record `dual-stop-reserved:` on Stop 1 / parent; raise after reserved spent):
 - Verification path (process-only dest before panel-deposit: `verification-path: pin-read …` default, or provisioned runnable path):
+- Closed findings (later arc; operative `closed-findings:` composite `sourceCommentId/findingId` + disposition enum; freeze in Round-1 input):
 - Launcher (spawn_subagent | grok | claude | codex | paste-ready):
 
 ## Forbidden inputs
@@ -26,6 +28,8 @@ Do not put these in the envelope:
 
 - parent hypotheses
 - parent rationale on the audit-targets field (ids only)
+- closed-findings rationale prose or parent hypotheses about the open design (ceiling data only)
+- title-only closed-findings rows without source-comment id
 - named refutation target (unless the recorded charter is refutation)
 - parent-edited critic text
 - thread comments after the id ceiling
@@ -45,6 +49,7 @@ Read, do not restate:
 | Spend `spend:` / `spend-ask:` | Stop 1 — Gate |
 | Dual-stop reserved-slot literacy (`dual-stop-reserved:`) | Dual stop |
 | Verification-path before panel-deposit | Run posture / Critic method / Envelope and ceiling |
+| Later-arc closed-findings | Later-arc closed-findings (#5489) |
 | Variant selection | Stop 2 — Variant selection |
 | Parent-facing dispatch rules | Parent-facing dispatch rules |
 | Critic method | Critic method |

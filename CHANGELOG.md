@@ -15,22 +15,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Removed #5466 from active work after product PR #5476 shipped. The completed brief keeps the record of the shipped work.
-- Design-critique spend ask gate (#5466). Tracking #5466.
-- Leftover-complete #5365 after product #5484 (forge Environment/trusted-publisher/tag-ruleset evidence remains operator residual; YAML alone does not close).
-- Approved-scope mint for #4961 Prefer-A Bound Path B file_scope (membership fence).
-- Approved-scope mint for #4888 Prefer-A Bound Path B file_scope (membership fence).
-- Approved-scope mint for #4892 Prefer-A Bound Path B file_scope (membership fence).
-- npm publish Environment gate + tarball OIDC job split (#5365). Tracking #5365.
-- Remint approved-scope for #5466 Path B to include docs/RULE-MAP.md (rule-map freshness after contract edits).
-- Keep active #5466 Path B activation (bare-arc spend-resolve membership).
-- Approved-scope mint for #5466 Prefer-A Bound Path B file_scope (spend-resolve / ask-deny membership fence).
+- Keep active #5519 Path B activation (worktrees-probe membership fence).
+- Record approved scope for #5519 so the planned worktrees-probe case-fold fix can pass scope checks (mint only; product fix not shipped).
+- Keep completed #5364 after product PR #5485 (deliveryBranch fetch argv gate).
+- Record the approved scope for #5364 so its product changes can pass scope checks.
+- Path B remint approved-scope for #5364 Bound call-site inventory (sync-default, launch, origin-active-brief).
+- **Unsafe deliveryBranch fetch argv (#5364).** Rejects hostile or empty delivery-branch names before `git fetch` on the core policy helpers, generation-gate, and finalize-owed path; a missing PROJECT-DEFINITION with a usable git default still proceeds. Remaining Bound call sites (launch, sync-default, origin-active-brief, delivery-evidence) stay on a follow-up under the #4956 production allowance. Tracking #5364.
+- **Unsafe deliveryBranch fetch argv (#5364).** Rejects hostile or empty delivery-branch names before `git fetch` on the core policy helpers and generation-gate; a missing PROJECT-DEFINITION with a usable git default still proceeds. Follow-up #5516 covers finalize-owed plus remaining Bound inventory (launch, sync-default, origin-active-brief, delivery-evidence) under the #4956 production allowance. Tracking #5364. Refs #5516.
+- Leftover-complete #5488 after product #5498.
+- Design-critique ship-ready LGTM move-forward completion (#5488). Tracking #5488.
+- Earlier design reviews no longer affect the current review when comments arrive newest first (#5488).
+- Leftover-complete #5492 after product #5510.
+- Leftover-complete #5478 after product #5509.
+- Keep active #4961 Path B activation (membership fence).
+- Keep active Path B activation after rebase (PR #5495).
+- Leftover-complete #5488 after product #5498.
 
 ### Added
 - **feat(guidance): Directive Tutorial after Name — Signal, Postcard, or Echo (Tracking #4981).** After Name is first saved, setup offers Start / Skip / Discuss / Back. Progress lives next to USER.md (`tutorial-state.json`). Shared seven steps read `content/tutorial/glossary.md`; project names live under `content/tutorial/projects/`. `deft tutorial:offer|start|inspect|advance|resume|skip|reset` (plus decline/defer aliases) drive the sitting in a disposable local sandbox. A failed check stays on prove-it. Reset clears progress without re-firing the automatic offer. Refs #4371.
+- **Design-critique later-arc closed-findings (#5489).** Later arcs on the same ticket no longer re-litigate findings the parent already closed: critics demote authorized restatements, and reopen needs evidence. Adjacent-polish hydra remainder deferred to #5493. Tracking #5489. Refs Prefer-A Bound 6065006497.
+
+### Fixed
+- Leftover-complete #5489 after product #5497.
+- Keep active #4961 Path B activation (membership fence).
+- **Path B activation survives rebase (#5495).** After rebasing onto master, the approved brief stays active so the stacked product PR can still use its declared file list. Tracking #5495.
+- **Stalled Claude critics (#5478).** Adds checks to detect stalled Claude critics and stop them and their child processes before replacement. A successful launch check does not prove that a critic will finish; reliable completion still needs a later successful run. The separate Windows command-length issue remains tracked in #5492. Tracking #5478. Refs Prefer-A Bound 6065703308.
+- **Human-approved Path B scopes for #5478 / #5492 / #5488 / #5489 / #5364.** Later product PRs can use these allowlists to pass scope membership without rewriting product behavior. Tracking those issues.
+- **Remint approved-scope for #4892 Path B.** The stacked product PR can pass scope checks after this remint refreshes the approved tip and nonempty module boundary. Tracking #4892.
+
+### Added
+- **Active #4892 Prefer-A Bound brief for Path B.** Lands the approved active brief and file list so a later product PR can implement Continuity ADR-003 docs without a scope-membership block. Leaves metadata.productPullRequest unset on this activation land. Tracking #4892.
+- **Design-critique later-arc closed-findings (#5489).** Later arcs on the same ticket no longer re-litigate findings the parent already closed: critics demote authorized restatements, and reopen needs evidence. Adjacent-polish hydra remainder deferred to #5493. Tracking #5489. Refs Prefer-A Bound 6065006497.
 
 ### Changed
 
+- docs(design-critique,windows): name launcher-dependent CreateProcess/cmd argv ceilings + pointer-required Claude critic spawn; pong proves probe only; keep #5478 adjacent (#5492).
 - chore: leftover-complete #5465 after Tracking PR #5468 (completed xBRIEF + #3675 Prefer-A residual).
 
 ### Fixed

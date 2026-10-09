@@ -1,8 +1,12 @@
 {
-  "schemaVersion": 1,
-  "algo": "intent-extract-v1",
+  "xBRIEFInfo": {
+    "version": "0.8",
+    "description": "Scope xBRIEF ingested from GitHub issue #4892",
+    "updated": "2026-10-08T12:18:05Z"
+  },
   "plan": {
     "title": "Managed card cites ADR-003 but docs/decisions never ships",
+    "status": "running",
     "narratives": {
       "Description": "Managed card cites ADR-003 but docs/decisions never ships in deposit. Prefer-A Bound 6050318913.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4892",
@@ -13,35 +17,45 @@
       {
         "id": "clause.1",
         "title": "Deposit ADR-003 via content/docs flatten",
+        "status": "pending",
+        "x-directive/artifact_path": "content/docs/decisions/ADR-003-a2a-nuclear-family-topology.md",
         "narrative": {
           "Acceptance": "Place ADR-003 on deposit-reachable path using content/docs -> pack docs -> consumer .deft/core/docs flatten. Include accepted bytes at content/docs/decisions/ADR-003-a2a-nuclear-family-topology.md. Wire deposit-required-paths / link rewrite. Keep maintainer docs/decisions as SoT or document dual-path. No root-docs prepack carve-out."
-        },
-        "x-directive/artifact_path": "content/docs/decisions/ADR-003-a2a-nuclear-family-topology.md"
+        }
       },
       {
         "id": "clause.2",
         "title": "Update Continuity cites to deposit-reachable path",
+        "status": "pending",
+        "x-directive/artifact_path": "content/templates/agents-entry.md",
         "narrative": {
           "Acceptance": "Update shipped Continuity cites naming ADR-003 for consumers: agents-entry managed card Depth line, content/swarm/swarm.md, content/meta/security.md. Point at deposit-reachable path after agents:refresh / pack projection."
-        },
-        "x-directive/artifact_path": "content/templates/agents-entry.md"
+        }
       },
       {
         "id": "clause.3",
         "title": "Refuse docs/decisions root-docs prepack carve-out",
+        "status": "pending",
+        "x-directive/artifact_path": "CHANGELOG.md",
         "narrative": {
           "Acceptance": "Refuse a docs/decisions root-docs prepack carve-out (same Reject as #4891 Prefer-A Bound)."
-        },
-        "x-directive/artifact_path": "CHANGELOG.md"
+        }
       },
       {
         "id": "clause.4",
         "title": "Leave #3940 tracker; cross-link only",
+        "status": "pending",
+        "x-directive/artifact_path": "CHANGELOG.md",
         "narrative": {
           "Acceptance": "Leave parent #3940 as tracker. Cross-link only to #3847 and #4890; do not absorb those scopes."
-        },
-        "x-directive/artifact_path": "CHANGELOG.md"
+        }
       }
+    ],
+    "tags": [
+      "status:child",
+      "design-critique:ingest-ready",
+      "core-capabilities",
+      "promise:continuity"
     ],
     "references": [
       {
@@ -144,6 +158,16 @@
         "sha256": "f3ee267d55283638f48b368e593b26a97ac04c13d18f9c3aad7ddf092f5c3227"
       },
       "swarm": {
+        "readiness": "ready",
+        "conflict_group": "adr-003-managed-card-deposit-cite",
+        "expected_outputs": [
+          "Tracking PR for #4892 Prefer-A Bound ADR-003 deposit-reachable Continuity cite"
+        ],
+        "depends_on": [],
+        "model_tier": "standard",
+        "verify_commands": [
+          "pnpm exec vitest run packages/core/src/content-contracts/skills/agents_entry_contract.test.ts"
+        ],
         "file_scope": [
           "CHANGELOG.md",
           "AGENTS.md",
@@ -156,21 +180,15 @@
           "packages/core/src/deposit/stage-content-pack.test.ts",
           "content/contracts/deposit-required-paths.json"
         ],
+        "size": "S",
+        "file_scope_confidence": "high",
         "Traces": [
           "#4892"
-        ]
+        ],
+        "parallel_safe": true
       }
     },
-    "id": "github.issue.5540583613"
-  },
-  "approvedRepos": [
-    "deftai/directive"
-  ],
-  "unknownPaths": [
-    "items[].x-directive/artifact_path",
-    "metadata.intended_placement",
-    "metadata.swarm.Traces",
-    "metadata.x-directive/admitted-target-digest",
-    "metadata.x-directive/plan-id"
-  ]
+    "id": "github.issue.5540583613",
+    "updated": "2026-10-08T12:18:05Z"
+  }
 }
