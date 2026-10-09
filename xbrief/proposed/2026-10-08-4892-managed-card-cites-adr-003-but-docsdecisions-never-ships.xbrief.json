@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #4892",
-    "updated": "2026-10-09T16:53:45Z"
+    "updated": "2026-10-09T18:29:41Z"
   },
   "plan": {
     "title": "Managed card cites ADR-003 but docs/decisions never ships",
-    "status": "cancelled",
+    "status": "proposed",
     "narratives": {
       "Description": "Managed card cites ADR-003 but docs/decisions never ships in deposit. Prefer-A Bound 6050318913.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4892",
@@ -189,10 +189,10 @@
       },
       "lifecycleWrite": {
         "action": "cancel",
-        "writtenAt": "2026-10-09T16:53:45Z"
+        "writtenAt": "2026-10-09T18:29:29Z"
       }
     },
     "id": "github.issue.5540583613",
-    "updated": "2026-10-09T16:53:45Z"
+    "updated": "2026-10-09T18:29:41Z"
   }
 }

@@ -33,8 +33,19 @@ _Scopes not yet promoted to pending. Orientation only — not a substitute for `
 
 ## Completed
 
-_Showing 25 of 1775 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
+_Showing 25 of 1786 completed scopes (newest first). Full history: lifecycle `completed/` (or `task report` when available)._
 
+- **#5519** -- fix(triage): worktrees-probe case-fold sibling unregister flake recurred on 0.124.0 tip (post-#5460) -- `[completed]`
+- **#5492** -- docs(design-critique,windows): name CreateProcess argv ceiling for Claude critic pointer spawn -- `[completed]`
+- **#5478** -- bug(design-critique,windows): Claude critic seat hangs 0-byte after launch-probe pong-ok (pointer envelope) -- `[completed]`
+- **#5489** -- design-critique: later arcs on the same ticket re-litigate closed findings -- `[completed]`
+- **#5488** -- design-critique: allow a finished arc to mean “looks good to me” -- `[completed]`
+- **#5364** -- [AppSec] HIGH subprocess-scm-01: Unvalidated deliveryBranch is passed to git fetch as a raw refspec/option -- `[completed]`
+- **#5365** -- [AppSec] HIGH ci-secrets-supply-02: npm trusted publish has no environment gate and fires on any v* tag -- `[completed]`
+- **#5466** -- bug(design-critique): bare-arc spend recommend-first still asks (need spend-resolve verb + ask-deny) -- `[completed]`
+- **#5467** -- BLOCKER 0.123.0 still fail-closes Visage vbrief:validate on proposed/active history after #5427; consumer remains on 0.119.2 -- `[completed]`
+- **#5463** -- docs(installer): 0.122.0 consumer text has a non-runnable task command, missing required flags, and a .gitattributes comment/attribute mismatch -- `[completed]`
+- **#5465** -- docs(agents): 0.123.0 agents-entry #5278 drops required --scope-id/--target-id on pre-dispatch cancel -- `[completed]`
 - fix(triage): worktrees probe fail-closed must not case-fold sibling admin entries -- `[completed]`
 - **#5385** -- 0.121.0 schema makes narratives.Confidence an enum under the same 0.8 version, invalidating existing briefs with no migration -- `[completed]`
 - **#5382** -- scope:stamp-evidence writes kind:test evidence on markdown pointers that scope:complete then rejects (#5105) -- `[completed]`
@@ -49,15 +60,4 @@ _Showing 25 of 1775 completed scopes (newest first). Full history: lifecycle `co
 - **#5415** -- fix(design-critique): presence-only ## In plain English gate before ingest-ready (#5415) -- `[completed]`
 - **#5422** -- [framework-gap] BLOCKER 0.121.0 still fail-closes Visage historical x-xbrief/* types and clause:N ids; consumer pinned at 0.119.2 since 0.119.3 -- `[completed]`
 - **#5412** -- bug(scope): live discovery must not bind pending planning transitions as active (#5412) -- `[completed]`
-- **#5413** -- feat(occupancy): 24h max lease + same-session primary residue reclaim (#5413) -- `[completed]`
-- **#5373** -- bug(deterministic-questions): multi-choice must always show hard-stop 'I have questions' escape (Other is not enough) -- `[completed]`
-- **#5350** -- feat(spec): C3 enforce specGuard / verify:spec-drift (proof-of-rewrite + per-item impact) — leftover of #1589 / #5315 -- `[completed]`
-- **#5393** -- bug(verify-ac): bug-report briefs derive defect-description clauses that cannot verify after the fix, so scope:complete has no exit for shipped work -- `[completed]`
-- **#5391** -- dx(cli): scope:promote effort error, triage:accept empty-items guidance, verify:docs-impact '--' handling -- `[completed]`
-- **#5390** -- bug(worktree): payload reconstitution omits .deft/core/VERSION; doctor fails manifest-agreement and gates writes, remediation is deft update -- `[completed]`
-- **#5375** -- session:start cold: duration_ms ≫ sum(steps[]) — multi-minute unlabeled gap on Windows -- `[completed]`
-- **#5387** -- bug(closing-keywords): Path B activation vs productPullRequest delivery bind catch-22 -- `[completed]`
-- **#5372** -- bug(design-critique): bare-arc spend recommend-first is prose-only; agents hit ask MUST instead -- `[completed]`
-- **#5355** -- [framework-gap] Interview regression coverage does not exercise phase drift and proposal growth across turns -- `[completed]`
-- **#5354** -- [framework-gap] Canonical interview strategy contradicts setup on PRD authority and scope promotion -- `[completed]`
 

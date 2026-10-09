@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+### Changed
+
+### Fixed
+
+### Removed
+
+## [0.124.0] - 2026-10-09
+
+> Design-critique ship-ready LGTM (#5488) and later-arc closed-findings (#5489), deliveryBranch fetch argv gate (#5364), npm publish Environment/OIDC residual (#5365), Claude critic stall hygiene (#5478), Visage 0.8 validate demotions (#5467), installer dual-invoke (#5463), worktrees-probe case-fold sibling harden (#5519), plus Path B activations and leftover-complete.
+
 ### Fixed
 - Record the completed work for #5519 after product PR #5524.
 - Removing an evaluator worktree no longer risks unregistering another worktree whose name differs only by case. This also protects the other worktree when a cached filesystem check is stale (#5519).
@@ -7060,7 +7072,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.123.0...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.124.0...HEAD
+[0.124.0]: https://github.com/deftai/directive/compare/v0.123.0...v0.124.0
 [0.123.0]: https://github.com/deftai/directive/compare/v0.122.0...v0.123.0
 [0.122.0]: https://github.com/deftai/directive/compare/v0.121.0...v0.122.0
 [0.121.0]: https://github.com/deftai/directive/compare/v0.120.0...v0.121.0

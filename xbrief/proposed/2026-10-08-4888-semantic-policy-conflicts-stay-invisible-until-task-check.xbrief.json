@@ -2,11 +2,11 @@
   "xBRIEFInfo": {
     "version": "0.8",
     "description": "Scope xBRIEF ingested from GitHub issue #4888",
-    "updated": "2026-10-09T16:53:40Z"
+    "updated": "2026-10-09T18:29:38Z"
   },
   "plan": {
     "title": "Semantic policy conflicts stay invisible until task check",
-    "status": "cancelled",
+    "status": "proposed",
     "narratives": {
       "Description": "Semantic policy conflicts stay invisible until task check. Prefer-A Bound 6050812821.",
       "Origin": "Ingested from https://github.com/deftai/directive/issues/4888",
@@ -196,10 +196,10 @@
       },
       "lifecycleWrite": {
         "action": "cancel",
-        "writtenAt": "2026-10-09T16:53:40Z"
+        "writtenAt": "2026-10-09T18:29:24Z"
       }
     },
     "id": "github.issue.5540579955",
-    "updated": "2026-10-09T16:53:40Z"
+    "updated": "2026-10-09T18:29:38Z"
   }
 }
