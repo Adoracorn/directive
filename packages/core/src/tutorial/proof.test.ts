@@ -2,11 +2,13 @@
  * Proof coverage for the Directive Tutorial (#4981).
  * Progress lives in preferences; practice work uses a disposable repo.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { lifecycleMain } from "../scope/main.js";
+import { formatBriefJson } from "../scope/vbrief-json.js";
 import { type TutorialIo, tutorialMain } from "./cli.js";
 import { loadTutorial, projectFields, renderWiredSession } from "./render.js";
 
@@ -101,5 +103,89 @@ describe("Directive Tutorial proof (#4981)", () => {
 
     expect(run(projectRoot, prefs, ["reset", "--json"]).out).toContain('"currentBeat": null');
     expect(run(projectRoot, prefs, ["offer", "--json"]).out).toContain('"offerNow": false');
+  });
+
+  it("practice close stamps acceptance evidence then completes with non-delivery", () => {
+    const root = tempDir("deft-tutorial-close-");
+    mkdirSync(join(root, "xbrief", "active"), { recursive: true });
+    mkdirSync(join(root, "signal"), { recursive: true });
+    writeFileSync(join(root, "signal", "signal.mjs"), "console.log('ok');\n", "utf8");
+    writeFileSync(
+      join(root, "package.json"),
+      `${JSON.stringify({ name: "signal-practice", scripts: { test: 'node -e "process.exit(0)"' } }, null, 2)}\n`,
+      "utf8",
+    );
+    const active = join(root, "xbrief", "active", "signal.xbrief.json");
+    writeFileSync(
+      active,
+      formatBriefJson({
+        xBRIEFInfo: { version: "0.8" },
+        plan: {
+          id: "signal-practice",
+          title: "Signal practice",
+          status: "running",
+          items: [{ id: "clause.1", title: "clause.1", status: "pending" }],
+          acceptance: {
+            commands: ["npm test"],
+            none_stated: false,
+            source_rung: "derived",
+            ambiguity_attestation: "none_found",
+            clauses: [
+              {
+                id: 1,
+                text: "unit covers signal/signal.mjs",
+                artifact_path: "signal/signal.mjs",
+                ambiguous: false,
+              },
+            ],
+          },
+          metadata: {
+            swarm: {
+              file_scope: ["signal/**"],
+              verify_commands: ["npm test"],
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const out: string[] = [];
+    const err: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      out.push(String(chunk));
+      return true;
+    });
+    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      err.push(String(chunk));
+      return true;
+    });
+    try {
+      expect(lifecycleMain(["stamp-evidence", active, "--project-root", root])).toBe(0);
+      const completeCode = lifecycleMain([
+        "complete",
+        active,
+        "--project-root",
+        root,
+        "--non-delivery",
+        "experiment_archived",
+      ]);
+      expect(completeCode, err.join("") || out.join("")).toBe(0);
+    } finally {
+      stdoutSpy.mockRestore();
+      stderrSpy.mockRestore();
+    }
+
+    const completed = join(root, "xbrief", "completed", "signal.xbrief.json");
+    expect(existsSync(completed)).toBe(true);
+    const parsed = JSON.parse(readFileSync(completed, "utf8")) as {
+      plan: { items: Array<Record<string, unknown>>; status: string };
+    };
+    expect(parsed.plan.status).toBe("completed");
+    expect(parsed.plan.items[0]?.["x-directive/evidence"]).toMatchObject({
+      kind: "test",
+      pointer: "signal/signal.mjs",
+    });
+    expect(out.join("")).toMatch(/stamp-evidence|Completed/i);
   });
 });

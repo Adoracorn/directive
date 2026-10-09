@@ -289,6 +289,30 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(pastClose.message).toContain("Work already closed");
   });
 
+  it("refuses Back after the tutorial is completed so finished progress cannot reopen", () => {
+    let state = begin();
+    state = advanceTutorial(state, beats, { project: "signal" }).state;
+    state = advanceTutorial(state, beats, { content: "Alex — on the bridge." }).state;
+    state = advanceTutorial(state, beats, {
+      confirm: true,
+      workItemPath: "xbrief/proposed/signal.xbrief.json",
+    }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { contentSeen: true }).state;
+    state = advanceTutorial(state, beats, { check: "pass" }).state;
+    state = advanceTutorial(state, beats, { confirm: true }).state;
+    state = advanceTutorial(state, beats, { complete: true }).state;
+    state = advanceTutorial(state, beats, {}).state;
+    expect(state.status).toBe("completed");
+    expect(state.currentBeat).toBe("leave");
+
+    const backed = backBeat(state, beats);
+    expect(backed.ok).toBe(false);
+    expect(backed.state.status).toBe("completed");
+    expect(backed.state.currentBeat).toBe("leave");
+    expect(backed.message).toContain("already finished");
+  });
+
   it("clears prove-it results when Back returns to change", () => {
     let state = begin();
     state = advanceTutorial(state, beats, { project: "signal" }).state;

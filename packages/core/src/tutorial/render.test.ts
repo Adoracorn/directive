@@ -192,6 +192,10 @@ describe("Directive Tutorial session messages (#4981)", () => {
     expect(start.command).not.toMatch(/promote -- \/tmp\/My Practice\//);
     const close = fillBeat(mustBeat("close"), withPath);
     const activeQuoted = shellQuotePath("/tmp/My Practice/xbrief/active/signal.xbrief.json");
+    expect(close.command).toContain(`deft scope:stamp-evidence -- ${activeQuoted}`);
     expect(close.command).toContain(`deft scope:complete -- ${activeQuoted}`);
+    expect(close.command.indexOf("stamp-evidence")).toBeLessThan(
+      close.command.indexOf("scope:complete"),
+    );
   });
 });

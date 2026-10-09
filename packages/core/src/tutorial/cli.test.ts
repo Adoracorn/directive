@@ -355,6 +355,7 @@ describe("deft tutorial commands (#4981)", () => {
     expect(run(projectRoot, prefs, ["advance", "--check", "pass"]).code).toBe(0);
     expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0);
     const onClose = run(projectRoot, prefs, ["inspect", "--json"]);
+    expect(JSON.parse(onClose.out).command).toContain("scope:stamp-evidence");
     expect(JSON.parse(onClose.out).command).toContain("scope:complete");
     expect(run(projectRoot, prefs, ["advance", "--complete"]).code).toBe(0);
     const backStep = run(projectRoot, prefs, ["advance", "--project", "back", "--json"]);
@@ -384,6 +385,25 @@ describe("deft tutorial commands (#4981)", () => {
     expect(pastBody.state.currentBeat).toBe("close");
     expect(pastBody.state.closeLifecycleDone).toBe(true);
     expect(pastBody.message).toContain("Work already closed");
+
+    // Finish the sitting, then Back must refuse so completed cannot become in_progress.
+    expect(run(projectRoot, prefs, ["advance", "--project", "1"]).code).toBe(0); // close → leave
+    expect(run(projectRoot, prefs, ["advance"]).code).toBe(0); // leave → completed
+    const finished = JSON.parse(run(projectRoot, prefs, ["inspect", "--json"]).out) as {
+      state: { status: string; currentBeat: string };
+    };
+    expect(finished.state.status).toBe("completed");
+    const backFinished = run(projectRoot, prefs, ["advance", "--project", "back", "--json"]);
+    expect(backFinished.code).toBe(1);
+    const backFinishedBody = JSON.parse(backFinished.out) as {
+      ok: boolean;
+      message: string;
+      state: { status: string; currentBeat: string };
+    };
+    expect(backFinishedBody.ok).toBe(false);
+    expect(backFinishedBody.state.status).toBe("completed");
+    expect(backFinishedBody.state.currentBeat).toBe("leave");
+    expect(backFinishedBody.message).toContain("already finished");
   });
 
   it("accepts I have questions as the Discuss pause alias", () => {

@@ -84,13 +84,13 @@
       "name": "Close",
       "wired": true,
       "where": "Step 6 of 7.",
-      "about": "Mark the work finished only after the acceptance sentence was verified. Then the work list for this practice sitting is empty.",
+      "about": "Record acceptance proof on the work file, then mark the work finished only after the acceptance sentence was verified. Then the work list for this practice sitting is empty.",
       "terms": [
         "done"
       ],
       "caveat": "",
       "output": "",
-      "command": "deft scope:complete -- {activeWorkItemPath} --non-delivery experiment_archived",
+      "command": "deft scope:stamp-evidence -- {activeWorkItemPath}\ndeft scope:complete -- {activeWorkItemPath} --non-delivery experiment_archived",
       "next": "Complete the work item?\n\n1. Go\n2. Leave\n3. Discuss\n4. Back"
     },
     {

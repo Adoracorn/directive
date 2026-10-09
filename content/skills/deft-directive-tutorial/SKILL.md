@@ -45,7 +45,7 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 ! Record a project pick with `deft tutorial:advance --project signal|postcard|echo` (or `1|2|3`).
 ! Leave runs `deft tutorial:leave` (also `--project 4` / `--project leave` on advance).
 ! Discuss (`--project discuss` / menu Discuss) pauses and asks what to discuss; do not advance.
-! Back (`--project back` / menu Back) moves one wired step earlier; on step 1 refuse Leave or Discuss.
+! Back (`--project back` / menu Back) moves one wired step earlier; on step 1 refuse Leave or Discuss. Back refuses when status is `completed` so finished progress cannot reopen.
 ! Every project option uses the same seven steps. Only the toy changes.
 ! Practice work runs in `repoPath`, a disposable local Git repository.
 ! On every later step the person may still leave (`deft tutorial:leave`).
@@ -77,7 +77,7 @@ The person finishes one menu option, or has a recorded skip. The agent reads eac
 - Step 3 start: `--confirm` (menu: 1 Yes / 2 Leave / 3 Discuss / 4 Back). Commands promote and activate the proposed work file, then create the branch. After `startLifecycleDone` (Back to start), JSON `command` is null — do not re-run them.
 - Step 4 change: `--content-seen` (menu: 1 Go / 2 Leave / 3 Discuss / 4 Back)
 - Step 5 prove: menu 1 Go (run check), then record `--check pass|fail` (fail stays; pass stays on Continue). Menu after pass: 1 Continue / 2 Leave / 3 Discuss / 4 Back. After fail: 1 Try again / 2 Leave / 3 Discuss / 4 Back. A combined `--project 1 --check pass` on a failed prove step records the new result.
-- Step 6 close: `--complete` (menu: 1 Go / 2 Leave / 3 Discuss / 4 Back; only after a pass + Continue). After `closeLifecycleDone` (Back to close), JSON `command` is null — do not re-run complete.
+- Step 6 close: stamp acceptance proof then complete (`--complete`; menu: 1 Go / 2 Leave / 3 Discuss / 4 Back; only after a pass + Continue). Commands run `scope:stamp-evidence` then `scope:complete --non-delivery experiment_archived`. After `closeLifecycleDone` (Back to close), JSON `command` is null — do not re-run stamp-evidence or complete.
 - Step 7 leave: `advance` with no extra flags (only after close); otherwise `deft tutorial:leave`
 
 ## Progress

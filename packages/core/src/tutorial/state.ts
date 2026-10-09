@@ -313,6 +313,14 @@ function clearPlanAndLater(state: TutorialState): TutorialState {
 
 /** Step back one wired beat (Discuss/Back contract). */
 export function backBeat(state: TutorialState, beats: readonly TutorialBeatRef[]): TutorialStep {
+  if (state.status === "completed") {
+    return step(
+      false,
+      "The tutorial is already finished. Reset before going back.",
+      state,
+      state.currentBeat,
+    );
+  }
   if (state.currentBeat === null) {
     return step(false, "The tutorial has not started.", state, null);
   }
