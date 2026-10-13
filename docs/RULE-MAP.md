@@ -12,6 +12,7 @@ Maintainer-facing map of how Directive's rules are layered and grouped. This is 
 - **Tasks:** 65 namespaces, 286 Taskfile declarations (includes + unlisted tasks/*.yml, not `task --list`)
 - **Packs:** 6 source-of-truth packs (718 entries from rules|lessons|patterns|skills|strategies|entries)
 
+
 Three layers: **Rules** (lazy-loaded guidance under `content/`), **Tasks** (the Taskfile gates that enforce them), and the **Lifecycle** that ties them together.
 
 ## Rule groupings
@@ -465,7 +466,7 @@ _How agents prove work is done: gates, validators, coverage, review._
 | umbrella | Fetch umbrella ## Current shape comment (#1152) — task umbrella:current-shape <N> [-- --repo OWNER/REPO \| --json \| --strict]. Does NOT… | 1 |
 | value | Pull-based attributed-value trend readout (#1709). -- task value:show -- [--window=7d\|30d] [--format=text\|json] | 1 |
 | vbrief | Validate and manage vBRIEF lifecycle state and structure. | 6 |
-| verify | Verification gates: stub scans, session ritual, story-ready, oracles. | 74 |
+| verify | Verification gates: stub scans, session ritual, story-ready, oracles. | 75 |
 | xbrief | Validate xBRIEF lifecycle folder structure and cross-file consistency. Alias of vbrief:validate with xbrief-first naming (#3483). | 3 |
 
 ## Lifecycle
@@ -488,3 +489,4 @@ Directive turns a coding agent into an auditable process: load only the guidance
 | `content/packs/skills/skills-pack-0.1.json` | 0.1 | 27 | 0 | 0 | 0 |
 | `content/packs/strategies/strategies-pack-0.1.json` | 0.1 | 16 | 0 | 0 | 0 |
 | `content/packs/swarm-spec/swarm-spec-pack-0.1.json` | 0.1 | 1 | 0 | 0 | 0 |
+

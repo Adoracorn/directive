@@ -18,13 +18,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Typed `plan.policy.review.minGreptileConfidence=4` so Greptile CLEAN / merge-ready accept 4/5 for this cohort (#3095).
-
 ### Fixed
 
 - **fix(tutorial): keep progress when practice cwd changes (#4981 / #5464).** Tutorial state stays next to personal USER.md prefs so sandbox practice commands do not lose the saved run. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — stamp evidence before close + refuse Back when completed (#4981).** Close runs `scope:stamp-evidence` before `scope:complete --non-delivery`; Back refuses after status is completed so finished progress cannot reopen. Tracking #4981.
 - **fix(tutorial): Greptile 4/5 — refuse Back past close + Discuss hatch alias (#4981).** Once close has run, Back stops at close (no rewind to prove/change with a missing check command); `I have questions` pauses like Discuss. Tracking #4981.
+
+### Removed
+
+## [0.125.0] - 2026-10-09
+
+> Cohort ship: deliveryBranch lifecycle wiring, scm:body CLI aliases + rule-to-verb parity, Greptile floor 4, Path B activations, unpaid skip-ci seam for Windows Step 5 hang.
+
+### Added
+- **scm:body:* CLI aliases + rule-to-verb parity (#5521).** Registers eight `deft scm:body:*` colon aliases onto the github-body engine, stops unknown-verb hints from re-suggesting the failing spelling, and wires `verify:rule-to-verb-parity` into `deft check` / `check:framework-source` (uncached deps too). Deferred/stubbed top-level verbs and unknown named family globs fail closed. Tracking #5521.
+
+### Changed
+
+- Typed `plan.policy.review.minGreptileConfidence=4` so Greptile CLEAN / merge-ready accept 4/5 for this cohort (#3095).
+
+### Fixed
+
+- Record the completed work for #5521 after product PR #5529.
+- Rule-to-verb parity accepts router-branch colon verbs and requires complete Taskfile keys (#5521).
+
 - Path B activation for #5521 membership fence.
 - Record the completed work for #5479 after product PR #5530.
 - Record the completed work for #5526 after product PR #5528.
@@ -7100,7 +7117,8 @@ If you have custom scripts or references to deft files, update these paths:
 
 
 
-[Unreleased]: https://github.com/deftai/directive/compare/v0.124.0...HEAD
+[Unreleased]: https://github.com/deftai/directive/compare/v0.125.0...HEAD
+[0.125.0]: https://github.com/deftai/directive/compare/v0.124.0...v0.125.0
 [0.124.0]: https://github.com/deftai/directive/compare/v0.123.0...v0.124.0
 [0.123.0]: https://github.com/deftai/directive/compare/v0.122.0...v0.123.0
 [0.122.0]: https://github.com/deftai/directive/compare/v0.121.0...v0.122.0
@@ -7362,6 +7380,7 @@ If you have custom scripts or references to deft files, update these paths:
 [0.2.0]: https://github.com/visionik/warping/releases/tag/v0.2.0
 
 [0.1.0]: https://github.com/visionik/warping/releases/tag/v0.1.0
+
 
 
 
