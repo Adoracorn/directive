@@ -18,13 +18,13 @@ import {
   offerTutorial,
   resetTutorial,
   resolveProjectChoice,
+  resolveTutorialStatePath,
   resumeTutorial,
   saveTutorialState,
   skipBeat,
   skipOffer,
   startTutorial,
   type TutorialStep,
-  resolveTutorialStatePath,
 } from "./state.js";
 
 export interface TutorialIo {
