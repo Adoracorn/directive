@@ -24,7 +24,7 @@ import {
   skipOffer,
   startTutorial,
   type TutorialStep,
-  tutorialStatePathPersonal,
+  resolveTutorialStatePath,
 } from "./state.js";
 
 export interface TutorialIo {
@@ -312,12 +312,9 @@ export function tutorialMain(argv: readonly string[], io: TutorialIo = consoleIo
   const projectRoot = resolve(projectRootFlag ?? ".");
   const frameworkRoot = resolve(flagValue(rest, "--framework-root") ?? defaultFrameworkRoot());
   const prefsHome = flagValue(rest, "--prefs-home");
-  // Always personal prefs unless --prefs-home (sidecar next to USER.md).
-  // --project-root only places the practice sandbox; it must not fork state (#5464 P1).
-  const statePath =
-    prefsHome !== undefined
-      ? join(resolve(prefsHome), "tutorial-state.json")
-      : tutorialStatePathPersonal();
+  // prefs-home → workspace-local USER.md under projectRoot → personal (#5464).
+  // Sandbox cwd without workspace USER.md stays personal (no fork).
+  const statePath = resolveTutorialStatePath({ projectRoot, prefsHome });
   const asJson = hasFlag(rest, "--json");
   const stateOpts = { projectRoot, path: statePath };
 

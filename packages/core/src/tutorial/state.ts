@@ -5,10 +5,14 @@
  * not in the product project and not only inside the practice sandbox.
  */
 
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { containedWrite } from "../fs/contained-write.js";
-import { resolveUserMdPath } from "../user-config/resolve-user-md.js";
+import {
+  resolveUserMdPath,
+  USER_MD_FILENAME,
+  WORKSPACE_LOCAL_CONFIG_DIR,
+} from "../user-config/resolve-user-md.js";
 
 export const TUTORIAL_STATE_FILENAME = "tutorial-state.json";
 export const TUTORIAL_CONTENT_VERSION = "1";
@@ -173,6 +177,45 @@ export function tutorialStatePathPersonal(
   return join(dirname(resolved.path), TUTORIAL_STATE_FILENAME);
 }
 
+function defaultFileExists(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve where tutorial-state.json lives for a CLI invocation (#5464).
+ *
+ * Order: `--prefs-home` → workspace-local `.deft/USER.md` under projectRoot →
+ * personal (DEFT_USER_PATH / platform). Workspace-local wins over a temporary
+ * HOME so progress does not disappear between sessions; personal still covers
+ * sandbox cwd without a workspace USER.md (no fork).
+ */
+export function resolveTutorialStatePath(
+  options: {
+    projectRoot?: string;
+    prefsHome?: string;
+    env?: NodeJS.ProcessEnv;
+    platform?: NodeJS.Platform;
+    homeDir?: string;
+    fileExists?: (path: string) => boolean;
+  } = {},
+): string {
+  const prefsHome = options.prefsHome?.trim();
+  if (prefsHome) {
+    return join(resolve(prefsHome), TUTORIAL_STATE_FILENAME);
+  }
+  const root = resolve(options.projectRoot ?? ".");
+  const exists = options.fileExists ?? defaultFileExists;
+  const workspaceUserMd = join(root, WORKSPACE_LOCAL_CONFIG_DIR, USER_MD_FILENAME);
+  if (exists(workspaceUserMd)) {
+    return join(root, WORKSPACE_LOCAL_CONFIG_DIR, TUTORIAL_STATE_FILENAME);
+  }
+  return tutorialStatePathPersonal(options);
+}
+
 export function loadTutorialState(
   options: {
     projectRoot?: string;
@@ -235,10 +278,20 @@ function normalizeState(raw: Partial<TutorialState> & Record<string, unknown>): 
         ? raw.beaconLine
         : null;
 
+  // Keep status and currentBeat coherent (#5464 SLizard): not_started + beat
+  // would re-offer while resume still sees a sitting in progress.
+  let currentBeat = typeof raw.currentBeat === "string" ? raw.currentBeat : null;
+  if (status === "not_started" && currentBeat !== null && currentBeat.length > 0) {
+    status = "in_progress";
+  }
+  if (status === "not_started") {
+    currentBeat = null;
+  }
+
   return {
     status,
     selectedProject: selected,
-    currentBeat: typeof raw.currentBeat === "string" ? raw.currentBeat : null,
+    currentBeat,
     completedBeats,
     version: typeof raw.version === "string" ? raw.version : TUTORIAL_CONTENT_VERSION,
     content,

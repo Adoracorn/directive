@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,7 @@ import {
   loadTutorialState,
   offerTutorial,
   resetTutorial,
+  resolveTutorialStatePath,
   resumeTutorial,
   saveTutorialState,
   shouldOfferTutorial,
@@ -88,6 +89,53 @@ describe("Directive Tutorial state (#4981)", () => {
       homeDir: home,
     });
     expect(personal).toBe(join(home, "AppData", "Roaming", "deft", "tutorial-state.json"));
+  });
+
+  it("resolveTutorialStatePath prefers workspace-local USER.md over temp HOME (#5464)", () => {
+    const root = prefsHome();
+    const deftDir = join(root, ".deft");
+    mkdirSync(deftDir, { recursive: true });
+    writeFileSync(join(deftDir, "USER.md"), "# test\n", "utf8");
+    const resolved = resolveTutorialStatePath({
+      projectRoot: root,
+      env: {},
+      platform: "win32",
+      homeDir: join(root, "temp-home"),
+    });
+    expect(resolved).toBe(join(deftDir, "tutorial-state.json"));
+  });
+
+  it("resolveTutorialStatePath falls back to personal when no workspace USER.md", () => {
+    const root = prefsHome();
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    const resolved = resolveTutorialStatePath({
+      projectRoot: root,
+      env: {},
+      platform: "win32",
+      homeDir: home,
+    });
+    expect(resolved).toBe(join(home, "AppData", "Roaming", "deft", "tutorial-state.json"));
+  });
+
+  it("normalize promotes not_started + beat to in_progress (#5464)", () => {
+    const home = prefsHome();
+    const path = join(home, "tutorial-state.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        status: "not_started",
+        currentBeat: "write",
+        selectedProject: "signal",
+        completedBeats: [],
+        version: "1",
+      }),
+      "utf8",
+    );
+    const loaded = loadTutorialState({ path });
+    expect(loaded.status).toBe("in_progress");
+    expect(loaded.currentBeat).toBe("write");
+    expect(shouldOfferTutorial(loaded)).toBe(false);
   });
 
   it("keeps a failed check on prove-it and advances only after continue on a pass", () => {
