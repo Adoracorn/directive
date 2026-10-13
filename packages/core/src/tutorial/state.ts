@@ -188,10 +188,9 @@ function defaultFileExists(path: string): boolean {
 /**
  * Resolve where tutorial-state.json lives for a CLI invocation (#5464).
  *
- * Order: `--prefs-home` → workspace-local `.deft/USER.md` under projectRoot →
- * personal (DEFT_USER_PATH / platform). Workspace-local wins over a temporary
- * HOME so progress does not disappear between sessions; personal still covers
- * sandbox cwd without a workspace USER.md (no fork).
+ * Order: `--prefs-home` → `DEFT_USER_PATH` → workspace-local `.deft/USER.md`
+ * under projectRoot → platform personal. Explicit override and workspace-local
+ * beat a temporary HOME; sandbox cwd without workspace USER.md stays personal.
  */
 export function resolveTutorialStatePath(
   options: {
@@ -206,6 +205,11 @@ export function resolveTutorialStatePath(
   const prefsHome = options.prefsHome?.trim();
   if (prefsHome) {
     return join(resolve(prefsHome), TUTORIAL_STATE_FILENAME);
+  }
+  const env = options.env ?? process.env;
+  const override = env.DEFT_USER_PATH?.trim();
+  if (override) {
+    return join(dirname(resolve(override)), TUTORIAL_STATE_FILENAME);
   }
   const root = resolve(options.projectRoot ?? ".");
   const exists = options.fileExists ?? defaultFileExists;

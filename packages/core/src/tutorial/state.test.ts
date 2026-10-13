@@ -105,6 +105,23 @@ describe("Directive Tutorial state (#4981)", () => {
     expect(resolved).toBe(join(deftDir, "tutorial-state.json"));
   });
 
+  it("resolveTutorialStatePath honors DEFT_USER_PATH before workspace USER.md (#5464)", () => {
+    const root = prefsHome();
+    const deftDir = join(root, ".deft");
+    mkdirSync(deftDir, { recursive: true });
+    writeFileSync(join(deftDir, "USER.md"), "# test\n", "utf8");
+    const overrideDir = join(root, "override");
+    mkdirSync(overrideDir, { recursive: true });
+    const overrideUser = join(overrideDir, "USER.md");
+    const resolved = resolveTutorialStatePath({
+      projectRoot: root,
+      env: { DEFT_USER_PATH: overrideUser },
+      platform: "win32",
+      homeDir: join(root, "temp-home"),
+    });
+    expect(resolved).toBe(join(overrideDir, "tutorial-state.json"));
+  });
+
   it("resolveTutorialStatePath falls back to personal when no workspace USER.md", () => {
     const root = prefsHome();
     const home = join(root, "home");
